@@ -13,6 +13,7 @@
  */
 import type { Context } from '@deepseek-ai/cordis'
 import { z } from 'zod'
+import { registerDynamicAiTool } from './aiRegistry.ts'
 import type { SafeMarketSettings } from './contract.ts'
 import { INVISIBLE_INJECTION_PATTERN, sanitizeUntrustedText } from './aiSearch.ts'
 import {
@@ -119,11 +120,6 @@ const mcpToolArgsSchema = z.object({
     }
   }
 })
-
-/** Structural subset of DSH's `ToolsService`. */
-interface ToolsRegistryFace {
-  register(definition: Record<string, unknown>, options?: { when?: () => boolean }): () => void
-}
 
 /** Structural subset of DSH's `ApprovalService`. */
 export interface McpApprovalServiceFace {
@@ -413,17 +409,47 @@ function buildInstallApprovalCopy(plan: ManagedMcpInstallPlan): {
   }
 }
 
-function installNextStep(result: ManagedMcpInstallResult): string {
+/** Explicit machine-readable outcome of MCP install actions for Agent branching. */
+export type McpInstallActionOutcome =
+  | 'already-configured-match'
+  | 'already-configured-toggle-needed'
+  | 'installed-credentials-required'
+  | 'installed-disabled'
+  | 'installed-connected'
+  | 'installed-pending'
+
+/** Explicit machine-readable outcome of MCP `set_enabled` for Agent branching. */
+export type McpToggleActionOutcome = 'enabled' | 'disabled'
+
+/** Union of all mutating `dsh_mcp_pro` outcomes. */
+export type McpActionOutcome = McpInstallActionOutcome | McpToggleActionOutcome
+
+function installOutcomeMeta(result: ManagedMcpInstallResult): {
+  readonly outcome: McpInstallActionOutcome
+  readonly nextStep: string
+} {
   if (result.missingCredentials.length > 0) {
-    return `Saved managed MCP "${result.name}" with credential template(s) ${result.missingCredentials.join(', ')}. Do NOT ask the user to paste secret values in chat; tell the user to open DSH Market Pro -> MCP -> Configured and click "Set" on "${result.name}" to store the credential(s) securely.`
+    return {
+      outcome: 'installed-credentials-required',
+      nextStep: `Saved managed MCP "${result.name}" with credential template(s) ${result.missingCredentials.join(', ')}. Do NOT ask the user to paste secret values in chat; tell the user to open DSH Market Pro -> MCP -> Configured and click "Set" on "${result.name}" to store the credential(s) securely.`,
+    }
   }
   if (!result.enabled) {
-    return `Saved managed MCP "${result.name}" in disabled state. The user can probe or enable it in DSH Market Pro -> MCP -> Configured.`
+    return {
+      outcome: 'installed-disabled',
+      nextStep: `Saved managed MCP "${result.name}" in disabled state. The user can probe or enable it in DSH Market Pro -> MCP -> Configured.`,
+    }
   }
   if (result.connection.state === 'connected') {
-    return `Saved managed MCP "${result.name}". DSH reports it is connected with ${result.connection.toolCount} registered tools.`
+    return {
+      outcome: 'installed-connected',
+      nextStep: `Saved managed MCP "${result.name}". DSH reports it is connected with ${result.connection.toolCount} registered tools.`,
+    }
   }
-  return `Saved and enabled managed MCP "${result.name}". DSH connection state: ${result.connection.state}. Use list_configured to check readiness or open DSH Market Pro -> MCP -> Configured for live status and startup diagnostics.`
+  return {
+    outcome: 'installed-pending',
+    nextStep: `Saved and enabled managed MCP "${result.name}". DSH connection state: ${result.connection.state}. Use list_configured to check readiness or open DSH Market Pro -> MCP -> Configured for live status and startup diagnostics.`,
+  }
 }
 
 /** Build the registry-ready `dsh_mcp_pro` tool definition. */
@@ -666,7 +692,11 @@ export function createMarketAiMcpToolDefinition(deps: MarketAiMcpToolDeps): Reco
           if (existing !== undefined) {
             const { name, enabled, transport, target, state, toolCount, attempt, reason } = existing
             const enabledMatches = enabled === plan.enabled
+            const outcome: McpInstallActionOutcome = enabledMatches
+              ? 'already-configured-match'
+              : 'already-configured-toggle-needed'
             return JSON.stringify({
+              outcome,
               installed: false, alreadyConfigured: true, name, enabled, requestedEnabled: plan.enabled, transport, preview: target,
               connection: { state, toolCount, attempt, reason },
               nextStep: enabledMatches
@@ -681,10 +711,12 @@ export function createMarketAiMcpToolDefinition(deps: MarketAiMcpToolDeps): Reco
             throw new Error('DSH Market Pro AI assistant was disabled while waiting for approval; nothing was written.')
           }
           const result = await deps.installMcp(plan)
+          const meta = installOutcomeMeta(result)
           return JSON.stringify({
+            outcome: meta.outcome,
             installed: true,
             ...result,
-            nextStep: installNextStep(result),
+            nextStep: meta.nextStep,
           })
         }
         case 'install_custom': {
@@ -714,10 +746,12 @@ export function createMarketAiMcpToolDefinition(deps: MarketAiMcpToolDeps): Reco
             throw new Error('DSH Market Pro AI assistant was disabled while waiting for approval; nothing was written.')
           }
           const result = await deps.installMcp(plan)
+          const meta = installOutcomeMeta(result)
           return JSON.stringify({
+            outcome: meta.outcome,
             installed: true,
             ...result,
-            nextStep: installNextStep(result),
+            nextStep: meta.nextStep,
           })
         }
         case 'set_enabled': {
@@ -750,9 +784,14 @@ export function createMarketAiMcpToolDefinition(deps: MarketAiMcpToolDeps): Reco
             throw new Error('DSH Market Pro AI assistant was disabled while waiting for approval; nothing was written.')
           }
           const result = await deps.setMcpEnabled(targetName, nextEnabled, approved)
+          const outcome: McpToggleActionOutcome = result.enabled ? 'enabled' : 'disabled'
           return JSON.stringify({
+            outcome,
             updated: true,
             ...result,
+            nextStep: result.enabled
+              ? `Enabled managed MCP "${result.name}". Use list_configured once to check Host connection readiness, or open DSH Market Pro -> MCP -> Configured for live status.`
+              : `Disabled managed MCP "${result.name}". It will not run until enabled again.`,
           })
         }
       }
@@ -786,47 +825,10 @@ export function registerMarketAiMcpTool(ctx: Context, deps: {
     getApprover,
   }
 
-  let activeRegistry: ToolsRegistryFace | undefined
-  let activeDispose: (() => void) | undefined
-
-  const sync = (): void => {
-    const enabled = deps.readSettings().aiAssistantEnabled
-    if (!enabled || activeRegistry === undefined) {
-      if (activeDispose !== undefined) {
-        const dispose = activeDispose
-        activeDispose = undefined
-        dispose()
-      }
-      return
-    }
-    if (activeDispose !== undefined) return
-    try {
-      const definition = createMarketAiMcpToolDefinition(toolDeps)
-      activeDispose = activeRegistry.register(definition, {
-        when: () => deps.readSettings().aiAssistantEnabled,
-      })
-    } catch (error) {
-      console.warn('[dsh-market-pro] could not register AI MCP tool:', error)
-    }
-  }
-
-  ctx.inject(['tools'], (scope) => {
-    const getter = (scope as unknown as { get?: (name: string) => unknown }).get
-    const registry = (typeof getter === 'function' ? getter.call(scope, 'tools') : (scope as unknown as { tools?: unknown }).tools) as ToolsRegistryFace | undefined
-    if (registry === undefined || typeof registry.register !== 'function') return
-    scope.effect(() => {
-      activeRegistry = registry
-      sync()
-      return () => {
-        activeRegistry = undefined
-        if (activeDispose !== undefined) {
-          const dispose = activeDispose
-          activeDispose = undefined
-          dispose()
-        }
-      }
-    }, 'dsh-market-pro: ai mcp tool')
+  return registerDynamicAiTool(ctx, {
+    effectLabel: 'dsh-market-pro: ai mcp tool',
+    logLabel: 'AI MCP tool',
+    isEnabled: () => deps.readSettings().aiAssistantEnabled,
+    createDefinition: () => createMarketAiMcpToolDefinition(toolDeps),
   })
-
-  return { sync }
 }

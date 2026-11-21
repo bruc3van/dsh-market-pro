@@ -39,6 +39,7 @@
 import type { Loader } from '@deepseek-ai/cordis-plugin-loader';
 import type { PluginManager } from '@deepseek-ai/dsh-plugin-manager';
 import { type MarketInstalledResult } from './contract.ts';
+import { type ProfileManifest } from './profile.ts';
 /** One uninstall the manager still has disable rows out for. */
 export interface PendingUninstall {
     readonly packageName: string;
@@ -49,6 +50,15 @@ export interface PendingUninstall {
     /** False until removal from the manifest has been verified; absent in legacy records. */
     readonly completed?: boolean;
 }
+/** Explicit boot-sweep decision for one pending-uninstall record. */
+export type PendingSweepDecision = 'release' | 'hold';
+/**
+ * Decide whether a boot sweep may release a pending uninstall's stop rows:
+ * - Completed removals (or legacy records without `completed`) always release.
+ * - Interrupted removals (`completed === false`) release only once the profile
+ *   manifest no longer references the package; otherwise they stay held down.
+ */
+export declare function classifyPendingSweep(record: Pick<PendingUninstall, 'packageName' | 'completed'>, manifest: Pick<ProfileManifest, 'dependencies' | 'dsh'>): PendingSweepDecision;
 /** The manager's construction facts. */
 export interface InstalledManagerOptions {
     readonly pluginManager?: () => (Pick<PluginManager, 'setBundleEnabled' | 'removeBundle'> & Partial<Pick<PluginManager, 'listBundles'>>) | undefined;

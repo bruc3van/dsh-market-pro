@@ -168,6 +168,28 @@ type InstalledState =
   | { readonly status: 'ready'; readonly result: MarketInstalledResult }
   | { readonly status: 'error'; readonly message: string }
 
+type InstalledActionState =
+  | { readonly status: 'idle' }
+  | { readonly status: 'confirming-uninstall'; readonly packageName: string }
+  | { readonly status: 'toggling'; readonly packageName: string }
+  | { readonly status: 'uninstalling'; readonly packageName: string }
+
+type InstalledFeedback =
+  | { readonly status: 'none' }
+  | { readonly status: 'notice'; readonly message: string }
+  | { readonly status: 'error'; readonly message: string }
+
+type WorkspacePickState =
+  | { readonly status: 'idle' }
+  | { readonly status: 'picking' }
+  | { readonly status: 'error'; readonly message: string }
+
+type MarketOverlay =
+  | { readonly kind: 'none' }
+  | { readonly kind: 'direct-install'; readonly item: MarketPlugin }
+  | { readonly kind: 'update' }
+  | { readonly kind: 'batch-update' }
+
 /**
  * The installed set's own state and verbs: the plugins installed into this
  * profile, with enable/disable and uninstall. It is local profile facts all
@@ -193,22 +215,18 @@ function useInstalled({ t, active, listInstalled, subscribeInstalledChanges, set
   uninstallInstalled: MarketSectionInjected['uninstallInstalled']
 }): {
   state: InstalledState
-  busy: string | null
-  confirming: string | null
-  notice: string
-  actionError: string
+  action: InstalledActionState
+  feedback: InstalledFeedback
   count: number
   reload: () => void
   toggle: (item: MarketInstalledPackage) => void
   uninstall: (item: MarketInstalledPackage) => void
-  setConfirming: (name: string | null) => void
+  requestUninstall: (name: string) => void
+  cancelUninstall: () => void
 } {
   const [state, setState] = useState<InstalledState>({ status: 'loading' })
-  // `${name}:toggle` / `${name}:uninstall`: one verb at a time.
-  const [busy, setBusy] = useState<string | null>(null)
-  const [confirming, setConfirming] = useState<string | null>(null)
-  const [notice, setNotice] = useState('')
-  const [actionError, setActionError] = useState('')
+  const [action, setAction] = useState<InstalledActionState>({ status: 'idle' })
+  const [feedback, setFeedback] = useState<InstalledFeedback>({ status: 'none' })
   const mounted = useRef(true)
   // Set on mount as well as cleared on unmount: React 18 StrictMode runs the
   // cleanup once immediately after the first mount, and a ref that is only
@@ -248,70 +266,75 @@ function useInstalled({ t, active, listInstalled, subscribeInstalledChanges, set
   const describe = (error: unknown): string => error instanceof Error ? error.message : String(error)
 
   const toggle = (item: MarketInstalledPackage): void => {
-    setBusy(`${item.packageName}:toggle`)
-    setActionError('')
+    setAction({ status: 'toggling', packageName: item.packageName })
     // A new action retires the last outcome line, whatever it said.
-    setNotice('')
+    setFeedback({ status: 'none' })
     void setInstalledEnabled(item.packageName, !item.enabled).then((result) => {
       if (!mounted.current) return
       // This verb's own list is the fresh one; retire any read still in flight.
       readSeq.current += 1
-      setBusy(null)
+      setAction({ status: 'idle' })
       setState({ status: 'ready', result })
-      if (result.restartRequired) setNotice(t('installed.restartRequired'))
+      if (result.restartRequired) setFeedback({ status: 'notice', message: t('installed.restartRequired') })
     }, (error: unknown) => {
       if (!mounted.current) return
-      setBusy(null)
-      setActionError(t('installed.actionFailed', { reason: describe(error) }))
+      setAction({ status: 'idle' })
+      setFeedback({ status: 'error', message: t('installed.actionFailed', { reason: describe(error) }) })
       // The durable half may have landed even when the live half reports a
-      // failure — what the list says now is the truth to show.
-      setState(previous => (previous.status === 'ready' ? { status: 'loading' } : previous))
+      // failure — refresh in place without blanking the rendered cards.
       load()
     })
   }
 
   const uninstall = (item: MarketInstalledPackage): void => {
-    setBusy(`${item.packageName}:uninstall`)
-    setActionError('')
-    setNotice('')
+    setAction({ status: 'uninstalling', packageName: item.packageName })
+    setFeedback({ status: 'none' })
     void uninstallInstalled(item.packageName).then((result) => {
       if (!mounted.current) return
       // This verb's own list is the fresh one; retire any read still in flight.
       readSeq.current += 1
-      setBusy(null)
-      setConfirming(null)
+      setAction({ status: 'idle' })
       // The host may have an outcome line of its own (e.g. the in-session
       // stop failed and the plugin runs until the next restart) — prefer it
       // over the default success copy.
-      setNotice((() => {
-        const faults = result.notice ?? ''
-        if (result.restartRequired) return t('installed.restartRequired') + (faults === '' ? '' : ` ${faults}`)
-        if (faults === '') return t('installed.uninstalled', { name: item.packageName })
-        return t(
-          result.noticeKind === 'may-run' ? 'installed.uninstalledMayRun' : 'installed.uninstalledWithFaults',
-          { name: item.packageName, faults },
-        )
-      })())
+      const faults = result.notice ?? ''
+      const message = result.restartRequired
+        ? t('installed.restartRequired') + (faults === '' ? '' : ` ${faults}`)
+        : faults === ''
+          ? t('installed.uninstalled', { name: item.packageName })
+          : t(
+              result.noticeKind === 'may-run' ? 'installed.uninstalledMayRun' : 'installed.uninstalledWithFaults',
+              { name: item.packageName, faults },
+            )
+      setFeedback({ status: 'notice', message })
       setState({ status: 'ready', result })
     }, (error: unknown) => {
       if (!mounted.current) return
-      setBusy(null)
-      setConfirming(null)
-      setActionError(t('installed.actionFailed', { reason: describe(error) }))
-      setState(previous => (previous.status === 'ready' ? { status: 'loading' } : previous))
+      setAction({ status: 'idle' })
+      setFeedback({ status: 'error', message: t('installed.actionFailed', { reason: describe(error) }) })
       load()
     })
   }
 
+  const requestUninstall = useCallback((packageName: string): void => {
+    setAction(previous => (previous.status === 'toggling' || previous.status === 'uninstalling'
+      ? previous
+      : { status: 'confirming-uninstall', packageName }))
+  }, [])
+
+  const cancelUninstall = useCallback((): void => {
+    setAction(previous => (previous.status === 'confirming-uninstall' ? { status: 'idle' } : previous))
+  }, [])
+
   const reload = useCallback((): void => {
     setState({ status: 'loading' })
-    setNotice('')
-    setActionError('')
+    setAction(previous => (previous.status === 'confirming-uninstall' ? { status: 'idle' } : previous))
+    setFeedback({ status: 'none' })
     load()
   }, [load])
 
   const count = state.status === 'ready' && state.result.error === '' ? state.result.packages.length : 0
-  return { state, busy, confirming, notice, actionError, count, reload, toggle, uninstall, setConfirming }
+  return { state, action, feedback, count, reload, toggle, uninstall, requestUninstall, cancelUninstall }
 }
 
 /**
@@ -331,17 +354,19 @@ function InstalledCard({ t, item, installed, snapshot, card, installBusy, readin
   onCheckUpdate?: (packageName: string) => void
   availableVersion?: string
 }): ReactElement {
-  const { busy, confirming, setConfirming, toggle, uninstall } = installed
-  const uninstalling = busy === `${item.packageName}:uninstall`
-  const busyRow = busy !== null && (busy === `${item.packageName}:toggle` || uninstalling)
-  const confirmRow = confirming === item.packageName || uninstalling
+  const { action, requestUninstall, cancelUninstall, toggle, uninstall } = installed
+  const anyBusy = action.status === 'toggling' || action.status === 'uninstalling'
+  const toggling = action.status === 'toggling' && action.packageName === item.packageName
+  const uninstalling = action.status === 'uninstalling' && action.packageName === item.packageName
+  const busyRow = toggling || uninstalling
+  const confirmRow = (action.status === 'confirming-uninstall' && action.packageName === item.packageName) || uninstalling
   const metaParts = [
     item.self ? t('installed.self') : '',
     item.inBox ? t('installed.inBox') : '',
     item.unregistered ? t('installed.unregistered') : '',
   ].filter(part => part !== '')
   const reviewNeedsWorkspace = card?.status === 'needs-workspace' || (readiness === 'none' && card === undefined)
-  const reviewDisabled = busy !== null || installBusy || snapshot.profile === null
+  const reviewDisabled = anyBusy || installBusy || snapshot.profile === null
 
   const reviewTitle = snapshot.profile === null ? t('install.profilePending') : undefined
   const stateLabels: Record<ReturnType<typeof stateOf>, string> = {
@@ -425,7 +450,7 @@ function InstalledCard({ t, item, installed, snapshot, card, installBusy, readin
                 <MarketButton
                   intent="secondary"
                   disabled={busyRow}
-                  onClick={() => { setConfirming(null) }}
+                  onClick={cancelUninstall}
                 >
                   {t('installed.cancel')}
                 </MarketButton>
@@ -435,7 +460,7 @@ function InstalledCard({ t, item, installed, snapshot, card, installBusy, readin
           : (
             <>
               {onCheckUpdate && <MarketButton intent={availableVersion ? 'primary' : 'secondary'}
-                disabled={busy !== null || installBusy || item.error !== ''}
+                disabled={anyBusy || installBusy || item.error !== ''}
                 onClick={() => onCheckUpdate(item.packageName)}>
                 {availableVersion ? t('update.to', { version: availableVersion }) : t('update.check')}
               </MarketButton>}
@@ -454,21 +479,21 @@ function InstalledCard({ t, item, installed, snapshot, card, installBusy, readin
               {!item.self && !item.unregistered && (
                 <MarketButton
                   intent="secondary"
-                  disabled={busyRow || busy !== null || installBusy || (item.error !== ''
+                  disabled={busyRow || anyBusy || installBusy || (item.error !== ''
                     // An unreadable package can still be switched off by the Host, never on.
                     ? item.bundleEnabled !== true
                     : item.bundleEnabled === undefined && item.entries.length === 0)}
                   onClick={() => { toggle(item) }}
                 >
-                  {busy === `${item.packageName}:toggle`
+                  {toggling
                     ? (item.enabled ? t('installed.disabling') : t('installed.enabling'))
                     : (item.enabled ? t('installed.disable') : t('installed.enable'))}
                 </MarketButton>
               )}
               <MarketButton
                 intent="danger"
-                disabled={busyRow || busy !== null || installBusy}
-                onClick={() => { setConfirming(item.packageName) }}
+                disabled={busyRow || anyBusy || installBusy}
+                onClick={() => { requestUninstall(item.packageName) }}
               >
                 {t('installed.uninstall')}
               </MarketButton>
@@ -632,7 +657,7 @@ function InstalledCards({ t, installed, needle, installedFilter, updatableCount,
   onShowAllInstalled: () => void
   onClearFilters: () => void
 }): ReactElement {
-  const { state, notice, actionError, reload } = installed
+  const { state, feedback, reload } = installed
   const scoped = state.status === 'ready' && state.result.error === ''
     ? (installedFilter === 'updatable'
       ? state.result.packages.filter(item => Boolean(availableUpdates?.[item.packageName]))
@@ -653,8 +678,8 @@ function InstalledCards({ t, installed, needle, installedFilter, updatableCount,
   return (
     <>
       <p className="dsh_market_installedBody">{t('installed.body')}</p>
-      {notice !== '' && <p className="dsh_market_installedNotice">{notice}</p>}
-      {actionError !== '' && <p className="dsh_market_status" data-error="true">{actionError}</p>}
+      {feedback.status === 'notice' && <p className="dsh_market_installedNotice">{feedback.message}</p>}
+      {feedback.status === 'error' && <p className="dsh_market_status" data-error="true">{feedback.message}</p>}
       {state.status === 'loading' && (
         <div className="dsh_market_notice" aria-busy="true" aria-live="polite">
           <p className="dsh_market_noticeBody">{t('installed.loading')}</p>
@@ -834,11 +859,13 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
   )
   // The notice's own state, kept apart from the cards': it can be answered
   // before any card has been clicked.
-  const [choosing, setChoosing] = useState(false)
-  const [chooseError, setChooseError] = useState('')
+  const [workspacePick, setWorkspacePick] = useState<WorkspacePickState>({ status: 'idle' })
   // Read from the workspace domain's own store, so the notice clears itself
   // whether the workspace arrived from this button or from the sidebar.
   const readiness = useSyncExternalStore(workspaceReadiness.subscribe, workspaceReadiness.getSnapshot)
+  useEffect(() => {
+    if (readiness === 'present') setWorkspacePick({ status: 'idle' })
+  }, [readiness])
   // The section keeps this page mounted across tab switches (see
   // MarketSection), but the settings shell can still unmount the whole
   // section mid-read — the guard stops the late answer from touching state.
@@ -890,6 +917,8 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
   // The host resolves the persisted preference before catalog access begins.
   useEffect(() => {
     if (!enabled) {
+      readSeq.current += 1
+      setRefreshing(false)
       setState({ status: 'idle' })
       return
     }
@@ -966,20 +995,20 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
   }
 
   const pickWorkspace = (): void => {
-    setChoosing(true)
-    setChooseError('')
+    if (workspacePick.status === 'picking') return
+    setWorkspacePick({ status: 'picking' })
     void chooseWorkspace().then((outcome) => {
       if (!mounted.current) return
-      setChoosing(false)
       // A cancelled picker leaves the notice exactly as it was: the user
       // declined, and there is nothing to report about it.
       if (!outcome.ok && outcome.reason === 'failed') {
-        setChooseError(t('workspace.failed', { reason: outcome.message }))
+        setWorkspacePick({ status: 'error', message: t('workspace.failed', { reason: outcome.message }) })
+        return
       }
+      setWorkspacePick({ status: 'idle' })
     }, (error: unknown) => {
       if (!mounted.current) return
-      setChoosing(false)
-      setChooseError(t('workspace.failed', { reason: error instanceof Error ? error.message : String(error) }))
+      setWorkspacePick({ status: 'error', message: t('workspace.failed', { reason: error instanceof Error ? error.message : String(error) }) })
     })
   }
 
@@ -1023,13 +1052,13 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
       {installedSelected && readiness === 'none' && (
         <div className="dsh_market_notice">
           <p className="dsh_market_noticeBody">{t('workspace.needed')}</p>
-          {chooseError !== '' && <p className="dsh_market_status" data-error="true">{chooseError}</p>}
+          {workspacePick.status === 'error' && <p className="dsh_market_status" data-error="true">{workspacePick.message}</p>}
           <MarketButton
             intent="primary"
-            disabled={choosing || installBusy}
+            disabled={workspacePick.status === 'picking' || installBusy}
             onClick={pickWorkspace}
           >
-            {choosing ? t('workspace.choosing') : t('workspace.choose')}
+            {workspacePick.status === 'picking' ? t('workspace.choosing') : t('workspace.choose')}
           </MarketButton>
         </div>
       )}
@@ -1350,9 +1379,13 @@ export function MarketSection({
   // prompt follow the same setting the rest of the copy does.
   const english = t('lang') === 'en'
   const [page, setPage] = useState<Page>('plugins')
-  const [directItem, setDirectItem] = useState<MarketPlugin | null>(null)
-  const [updateOpen, setUpdateOpen] = useState(false)
-  const [batchUpdateOpen, setBatchUpdateOpen] = useState(false)
+  const [overlay, setOverlay] = useState<MarketOverlay>({ kind: 'none' })
+  const directItem = overlay.kind === 'direct-install' ? overlay.item : null
+  const updateOpen = overlay.kind === 'update'
+  const batchUpdateOpen = overlay.kind === 'batch-update'
+  const openDirectItem = useCallback((item: MarketPlugin) => {
+    setOverlay({ kind: 'direct-install', item })
+  }, [])
   const updateState = useSyncExternalStore(pluginUpdater?.subscribe ?? (() => () => {}), pluginUpdater?.getSnapshot ?? (() => null))
   const [installedRevision, setInstalledRevision] = useState(0)
   const refreshInstalled = useCallback(() => setInstalledRevision(value => value + 1), [])
@@ -1364,11 +1397,11 @@ export function MarketSection({
     const snap = pluginUpdater.getSnapshot()
     if (snap.phase === 'updating' || snap.batch.phase === 'running') return
     void pluginUpdater.check(packageName)
-    setUpdateOpen(true)
+    setOverlay({ kind: 'update' })
   } : undefined
   const openBatchUpdate = pluginUpdater ? () => {
     if (pluginUpdater.getSnapshot().phase === 'updating') return
-    setBatchUpdateOpen(true)
+    setOverlay({ kind: 'batch-update' })
   } : undefined
   const probeUpdates = useCallback((packageNames: readonly string[]) => {
     void pluginUpdater?.probe(packageNames)
@@ -1429,7 +1462,7 @@ export function MarketSection({
     cardsRef.current = remaining
     if (mounted.current) {
       setCards(remaining)
-      setDirectItem(null)
+      setOverlay(current => (current.kind === 'direct-install' ? { kind: 'none' } : current))
     }
   }
 
@@ -1564,13 +1597,13 @@ export function MarketSection({
         </div>
       </div>
       <p className="dsh_market_subtitle">{t('intro.slogan')}</p>
-      {updateState && updateState.phase !== 'idle' && (
-        <button type="button" className="dsh_market_headerAction" onClick={() => setUpdateOpen(true)}>
+      {updateState && updateState.phase !== 'idle' && !updateOpen && (
+        <button type="button" className="dsh_market_headerAction" onClick={() => setOverlay({ kind: 'update' })}>
           {t('update.resume')} · {updateState.packageName}
         </button>
       )}
       {updateState && updateState.batch.phase !== 'idle' && !batchUpdateOpen && (
-        <button type="button" className="dsh_market_headerAction" onClick={() => setBatchUpdateOpen(true)}>
+        <button type="button" className="dsh_market_headerAction" onClick={() => setOverlay({ kind: 'batch-update' })}>
           {t('batchUpdate.resume')}
         </button>
       )}
@@ -1580,9 +1613,9 @@ export function MarketSection({
         reviewBusy={installBusy} reviewAvailable={snapshot.profile !== null}
         reviewMessage={reviewResult?.status === 'error' || reviewResult?.status === 'needs-workspace' ? reviewResult.message : ''} />}
       {pluginUpdater && updateState && <PluginUpdatePanel open={updateOpen} state={updateState} updater={pluginUpdater} t={t}
-        onClose={() => setUpdateOpen(false)} />}
+        onClose={() => setOverlay(current => (current.kind === 'update' ? { kind: 'none' } : current))} />}
       {pluginUpdater && updateState && <BatchUpdatePanel open={batchUpdateOpen} state={updateState} updater={pluginUpdater} t={t}
-        onClose={() => setBatchUpdateOpen(false)} />}
+        onClose={() => setOverlay(current => (current.kind === 'batch-update' ? { kind: 'none' } : current))} />}
       <div className="dsh_market_tabToolbar">
       <div className="dsh_market_tabs" role="tablist" aria-label={t('tabs.aria')}>
         {pages.map((entry, index) => (
@@ -1634,7 +1667,7 @@ export function MarketSection({
         hidden={page !== 'plugins'}
       >
         <PluginsPage
-          setDirectItem={setDirectItem}
+          setDirectItem={openDirectItem}
           installedRevision={installedRevision}
           appliedUpdateRevision={appliedUpdateRevision}
           onCheckUpdate={checkUpdate}

@@ -6,10 +6,6 @@ export interface MarketMoreLink {
     href: string;
     icon?: ReactNode;
 }
-/**
- * The header's overflow control: an icon-only trigger opening the host `Menu`,
- * whose rows open their destination in a new browsing context.
- */
 export declare function MarketMoreActions({ label, links }: {
     label: string;
     links: readonly MarketMoreLink[];

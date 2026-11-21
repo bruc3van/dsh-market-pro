@@ -31,27 +31,42 @@ export interface DirectState {
   message: string
   application?: string
   pendingBuilds: string[]
+  /** True while `recover()` is polling the Host for an interrupted install's outcome. */
+  recovering: boolean
   queue: { spec: string; phase: DirectState['phase']; application?: string; message: string }[]
 }
+const IDLE_DIRECT_STATE: DirectState = {
+  phase: 'idle',
+  spec: '',
+  message: '',
+  application: undefined,
+  pendingBuilds: [],
+  recovering: false,
+  queue: [],
+}
 export function createDirectInstaller(host: () => InstallHost | undefined) {
-  let state: DirectState = { phase: 'idle', spec: '', message: '', pendingBuilds: [], queue: [] }
+  let state: DirectState = IDLE_DIRECT_STATE
   let requestId: RequestId
   let stopped = false
-  let recovering = false
   const listeners = new Set<() => void>()
   const set = (patch: Partial<DirectState>) => {
-    state = { ...state, ...patch }
-    state = { ...state, queue: state.queue.map(entry => entry.spec === state.spec
-      ? { spec: state.spec, phase: state.phase, application: state.application, message: state.message } : entry) }
+    const next = { ...state, ...patch }
+    state = {
+      ...next,
+      queue: next.queue.map(entry => entry.spec === next.spec
+        ? { spec: next.spec, phase: next.phase, application: next.application, message: next.message }
+        : entry),
+    }
     for (const fn of listeners) fn()
   }
   const manager = () => { const value = host(); if (!value) throw new Error('Plugin installation is unavailable in this host.'); return value }
   const cancelling = () => state.phase === 'cancelling'
   const busy = () => ['checking', 'installing', 'cancelling', 'unknown'].includes(state.phase)
   const settle = async (result: Awaited<ReturnType<InstallHost['installBundle']>>) => {
-    if (!result.ok) { set({ phase: 'unknown', message: result.error.message }); return }
+    if (!result.ok) { set({ phase: 'unknown', recovering: false, message: result.error.message }); return }
     const value = result.value
     set({ phase: value.application === 'failed' ? 'failed' : 'done', application: value.application,
+      recovering: false,
       pendingBuilds: value.pendingBuilds ?? [],
       message: [value.error?.code, value.error?.diagnostic, ...(value.warnings ?? []),
         ...(value.error?.incompatible ?? []).map(p => `${p.name}@${p.version}: ${JSON.stringify(p.requirements ?? p.peers ?? {})}`),
@@ -62,11 +77,30 @@ export function createDirectInstaller(host: () => InstallHost | undefined) {
       if (next) await run(next.spec)
     }
   }
-  const run = async (spec: string, builds: string[] = []) => {
+  const run = async (spec: string, builds: string[] = [], initialQueue?: DirectState['queue']) => {
     if (busy()) return
-    if (!isInstallSpec(spec)) { set({ phase: 'failed', spec, message: 'Invalid install target', pendingBuilds: [] }); return }
+    if (!isInstallSpec(spec)) {
+      set({
+        phase: 'failed',
+        spec,
+        message: 'Invalid install target',
+        application: undefined,
+        pendingBuilds: [],
+        recovering: false,
+        ...(initialQueue !== undefined ? { queue: initialQueue } : {}),
+      })
+      return
+    }
     requestId = undefined
-    set({ phase: 'checking', spec, message: '', application: undefined, pendingBuilds: [] })
+    set({
+      phase: 'checking',
+      spec,
+      message: '',
+      application: undefined,
+      pendingBuilds: [],
+      recovering: false,
+      ...(initialQueue !== undefined ? { queue: initialQueue } : {}),
+    })
     try {
       const api = manager()
       // The strict Remote counts every business parameter, even optional ones.
@@ -77,8 +111,8 @@ export function createDirectInstaller(host: () => InstallHost | undefined) {
       set({ phase: 'installing' })
       try {
         await settle(await api.installBundle(spec, { requestId, registry: inspection.value.registry, enabled: true, ...(builds.length ? { approvedBuilds: builds } : {}) }))
-      } catch (error) { set({ phase: 'unknown', message: String(error) }) }
-    } catch (error) { set({ phase: 'failed', message: error instanceof Error ? error.message : String(error) }) }
+      } catch (error) { set({ phase: 'unknown', recovering: false, message: String(error) }) }
+    } catch (error) { set({ phase: 'failed', recovering: false, message: error instanceof Error ? error.message : String(error) }) }
   }
   return {
     getSnapshot: () => state,
@@ -88,8 +122,8 @@ export function createDirectInstaller(host: () => InstallHost | undefined) {
       const specs = [...new Set(typeof input === 'string' ? [input] : input)]
       if (!specs.length || specs.some(spec => !isInstallSpec(spec))) return
       stopped = false
-      set({ spec: '', queue: specs.map(spec => ({ spec, phase: 'idle', message: '' })) })
-      await run(specs[0]!)
+      const queue = specs.map(spec => ({ spec, phase: 'idle' as const, message: '' }))
+      await run(specs[0]!, [], queue)
     },
     // The Host writes each approval into allowBuilds and refuses a name that is
     // no longer pending ('stale-approval'): a retry carries no approvals, and an
@@ -97,7 +131,13 @@ export function createDirectInstaller(host: () => InstallHost | undefined) {
     async retry() {
       if (state.phase === 'failed' && !state.pendingBuilds.length) await run(state.spec)
     },
-    reset() { if (!busy()) set({ phase: 'idle', spec: '', message: '', pendingBuilds: [], application: undefined, queue: [] }) },
+    reset() {
+      if (!busy()) {
+        requestId = undefined
+        stopped = false
+        set(IDLE_DIRECT_STATE)
+      }
+    },
     approve: async () => { if (state.phase === 'failed' && state.pendingBuilds.length) await run(state.spec, [...state.pendingBuilds]) },
     async cancel() {
       if (!requestId || state.phase !== 'installing') return
@@ -107,19 +147,33 @@ export function createDirectInstaller(host: () => InstallHost | undefined) {
       try {
         const result = await manager().cancelInstall(cancellingRequest)
         if (requestId !== cancellingRequest || !cancelling()) return
-        if (!result.ok) set({ phase: 'installing', message: result.error.message })
-        else if (cancelling() && result.value.status !== 'cancelled') set({ phase: 'installing', message: result.value.status })
-      } catch (e) { if (cancelling()) set({ phase: 'installing', message: String(e) }) }
+        if (!result.ok) {
+          stopped = false
+          set({ phase: 'installing', message: result.error.message })
+        } else if (cancelling() && result.value.status !== 'cancelled') {
+          stopped = false
+          set({ phase: 'installing', message: result.value.status })
+        }
+      } catch (e) {
+        if (requestId === cancellingRequest && cancelling()) {
+          stopped = false
+          set({ phase: 'installing', message: String(e) })
+        }
+      }
     },
     async recover() {
-      if (!requestId || state.phase !== 'unknown' || recovering) return
-      recovering = true
+      if (!requestId || state.phase !== 'unknown' || state.recovering) return
+      const targetRequest = requestId
+      set({ recovering: true })
       try {
-        const result = await manager().waitForInstall(requestId)
-        if (!result.ok) set({ message: result.error.message })
+        const result = await manager().waitForInstall(targetRequest)
+        if (requestId !== targetRequest) return
+        if (!result.ok) set({ recovering: false, message: result.error.message })
         else if (result.value !== null) await settle({ ok: true, value: result.value })
-        else set({ phase: 'unavailable' })
-      } catch (e) { set({ message: String(e) }) } finally { recovering = false }
+        else set({ phase: 'unavailable', recovering: false })
+      } catch (e) {
+        if (requestId === targetRequest) set({ recovering: false, message: String(e) })
+      }
     },
   }
 }

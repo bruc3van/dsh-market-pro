@@ -11,6 +11,7 @@
 import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import { z } from 'zod'
+import { registerDynamicAiTool } from './aiRegistry.ts'
 import { PACKAGE_NAME } from './shapes.ts'
 import type {
   MarketCatalogResult,
@@ -127,11 +128,6 @@ const toolArgsSchema = z.object({
     }
   }
 })
-
-/** Structural subset of DSH's `ToolsService` used at runtime. */
-interface ToolsRegistryFace {
-  register(definition: Record<string, unknown>, options?: { when?: () => boolean }): () => void
-}
 
 /** Structural subset of DSH's `ApprovalService` used before mutating installed plugins. */
 export interface MarketApprovalServiceFace {
@@ -593,6 +589,83 @@ async function requestPluginUpdateApproval(
   throw new Error('No approval channel is available to confirm plugin updates; no plugins were modified.')
 }
 
+/** Explicit machine-readable outcome of `check_updates` for Agent branching. */
+export type MarketCheckUpdatesStatus = 'unavailable' | 'updates-available' | 'up-to-date' | 'check-failed'
+
+/** Explicit machine-readable outcome of `update_plugins` for Agent branching. */
+export type MarketUpdatePluginsOutcome =
+  | 'api-unavailable'
+  | 'nothing-to-update'
+  | 'applied'
+  | 'restart-required'
+  | 'partial-failure'
+  | 'failed'
+
+function checkUpdatesMeta(report: {
+  readonly available: boolean
+  readonly updatableCount: number
+  readonly errorCount: number
+}): { readonly status: MarketCheckUpdatesStatus; readonly nextStep: string } {
+  if (!report.available) {
+    return {
+      status: 'unavailable',
+      nextStep: 'Inform the user that Host plugin updates require DSH >= 0.2.2-rc.3.',
+    }
+  }
+  if (report.updatableCount > 0) {
+    return {
+      status: 'updates-available',
+      nextStep: report.errorCount > 0
+        ? 'Present the updatable plugins (installed -> latest), mention the failed checks in errors, and ask for explicit user confirmation before calling update_plugins with the exact confirmed { packageName, version } pairs.'
+        : 'Present the updatable plugins (installed -> latest) and ask for explicit user confirmation before calling update_plugins with the exact confirmed { packageName, version } pairs.',
+    }
+  }
+  if (report.errorCount > 0) {
+    return {
+      status: 'check-failed',
+      nextStep: 'Report the update-check errors to the user without modifying any plugins.',
+    }
+  }
+  return {
+    status: 'up-to-date',
+    nextStep: 'Tell the user all checked updatable plugins are already on their latest compatible versions.',
+  }
+}
+
+function updatePluginsMeta(summary: {
+  readonly succeeded: number
+  readonly failed: number
+  readonly skipped: number
+  readonly restartRequired: boolean
+}): { readonly outcome: MarketUpdatePluginsOutcome; readonly nextStep: string } {
+  if (summary.succeeded === 0) {
+    return {
+      outcome: 'failed',
+      nextStep: summary.restartRequired
+        ? 'Report that no plugins were updated, share each failure and rollback status, and ask the user to restart DSH before retrying.'
+        : 'Report that no plugins were updated and share each failure and rollback status without retrying automatically.',
+    }
+  }
+  if (summary.failed > 0 || summary.skipped > 0) {
+    return {
+      outcome: 'partial-failure',
+      nextStep: summary.restartRequired
+        ? 'Summarize succeeded, failed, and skipped plugins (with rollback status), and remind the user to restart DSH for pending changes to take effect.'
+        : 'Summarize succeeded, failed, and skipped plugins with their error and rollback status.',
+    }
+  }
+  if (summary.restartRequired) {
+    return {
+      outcome: 'restart-required',
+      nextStep: 'Report the updated plugins and remind the user to restart DSH so the updated versions take effect.',
+    }
+  }
+  return {
+    outcome: 'applied',
+    nextStep: 'Report that all confirmed plugin updates were applied live.',
+  }
+}
+
 /** Build the registry-ready `dsh_market_pro` tool definition with a compact schema. */
 export function createMarketAiToolDefinition(deps: MarketAiToolDeps): Record<string, unknown> {
   return {
@@ -736,7 +809,13 @@ export function createMarketAiToolDefinition(deps: MarketAiToolDeps): Record<str
       if (args.action === 'check_updates') {
         const requested = collectRequestedNames(args.target, args.targets)
         const report = await scanInstalledUpdates(deps, requested, exec?.signal)
+        const meta = checkUpdatesMeta({
+          available: report.available,
+          updatableCount: report.updatable.length,
+          errorCount: report.errors.length,
+        })
         return JSON.stringify({
+          status: meta.status,
           profile: deps.profile,
           available: report.available,
           ...(report.reason !== undefined ? { reason: report.reason } : {}),
@@ -753,6 +832,7 @@ export function createMarketAiToolDefinition(deps: MarketAiToolDeps): Record<str
           ...(report.notUpdatable.length > 0 ? { notUpdatable: report.notUpdatable } : {}),
           ...(report.notFound.length > 0 ? { notFound: report.notFound } : {}),
           ...(report.errors.length > 0 ? { errors: report.errors } : {}),
+          nextStep: meta.nextStep,
         })
       }
 
@@ -760,17 +840,21 @@ export function createMarketAiToolDefinition(deps: MarketAiToolDeps): Record<str
         const resolved = await resolvePinnedUpdates(deps, args.updates!, exec?.signal)
         if (!resolved.available) {
           return JSON.stringify({
+            outcome: 'api-unavailable' as const,
             updated: false,
             available: false,
             reason: resolved.reason,
+            nextStep: 'Inform the user that Host plugin updates require DSH >= 0.2.2-rc.3.',
           })
         }
         if (resolved.plan.length === 0) {
           return JSON.stringify({
+            outcome: 'nothing-to-update' as const,
             updated: false,
             profile: deps.profile,
             message: 'None of the confirmed plugin versions are available to update.',
             ...(resolved.unavailable.length > 0 ? { unavailable: resolved.unavailable } : {}),
+            nextStep: 'Explain why none of the confirmed versions could be updated and run check_updates again if needed.',
           })
         }
         await requestPluginUpdateApproval(deps, exec, resolved.plan)
@@ -847,21 +931,26 @@ export function createMarketAiToolDefinition(deps: MarketAiToolDeps): Record<str
             })
           }
         }
+        const needsRestart = restartRequired > 0 || restoreRestartRequired > 0
+        const succeeded = applied + restartRequired
+        const meta = updatePluginsMeta({ succeeded, failed, skipped, restartRequired: needsRestart })
         return JSON.stringify({
+          outcome: meta.outcome,
           updated: true,
           profile: deps.profile,
           summary: {
             total: resolved.plan.length,
-            succeeded: applied + restartRequired,
+            succeeded,
             applied,
             restartRequired,
             failed,
             ...(restoreRestartRequired > 0 ? { restoreRestartRequired } : {}),
             ...(skipped > 0 ? { skipped } : {}),
           },
-          restartRequired: restartRequired > 0 || restoreRestartRequired > 0,
+          restartRequired: needsRestart,
           results,
           ...(resolved.unavailable.length > 0 ? { unavailable: resolved.unavailable } : {}),
+          nextStep: meta.nextStep,
         })
       }
 
@@ -923,7 +1012,9 @@ export function createMarketAiToolDefinition(deps: MarketAiToolDeps): Record<str
               ...args.targets,
             ]
             const result = lookupAiCatalogDetails(catalogResult.catalog, installed.packages, batch, args.lang)
+            const status = result.entries.length === 0 ? 'not-found' : result.notFound.length > 0 ? 'partial' : 'found'
             return JSON.stringify({
+              status,
               stale: catalogResult.stale,
               entries: result.entries,
               ...(result.notFound.length > 0 ? { notFound: result.notFound } : {}),
@@ -934,12 +1025,14 @@ export function createMarketAiToolDefinition(deps: MarketAiToolDeps): Record<str
           if (entry === null) {
             const safeTarget = sanitizeUntrustedText(target, 120)
             return JSON.stringify({
+              status: 'not-found',
               found: false,
               target: safeTarget,
               message: `No plugin matching "${safeTarget}" was found in the DSH Market Pro catalog.`,
             })
           }
           return JSON.stringify({
+            status: 'found',
             found: true,
             stale: catalogResult.stale,
             entry,
@@ -957,47 +1050,10 @@ export function createMarketAiToolDefinition(deps: MarketAiToolDeps): Record<str
 export function registerMarketAiTool(ctx: Context, deps: MarketAiToolDeps): {
   sync(): void
 } {
-  let activeRegistry: ToolsRegistryFace | undefined
-  let activeDispose: (() => void) | undefined
-
-  const sync = (): void => {
-    const enabled = deps.readSettings().aiAssistantEnabled
-    if (!enabled || activeRegistry === undefined) {
-      if (activeDispose !== undefined) {
-        const dispose = activeDispose
-        activeDispose = undefined
-        dispose()
-      }
-      return
-    }
-    if (activeDispose !== undefined) return
-    try {
-      const definition = createMarketAiToolDefinition(deps)
-      activeDispose = activeRegistry.register(definition, {
-        when: () => deps.readSettings().aiAssistantEnabled,
-      })
-    } catch (error) {
-      console.warn('[dsh-market-pro] could not register AI market tool:', error)
-    }
-  }
-
-  ctx.inject(['tools'], (scope) => {
-    const getter = (scope as unknown as { get?: (name: string) => unknown }).get
-    const registry = (typeof getter === 'function' ? getter.call(scope, 'tools') : (scope as unknown as { tools?: unknown }).tools) as ToolsRegistryFace | undefined
-    if (registry === undefined || typeof registry.register !== 'function') return
-    scope.effect(() => {
-      activeRegistry = registry
-      sync()
-      return () => {
-        activeRegistry = undefined
-        if (activeDispose !== undefined) {
-          const dispose = activeDispose
-          activeDispose = undefined
-          dispose()
-        }
-      }
-    }, 'dsh-market-pro: ai tool')
+  return registerDynamicAiTool(ctx, {
+    effectLabel: 'dsh-market-pro: ai tool',
+    logLabel: 'AI market tool',
+    isEnabled: () => deps.readSettings().aiAssistantEnabled,
+    createDefinition: () => createMarketAiToolDefinition(deps),
   })
-
-  return { sync }
 }

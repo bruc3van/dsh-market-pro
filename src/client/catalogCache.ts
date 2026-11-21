@@ -48,66 +48,72 @@ export interface ClientCatalogCache {
   invalidate: () => void
 }
 
+type CacheSlot =
+  | { readonly status: 'empty' }
+  | { readonly status: 'fresh'; readonly result: MarketCatalogResult; readonly cachedAt: number }
+  | { readonly status: 'invalidated'; readonly result: MarketCatalogResult }
+
+type FlightSlot =
+  | { readonly status: 'idle' }
+  | { readonly status: 'loading'; readonly force: boolean; readonly seq: number; readonly promise: Promise<MarketCatalogResult> }
+
 export function createClientCatalogCache(
   fetchCatalog: (force: boolean) => Promise<MarketCatalogResult>,
   now: () => number = () => Date.now(),
 ): ClientCatalogCache {
-  let cached: MarketCatalogResult | null = null
-  let cachedAt = 0
-  let invalidated = false
-  let inFlight: Promise<MarketCatalogResult> | null = null
-  let inFlightForce = false
-  let inFlightSeq = 0
+  let cache: CacheSlot = { status: 'empty' }
+  let flight: FlightSlot = { status: 'idle' }
   let generation = 0
 
+  const currentCached = (): MarketCatalogResult | null =>
+    cache.status === 'empty' ? null : cache.result
+
   const isFresh = (): boolean => {
-    if (cached === null || cached.catalog === null || cached.stale || invalidated) return false
+    if (cache.status !== 'fresh') return false
+    const { result, cachedAt } = cache
+    if (result.catalog === null || result.stale) return false
     const age = now() - cachedAt
-    const refreshedMs = Date.parse(cached.catalog.refreshedAt)
+    const refreshedMs = Date.parse(result.catalog.refreshedAt)
     const hostFresh = Number.isFinite(refreshedMs) && now() - refreshedMs < HOST_STALE_WINDOW_MS
     const ttl = hostFresh ? CLIENT_CATALOG_TTL_MS : CLIENT_SWR_SYNC_MS
     return age >= 0 && age < ttl
   }
 
   return {
-    peek: () => cached,
+    peek: currentCached,
     invalidate: () => {
-      invalidated = true
       generation += 1
-      inFlight = null
-      inFlightForce = false
-      inFlightSeq = 0
+      if (cache.status === 'fresh') {
+        cache = { status: 'invalidated', result: cache.result }
+      }
+      flight = { status: 'idle' }
     },
     load: async (force) => {
-      if (!force && isFresh() && cached !== null) return cached
-      if (inFlight !== null && (!force || inFlightForce)) return await inFlight
+      if (!force && isFresh() && cache.status === 'fresh') return cache.result
+      if (flight.status === 'loading' && (!force || flight.force)) return await flight.promise
       const seq = ++generation
-      const request = (async (): Promise<MarketCatalogResult> => {
+      const promise = (async (): Promise<MarketCatalogResult> => {
         try {
           const result = await fetchCatalog(force)
           if (seq === generation && result.catalog !== null) {
-            cached = result
-            cachedAt = now()
-            invalidated = false
+            cache = { status: 'fresh', result, cachedAt: now() }
           }
           return result
         } catch (error) {
-          if (cached !== null && cached.catalog !== null) {
+          const fallback = currentCached()
+          if (fallback !== null && fallback.catalog !== null) {
             const message = error instanceof Error ? error.message : String(error)
-            return { catalog: cached.catalog, stale: true, error: message }
+            return { catalog: fallback.catalog, stale: true, error: message }
           }
           throw error
         } finally {
-          if (inFlightSeq === seq) {
-            inFlight = null
-            inFlightForce = false
+          if (flight.status === 'loading' && flight.seq === seq) {
+            flight = { status: 'idle' }
           }
         }
       })()
-      inFlight = request
-      inFlightForce = force
-      inFlightSeq = seq
-      return await request
+      flight = { status: 'loading', force, seq, promise }
+      return await promise
     },
   }
 }

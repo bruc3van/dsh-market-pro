@@ -16,6 +16,27 @@ type SkillsState =
   | { readonly status: 'ready'; readonly result: MarketSkillsResult }
   | { readonly status: 'error'; readonly message: string }
 
+type SkillsViewModel =
+  | { readonly status: 'loading' }
+  | { readonly status: 'no-session' }
+  | { readonly status: 'failed'; readonly message: string; readonly writerHeld: boolean }
+  | { readonly status: 'ready'; readonly result: MarketSkillsResult }
+
+function resolveSkillsView(state: SkillsState): SkillsViewModel {
+  if (state.status === 'loading') return { status: 'loading' }
+  if (state.status === 'error') {
+    const message = state.message === '' ? 'unknown error' : state.message
+    return { status: 'failed', message, writerHeld: message.startsWith('session/writer-held:') }
+  }
+  const { result } = state
+  if (result.error === SESSIONS_PENDING) return { status: 'loading' }
+  if (result.error === NO_SESSION) return { status: 'no-session' }
+  if (result.error !== '') {
+    return { status: 'failed', message: result.error, writerHeld: result.error.startsWith('session/writer-held:') }
+  }
+  return { status: 'ready', result }
+}
+
 interface SkillsActions {
   listSkills: () => Promise<MarketSkillsResult>
   skillsSession: SkillsSessionSource
@@ -50,6 +71,12 @@ export function SkillsView({ t, listSkills, skillsSession, canOpenFolder, openFo
   const [refresh, setRefresh] = useState(0)
   const [folderAvailable, setFolderAvailable] = useState(false)
   const [actionError, setActionError] = useState('')
+  const mounted = useRef(true)
+
+  useEffect(() => {
+    mounted.current = true
+    return () => { mounted.current = false }
+  }, [])
 
   useEffect(() => {
     let live = true
@@ -63,19 +90,21 @@ export function SkillsView({ t, listSkills, skillsSession, canOpenFolder, openFo
       setState({ status: 'loading' })
     },
     result: result => setState({ status: 'ready', result }),
-    error: error => setState({ status: 'error', message: error instanceof Error ? error.message : String(error) }),
+    error: error => {
+      const raw = error instanceof Error ? error.message : String(error)
+      setState({ status: 'error', message: raw === '' ? 'unknown error' : raw })
+    },
   }), [listSkills, skillsSession, refresh])
 
-  const result = state.status === 'ready' ? state.result : null
-  const busy = state.status === 'loading' || result?.error === SESSIONS_PENDING
-  const available = result?.error === ''
-  const failure = state.status === 'error' ? state.message
-    : !busy && result?.error !== NO_SESSION ? result?.error : undefined
-  const writerHeld = failure?.startsWith('session/writer-held:')
+  const view = resolveSkillsView(state)
+  const busy = view.status === 'loading'
+  const available = view.status === 'ready'
+  const readyResult = view.status === 'ready' ? view.result : null
+  const hasFailure = view.status === 'failed'
   const retry = () => setRefresh(value => value + 1)
   const needle = query.trim().toLocaleLowerCase()
   const groups = origins.map(id => ({ id, items: [] as MarketSkill[], total: 0 }))
-  for (const skill of result?.skills ?? []) {
+  for (const skill of readyResult?.skills ?? []) {
     const group = groups[origins.indexOf(originOf(skill))]
     group.total += 1
     if (origin !== 'all' && origin !== group.id) continue
@@ -88,6 +117,7 @@ export function SkillsView({ t, listSkills, skillsSession, canOpenFolder, openFo
     try {
       await openFolder(path)
     } catch (error) {
+      if (!mounted.current) return
       setActionError(t('skills.openFailed', { reason: error instanceof Error ? error.message : String(error) }))
     }
   }
@@ -97,16 +127,16 @@ export function SkillsView({ t, listSkills, skillsSession, canOpenFolder, openFo
   const refreshLabel = busy ? t('refreshing') : t('skills.refresh')
   useEffect(() => {
     if (!onRegisterRefresh) return
-    onRegisterRefresh(!failure ? {
+    onRegisterRefresh(!hasFailure ? {
       label: refreshLabel,
       busy,
       disabled: busy,
       onClick: () => retryRef.current(),
     } : null)
-  }, [onRegisterRefresh, failure, refreshLabel, busy])
+  }, [onRegisterRefresh, hasFailure, refreshLabel, busy])
   useEffect(() => () => { onRegisterRefresh?.(null) }, [onRegisterRefresh])
 
-  const refreshButton = !failure ? (
+  const refreshButton = !hasFailure ? (
     <button
       className={project ? 'dsh_market_headerAction' : 'dsh_market_headerAction dsh_market_refreshMarket'}
       type="button"
@@ -149,11 +179,11 @@ export function SkillsView({ t, listSkills, skillsSession, canOpenFolder, openFo
                 label={t('skills.origin')}
                 className="dsh_market_category"
                 options={[
-                  { value: 'all', label: t('skills.origin.allLabel'), ...(available ? { count: result.skills.length } : {}) },
+                  { value: 'all', label: t('skills.origin.allLabel'), ...(readyResult ? { count: readyResult.skills.length } : {}) },
                   ...groups.map(group => ({
                     value: group.id,
                     label: t(`skills.origin.${group.id}`),
-                    ...(available ? { count: group.total } : {}),
+                    ...(readyResult ? { count: group.total } : {}),
                   })),
                 ]}
               />
@@ -162,28 +192,28 @@ export function SkillsView({ t, listSkills, skillsSession, canOpenFolder, openFo
         )}
       </div>
       <div className={project ? 'dsh_market_projectSkillsResults' : 'dsh_market_results'} aria-busy={busy}>
-        {busy && <p className="dsh_market_status" role="status">{t('skills.loading')}</p>}
-        {result?.error === NO_SESSION && <p className="dsh_market_status">{t('skills.noSession')}</p>}
-        {failure && (
+        {view.status === 'loading' && <p className="dsh_market_status" role="status">{t('skills.loading')}</p>}
+        {view.status === 'no-session' && <p className="dsh_market_status">{t('skills.noSession')}</p>}
+        {view.status === 'failed' && (
           <div className="dsh_market_notice dsh_market_skillsNotice">
             <div role="alert">
-              <h3>{t(writerHeld ? 'skills.writerHeld' : 'skills.failed')}</h3>
-              <p className="dsh_market_noticeBody">{t(writerHeld ? 'skills.writerHeldHint' : 'skills.failedHint')}</p>
+              <h3>{t(view.writerHeld ? 'skills.writerHeld' : 'skills.failed')}</h3>
+              <p className="dsh_market_noticeBody">{t(view.writerHeld ? 'skills.writerHeldHint' : 'skills.failedHint')}</p>
             </div>
             <MarketButton intent="primary" onClick={retry}>{t('skills.retry')}</MarketButton>
-            <details className="dsh_market_installDetails" key={failure}>
+            <details className="dsh_market_installDetails" key={view.message}>
               <summary>{t('skills.diagnostic')}<svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg></summary>
-              <pre className="dsh_market_directMessage">{failure}</pre>
+              <pre className="dsh_market_directMessage">{view.message}</pre>
             </details>
           </div>
         )}
-        {available && !result.complete && <p className="dsh_market_status" role="status" data-error="true">{t('skills.incomplete')}</p>}
+        {readyResult && !readyResult.complete && <p className="dsh_market_status" role="status" data-error="true">{t('skills.incomplete')}</p>}
         {actionError && <p className="dsh_market_status" role="alert" data-error="true">{actionError}</p>}
-        {available && (
+        {readyResult && (
           <p className="dsh_market_status" role="status">
             {count > 0 ? t('skills.count', { count: String(count) })
-              : origin === 'project' && groups[0].total === 0 && result.complete ? t('skills.noProject')
-                : result.skills.length === 0 && result.complete ? t('skills.empty') : t('skills.noMatches')}
+              : origin === 'project' && groups[0].total === 0 && readyResult.complete ? t('skills.noProject')
+                : readyResult.skills.length === 0 && readyResult.complete ? t('skills.empty') : t('skills.noMatches')}
           </p>
         )}
         {groups.filter(group => group.items.length > 0).map(group => (

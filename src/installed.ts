@@ -81,6 +81,30 @@ export interface PendingUninstall {
   readonly completed?: boolean
 }
 
+/** Explicit boot-sweep decision for one pending-uninstall record. */
+export type PendingSweepDecision = 'release' | 'hold'
+
+/**
+ * Decide whether a boot sweep may release a pending uninstall's stop rows:
+ * - Completed removals (or legacy records without `completed`) always release.
+ * - Interrupted removals (`completed === false`) release only once the profile
+ *   manifest no longer references the package; otherwise they stay held down.
+ */
+export function classifyPendingSweep(
+  record: Pick<PendingUninstall, 'packageName' | 'completed'>,
+  manifest: Pick<ProfileManifest, 'dependencies' | 'dsh'>,
+): PendingSweepDecision {
+  if (record.completed !== false) return 'release'
+  const stillReferenced = Object.hasOwn(manifest.dependencies ?? {}, record.packageName)
+    || Boolean(manifest.dsh?.profile?.bundles?.includes(record.packageName))
+  return stillReferenced ? 'hold' : 'release'
+}
+
+interface UninstallFault {
+  readonly kind: 'may-run' | 'cleanup'
+  readonly detail: string
+}
+
 /** The manager's construction facts. */
 export interface InstalledManagerOptions {
   readonly pluginManager?: () => (Pick<PluginManager, 'setBundleEnabled' | 'removeBundle'> & Partial<Pick<PluginManager, 'listBundles'>>) | undefined
@@ -528,7 +552,7 @@ export function createInstalledManager(options: InstalledManagerOptions): Instal
     const seatDir = inBox ? desktopSeatDir(profileDir, packageName) : undefined
     const info = await readBundleInfo(profileDir, packageName).catch(() => ({ version: '', description: '', repository: '', entries: [] as { id: string; name: string }[] }))
     const ids = info.entries.map(entry => entry.id)
-    const faults: string[] = []
+    const faults: UninstallFault[] = []
     // Stop first: a live plugin holds files open, and on Windows that is
     // what makes `pnpm remove` fail EBUSY. Self-uninstall skips the stop —
     // this fiber is the one answering the call.
@@ -537,7 +561,7 @@ export function createInstalledManager(options: InstalledManagerOptions): Instal
       try {
         addedIds = await setEntryDisabled(patchPath, ids, true)
       } catch (error) {
-        faults.push('stop rows: ' + messageOf(error))
+        faults.push({ kind: 'may-run', detail: 'stop rows: ' + messageOf(error) })
         console.warn('[dsh-market-pro] uninstall stop rows failed:', error)
       }
       if (addedIds !== undefined) {
@@ -552,14 +576,14 @@ export function createInstalledManager(options: InstalledManagerOptions): Instal
             ])
           }
         } catch (error) {
-          faults.push('sweep record: ' + messageOf(error))
+          faults.push({ kind: 'cleanup', detail: 'sweep record: ' + messageOf(error) })
           console.warn('[dsh-market-pro] uninstall sweep record failed:', error)
         }
       }
       try {
         await applyLive(ids, false)
       } catch (error) {
-        faults.push('live stop: ' + messageOf(error))
+        faults.push({ kind: 'may-run', detail: 'live stop: ' + messageOf(error) })
       }
     }
     if (inBox) {
@@ -574,7 +598,7 @@ export function createInstalledManager(options: InstalledManagerOptions): Instal
             await rm(seatDir, { recursive: true, force: true })
           }
         } catch (error) {
-          faults.push('seat directory: ' + messageOf(error))
+          faults.push({ kind: 'cleanup', detail: 'seat directory: ' + messageOf(error) })
         }
       }
     } else {
@@ -585,26 +609,26 @@ export function createInstalledManager(options: InstalledManagerOptions): Instal
       // from composing it; the notice tells the user the tree was not pruned.
       try {
         const pruned = await removeDependency(packageName)
-        if (!pruned.ok) faults.push('pnpm remove: ' + pruned.detail)
+        if (!pruned.ok) faults.push({ kind: 'cleanup', detail: 'pnpm remove: ' + pruned.detail })
       } catch (error) {
-        faults.push('pnpm remove: ' + messageOf(error))
+        faults.push({ kind: 'cleanup', detail: 'pnpm remove: ' + messageOf(error) })
         console.warn('[dsh-market-pro] uninstall pnpm remove failed:', error)
       }
       try {
         const after = await readManifest(profileDir)
         if (removeBundle(after, packageName)) await writeManifest(profileDir, after)
       } catch (error) {
-        faults.push('manifest: ' + messageOf(error))
+        faults.push({ kind: 'cleanup', detail: 'manifest: ' + messageOf(error) })
         console.warn('[dsh-market-pro] uninstall manifest edit failed:', error)
       }
       const verified = await readManifest(profileDir)
       if (Object.hasOwn(verified.dependencies ?? {}, packageName) || verified.dsh?.profile?.bundles?.includes(packageName)) {
-        throw new Error(`uninstall incomplete for ${packageName}: ${faults.join('; ')}`)
+        throw new Error(`uninstall incomplete for ${packageName}: ${faults.map(fault => fault.detail).join('; ')}`)
       }
       try {
         await removePackageInstallGate(profileDir, packageName)
       } catch (error) {
-        faults.push('install gate: ' + messageOf(error))
+        faults.push({ kind: 'cleanup', detail: 'install gate: ' + messageOf(error) })
         console.warn('[dsh-market-pro] uninstall install-gate cleanup failed:', error)
       }
     }
@@ -615,7 +639,7 @@ export function createInstalledManager(options: InstalledManagerOptions): Instal
           record.packageName === packageName ? { ...record, completed: true } : record))
       }
     } catch (error) {
-      faults.push('sweep record: ' + messageOf(error))
+      faults.push({ kind: 'cleanup', detail: 'sweep record: ' + messageOf(error) })
     }
     options.notifyLegacyChange?.('remove')
     const result = await list()
@@ -623,13 +647,11 @@ export function createInstalledManager(options: InstalledManagerOptions): Instal
     // `may-run` is specifically "the package was not stopped". A failed sweep
     // record is the opposite — the stop rows DID land and are now stranded in
     // the user's patch file with nothing scheduled to take them back — so it
-    // belongs with the leftover work, not with the two faults that leave the
-    // plugin running.
-    const mayRun = faults.some(fault =>
-      fault.startsWith('stop rows:') || fault.startsWith('live stop:'))
+    // belongs with the leftover cleanup work, not with the stop faults.
+    const mayRun = faults.some(fault => fault.kind === 'may-run')
     return {
       ...result,
-      notice: faults.join('; '),
+      notice: faults.map(fault => fault.detail).join('; '),
       noticeKind: mayRun ? 'may-run' : 'faults',
     }
   }
@@ -642,9 +664,7 @@ export function createInstalledManager(options: InstalledManagerOptions): Instal
     if (all.length === 0) return
     try {
       const manifest = await readManifest(profileDir)
-      const pending = all.filter(record => record.completed !== false
-        || (!Object.hasOwn(manifest.dependencies ?? {}, record.packageName)
-          && !manifest.dsh?.profile?.bundles?.includes(record.packageName)))
+      const pending = all.filter(record => classifyPendingSweep(record, manifest) === 'release')
       if (pending.length === 0) return
       // Completed removals may release their stop rows, including after a reinstall.
       // An interrupted removal may only release them once the manifest no longer

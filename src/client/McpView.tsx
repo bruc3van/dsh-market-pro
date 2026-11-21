@@ -97,8 +97,40 @@ function matchesFilter(row: McpRow, filter: Filter): boolean {
   }
 }
 
-/** The editor's open state: a fresh server (optionally pre-filled), or one existing row. */
-type Editing = { readonly row: McpRow | null; readonly initialDraft?: McpDraft } | null
+/** The page's single active modal: either curated quick-add or the full editor. */
+type McpModalState =
+  | { readonly kind: 'closed' }
+  | { readonly kind: 'featured'; readonly item: FeaturedMcpServer }
+  | { readonly kind: 'editor'; readonly row: McpRow | null; readonly initialDraft?: McpDraft }
+
+type DocumentOpenState =
+  | { readonly status: 'idle' }
+  | { readonly status: 'opening' }
+  | { readonly status: 'error'; readonly message: string }
+
+type FeaturedSubmitState =
+  | { readonly status: 'idle' }
+  | { readonly status: 'saving' }
+  | { readonly status: 'error'; readonly message: string }
+
+type CredentialFlowState =
+  | { readonly status: 'idle'; readonly error?: string }
+  | { readonly status: 'editing'; readonly ref: string; readonly value: string; readonly error?: string }
+  | { readonly status: 'saving'; readonly ref: string; readonly value: string }
+  | { readonly status: 'confirming-clear'; readonly ref: string; readonly error?: string }
+  | { readonly status: 'clearing'; readonly ref: string }
+
+type EditorSubmitState =
+  | { readonly status: 'idle' }
+  | { readonly status: 'saving' }
+  | { readonly status: 'error'; readonly message: string }
+  | { readonly status: 'conflict'; readonly message: string }
+
+type EditorIdleSubmitState = Exclude<EditorSubmitState, { readonly status: 'saving' }>
+
+type EditorStatus =
+  | EditorSubmitState
+  | { readonly status: 'confirm-discard'; readonly previous: EditorIdleSubmitState }
 
 /** The MCP page. */
 export function McpView({ t, controller, onBrowsePlugins, onRegisterRefresh }: {
@@ -112,11 +144,15 @@ export function McpView({ t, controller, onBrowsePlugins, onRegisterRefresh }: {
   const [subTab, setSubTab] = useState<McpSubTab>('featured')
   const [featuredCategory, setFeaturedCategory] = useState<FeaturedMcpCategory | 'all'>('all')
   const [featuredQuery, setFeaturedQuery] = useState('')
-  const [installingFeatured, setInstallingFeatured] = useState<FeaturedMcpServer | null>(null)
+  const [modal, setModal] = useState<McpModalState>({ kind: 'closed' })
   const [lastAdded, setLastAdded] = useState('')
   const [filter, setFilter] = useState<Filter>('all')
   const [query, setQuery] = useState('')
-  const [editing, setEditing] = useState<Editing>(null)
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => { mounted.current = false }
+  }, [])
   const needle = query.trim().toLocaleLowerCase()
   const toolsOf = useMemo(() => new Map((snapshot.host?.tools ?? []).map(group => [group.server, group])), [snapshot.host])
   const unmanaged = snapshot.host?.unmanaged ?? []
@@ -158,23 +194,22 @@ export function McpView({ t, controller, onBrowsePlugins, onRegisterRefresh }: {
   }
   const canOpenDocument = !loading && snapshot.mode !== 'legacy' && snapshot.mode !== 'error'
     && snapshot.hasSettingsDocument && controller.supports('openDocument')
-  const [openingDocument, setOpeningDocument] = useState(false)
+  const [documentState, setDocumentState] = useState<DocumentOpenState>({ status: 'idle' })
   const [refreshing, setRefreshing] = useState(false)
-  const [documentError, setDocumentError] = useState('')
   const refresh = async () => {
     setRefreshing(true)
     try {
       await controller.refresh()
     } finally {
-      setRefreshing(false)
+      if (mounted.current) setRefreshing(false)
     }
   }
   const openDocument = async () => {
-    setOpeningDocument(true)
-    setDocumentError('')
+    if (documentState.status === 'opening') return
+    setDocumentState({ status: 'opening' })
     const failure = await controller.openSettingsDocument()
-    setOpeningDocument(false)
-    setDocumentError(failure)
+    if (!mounted.current) return
+    setDocumentState(failure === '' ? { status: 'idle' } : { status: 'error', message: failure })
   }
 
   const refreshRef = useRef(refresh)
@@ -290,14 +325,14 @@ export function McpView({ t, controller, onBrowsePlugins, onRegisterRefresh }: {
           {(canOpenDocument || writable) && (
             <div className="dsh_market_headingActions">
               {canOpenDocument && (
-                <button className="dsh_market_headerAction" type="button" title={t('mcp.openDocument.hint')} disabled={openingDocument}
+                <button className="dsh_market_headerAction" type="button" title={t('mcp.openDocument.hint')} disabled={documentState.status === 'opening'}
                   onClick={() => { void openDocument() }}>
                   <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" /></svg>
                   {t('mcp.openDocument')}
                 </button>
               )}
               {writable && (
-                <MarketButton intent="primary" className="dsh_market_mcpAdd" onClick={() => setEditing({ row: null })}>
+                <MarketButton intent="primary" className="dsh_market_mcpAdd" onClick={() => setModal({ kind: 'editor', row: null })}>
                   {t('mcp.add')}
                 </MarketButton>
               )}
@@ -306,8 +341,8 @@ export function McpView({ t, controller, onBrowsePlugins, onRegisterRefresh }: {
         </div>
       </div>
       <div className="dsh_market_results" aria-busy={subTab === 'configured' && loading}>
-        {documentError !== '' && (
-          <p className="dsh_market_status" role="alert" data-error="true">{t('mcp.openDocument.failed', { reason: reasonText(t, documentError) })}</p>
+        {documentState.status === 'error' && (
+          <p className="dsh_market_status" role="alert" data-error="true">{t('mcp.openDocument.failed', { reason: reasonText(t, documentState.message) })}</p>
         )}
         {subTab === 'featured'
           ? (
@@ -345,7 +380,7 @@ export function McpView({ t, controller, onBrowsePlugins, onRegisterRefresh }: {
                         item={item}
                         match={featuredMatches.get(item.id) ?? null}
                         writable={writable}
-                        onAdd={() => setInstallingFeatured(item)}
+                        onAdd={() => setModal({ kind: 'featured', item })}
                         onViewConfigured={viewConfigured}
                       />
                     ))}
@@ -373,7 +408,7 @@ export function McpView({ t, controller, onBrowsePlugins, onRegisterRefresh }: {
                 <ul className="dsh_market_cards">
                   {rows.map(row => (
                     <McpCard key={row.name} t={t} row={row} snapshot={snapshot} controller={controller} writable={writable}
-                      tools={toolsOf.get(row.name)} onEdit={() => setEditing({ row })} />
+                      tools={toolsOf.get(row.name)} onEdit={() => setModal({ kind: 'editor', row })} />
                   ))}
                 </ul>
               )}
@@ -392,25 +427,24 @@ export function McpView({ t, controller, onBrowsePlugins, onRegisterRefresh }: {
             </>
             )}
       </div>
-      {installingFeatured !== null && (
+      {modal.kind === 'featured' && (
         <FeaturedMcpModal
           t={t}
-          item={installingFeatured}
+          item={modal.item}
           snapshot={snapshot}
           controller={controller}
-          onClose={() => setInstallingFeatured(null)}
+          onClose={() => setModal({ kind: 'closed' })}
           onAdded={(name) => {
-            setInstallingFeatured(null)
+            setModal({ kind: 'closed' })
             setLastAdded(name)
           }}
           onOpenAdvanced={(draft) => {
-            setInstallingFeatured(null)
-            setEditing({ row: null, initialDraft: draft })
+            setModal({ kind: 'editor', row: null, initialDraft: draft })
           }}
         />
       )}
-      {editing !== null && (
-        <McpEditor t={t} row={editing.row} initialDraft={editing.initialDraft} snapshot={snapshot} controller={controller} onClose={() => setEditing(null)} />
+      {modal.kind === 'editor' && (
+        <McpEditor t={t} row={modal.row} initialDraft={modal.initialDraft} snapshot={snapshot} controller={controller} onClose={() => setModal({ kind: 'closed' })} />
       )}
     </div>
   )
@@ -497,8 +531,16 @@ function FeaturedMcpModal({ t, item, snapshot, controller, onClose, onAdded, onO
   const [enabled, setEnabled] = useState(true)
   const [trustedLine, setTrustedLine] = useState<string | null>(null)
   const [touched, setTouched] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const [saveError, setSaveError] = useState('')
+  const [submitState, setSubmitState] = useState<FeaturedSubmitState>({ status: 'idle' })
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => { mounted.current = false }
+  }, [])
+  const clearSubmitError = () => {
+    setSubmitState(current => (current.status === 'error' ? { status: 'idle' } : current))
+  }
+  const saving = submitState.status === 'saving'
   const errors = validateFeaturedValues(item, name, values, taken)
   const nameError = errors.find(error => error.field === 'name')
   const inputError = (key: string) => errors.find(error => error.field === 'input' && error.key === key)
@@ -519,15 +561,18 @@ function FeaturedMcpModal({ t, item, snapshot, controller, onClose, onAdded, onO
   const submit = async () => {
     setTouched(true)
     if (errors.length > 0 || !canSubmit) return
-    setSaving(true)
-    setSaveError('')
+    setSubmitState({ status: 'saving' })
     const draft = buildDraft()
     const outcome = await controller.save(draft, undefined)
-    setSaving(false)
+    if (!mounted.current) return
     if (outcome.ok) {
+      setSubmitState({ status: 'idle' })
       onAdded(draft.name)
     } else {
-      setSaveError(outcome.conflict ? t('mcp.editor.conflict') : t('mcp.saveFailed', { reason: reasonText(t, outcome.message) }))
+      setSubmitState({
+        status: 'error',
+        message: outcome.conflict ? t('mcp.editor.conflict') : t('mcp.saveFailed', { reason: reasonText(t, outcome.message) }),
+      })
     }
   }
   return (
@@ -553,7 +598,7 @@ function FeaturedMcpModal({ t, item, snapshot, controller, onClose, onAdded, onO
           )}
           <label className="dsh_market_mcpField">
             <span>{t('mcp.field.name')}</span>
-            <input value={name} spellCheck={false} maxLength={32} onChange={event => setName(event.target.value)} />
+            <input value={name} spellCheck={false} maxLength={32} onChange={event => { clearSubmitError(); setName(event.target.value) }} />
             <small className="dsh_market_meta">{t('mcp.field.nameHint')}</small>
             {(touched || name !== '') && nameError !== undefined && (
               <span className="dsh_market_cardError">{t(`mcp.error.name.${nameError.code}`)}</span>
@@ -576,7 +621,7 @@ function FeaturedMcpModal({ t, item, snapshot, controller, onClose, onAdded, onO
                   spellCheck={false}
                   value={values[input.key] ?? ''}
                   placeholder={input.placeholder ?? input.key}
-                  onChange={event => setValues(current => ({ ...current, [input.key]: event.target.value }))}
+                  onChange={event => { clearSubmitError(); setValues(current => ({ ...current, [input.key]: event.target.value })) }}
                 />
                 {hint && <small className="dsh_market_meta">{hint}</small>}
                 {showError && (
@@ -603,11 +648,11 @@ function FeaturedMcpModal({ t, item, snapshot, controller, onClose, onAdded, onO
             </div>
           )}
           <label className="dsh_market_mcpCheck">
-            <input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} />
+            <input type="checkbox" checked={enabled} onChange={event => { clearSubmitError(); setEnabled(event.target.checked) }} />
             <span>{t('mcp.field.enabled')}</span>
           </label>
           {!enabled && <small className="dsh_market_meta">{t('mcp.field.enabledHint')}</small>}
-          {saveError !== '' && <p className="dsh_market_cardError" role="alert">{saveError}</p>}
+          {submitState.status === 'error' && <p className="dsh_market_cardError" role="alert">{submitState.message}</p>}
           <div className="dsh_market_installFooter dsh_market_mcpModalFooter">
             <MarketButton size="md" intent="secondary" disabled={saving} onClick={() => onOpenAdvanced(buildDraft())}>
               {t('mcp.featured.advancedEdit')}
@@ -771,33 +816,35 @@ function sourceLabel(t: MarketLocale, source: string | undefined): string {
 function Credentials({ t, row, snapshot, controller }: {
   t: MarketLocale; row: McpRow; snapshot: McpSnapshot; controller: McpController
 }): ReactElement | null {
-  const [editingRef, setEditingRef] = useState<string | null>(null)
-  const [value, setValue] = useState('')
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState('')
-  const [clearingRef, setClearingRef] = useState<string | null>(null)
+  const [flow, setFlow] = useState<CredentialFlowState>({ status: 'idle' })
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => { mounted.current = false }
+  }, [])
   if (row.refs.length === 0) return null
   const canClear = controller.supports('unsetCredential')
+  const busy = flow.status === 'saving' || flow.status === 'clearing'
+  const editingRef = flow.status === 'editing' || flow.status === 'saving' ? flow.ref : null
+  const clearingRef = flow.status === 'confirming-clear' || flow.status === 'clearing' ? flow.ref : null
+  const error = 'error' in flow && flow.error !== undefined ? flow.error : ''
+
   const clear = async (ref: string) => {
-    if (saving) return
-    setSaving(true)
-    setError('')
+    if (busy) return
+    setFlow({ status: 'clearing', ref })
     const failure = await controller.clearCredential(ref)
-    setSaving(false)
-    setClearingRef(null)
-    if (failure !== '') setError(t('mcp.cred.clearFailed', { reason: reasonText(t, failure) }))
+    if (!mounted.current) return
+    setFlow(failure === '' ? { status: 'idle' } : { status: 'idle', error: t('mcp.cred.clearFailed', { reason: reasonText(t, failure) }) })
   }
-  const save = async (ref: string) => {
-    if (value === '' || saving) return
-    setSaving(true)
-    setError('')
+  const save = async (ref: string, value: string) => {
+    if (value === '' || busy) return
+    setFlow({ status: 'saving', ref, value })
     const failure = await controller.setCredential(ref, value)
-    setSaving(false)
+    if (!mounted.current) return
     if (failure === '') {
-      setValue('')
-      setEditingRef(null)
+      setFlow({ status: 'idle' })
     } else {
-      setError(t('mcp.cred.failed', { reason: reasonText(t, failure) }))
+      setFlow({ status: 'editing', ref, value, error: t('mcp.cred.failed', { reason: reasonText(t, failure) }) })
     }
   }
   return (
@@ -810,6 +857,9 @@ function Credentials({ t, row, snapshot, controller }: {
           const source = configured ? sourceLabel(t, info?.source) : ''
           // An environment value is not the store's to remove; unset would leave it in force.
           const clearable = canClear && configured && info?.writable === true && info.source !== 'env'
+          const editingThis = editingRef === ref
+          const clearingThis = clearingRef === ref
+          const currentValue = (flow.status === 'editing' || flow.status === 'saving') && flow.ref === ref ? flow.value : ''
           return (
             <li key={ref}>
               <code>{ref}</code>
@@ -818,39 +868,39 @@ function Credentials({ t, row, snapshot, controller }: {
                   ? [t('mcp.cred.configured'), source, info?.masked].filter(part => part !== undefined && part !== '').join(' · ')
                   : t('mcp.cred.missing')}
               </span>
-              {info?.writable === true && editingRef !== ref && clearingRef !== ref && (
-                <button type="button" className="dsh_market_chip" disabled={saving}
-                  onClick={() => { setEditingRef(ref); setValue(''); setError(''); setClearingRef(null) }}>
+              {info?.writable === true && !editingThis && !clearingThis && (
+                <button type="button" className="dsh_market_chip" disabled={busy}
+                  onClick={() => { setFlow({ status: 'editing', ref, value: '' }) }}>
                   {configured ? t('mcp.cred.update') : t('mcp.cred.set')}
                 </button>
               )}
-              {clearable && editingRef !== ref && (clearingRef === ref
+              {clearable && !editingThis && (clearingThis
                 ? (
                   <>
-                    <button type="button" className="dsh_market_chip dsh_market_mcpCredDanger" disabled={saving} onClick={() => { void clear(ref) }}>
-                      {saving ? t('mcp.cred.clearing') : t('mcp.cred.clearConfirm')}
+                    <button type="button" className="dsh_market_chip dsh_market_mcpCredDanger" disabled={busy} onClick={() => { void clear(ref) }}>
+                      {flow.status === 'clearing' ? t('mcp.cred.clearing') : t('mcp.cred.clearConfirm')}
                     </button>
-                    <button type="button" className="dsh_market_chip" disabled={saving} onClick={() => setClearingRef(null)}>
+                    <button type="button" className="dsh_market_chip" disabled={busy} onClick={() => setFlow({ status: 'idle' })}>
                       {t('mcp.cancel')}
                     </button>
                   </>
                   )
                 : (
-                  <button type="button" className="dsh_market_chip" disabled={saving} title={t('mcp.cred.clearHint')}
-                    onClick={() => { setClearingRef(ref); setEditingRef(null); setValue(''); setError('') }}>
+                  <button type="button" className="dsh_market_chip" disabled={busy} title={t('mcp.cred.clearHint')}
+                    onClick={() => { setFlow({ status: 'confirming-clear', ref }) }}>
                     {t('mcp.cred.clear')}
                   </button>
                   ))}
               {info?.writable === false && <span className="dsh_market_meta">{t('mcp.cred.readonly')}</span>}
-              {editingRef === ref && (
-                <form className="dsh_market_mcpCredForm" onSubmit={(event) => { event.preventDefault(); void save(ref) }}>
-                  <input type="password" autoComplete="off" spellCheck={false} value={value} autoFocus
+              {editingThis && (
+                <form className="dsh_market_mcpCredForm" onSubmit={(event) => { event.preventDefault(); void save(ref, currentValue) }}>
+                  <input type="password" autoComplete="off" spellCheck={false} value={currentValue} autoFocus
                     aria-label={t('mcp.cred.placeholder', { ref })} placeholder={t('mcp.cred.placeholder', { ref })}
-                    onChange={event => setValue(event.target.value)} />
-                  <MarketButton type="submit" intent="primary" disabled={value === '' || saving}>
-                    {saving ? t('mcp.cred.saving') : t('mcp.cred.save')}
+                    onChange={event => setFlow({ status: 'editing', ref, value: event.target.value })} />
+                  <MarketButton type="submit" intent="primary" disabled={currentValue === '' || busy}>
+                    {flow.status === 'saving' ? t('mcp.cred.saving') : t('mcp.cred.save')}
                   </MarketButton>
-                  <MarketButton intent="secondary" disabled={saving} onClick={() => { setEditingRef(null); setValue('') }}>
+                  <MarketButton intent="secondary" disabled={busy} onClick={() => { setFlow({ status: 'idle' }) }}>
                     {t('mcp.cancel')}
                   </MarketButton>
                 </form>
@@ -877,6 +927,9 @@ function McpCard({ t, row, snapshot, controller, writable, tools, onEdit }: {
   const configured = isConfigured(row)
   const enabled = isEnabled(row)
   const removable = row.source === 'user' || row.source === 'overridden'
+  useEffect(() => {
+    if ((!writable || !configured || !removable) && confirming) setConfirming(false)
+  }, [writable, configured, removable, confirming])
   const target = targetOf(row.entry)
   // A missing credential is spelled out by the credential list below; its
   // diagnostic would only repeat it.
@@ -978,6 +1031,9 @@ function StaticCard({ t, server, tools, conflict, snapshot, controller, writable
   const adoptVisible = writable && controller.supports('adopt') && !conflict
   const toggleVisible = toggle?.available === true && snapshot.mode !== 'readonly'
   const showFoot = confirmingAdopt || adoptVisible || toggleVisible
+  useEffect(() => {
+    if (!adoptVisible && confirmingAdopt) setConfirmingAdopt(false)
+  }, [adoptVisible, confirmingAdopt])
   const adoptBlocked = server.adoptBlocker !== '' ? t(`mcp.adopt.blocked.${server.adoptBlocker}`)
     : server.enabled && toggle?.available !== true ? t('mcp.adopt.locked') : ''
   // Starting a static row over an enabled managed server of the same name
@@ -1124,14 +1180,21 @@ function McpEditor({ t, row, initialDraft, snapshot, controller, onClose }: {
   const [pasteLine, setPasteLine] = useState('')
   // Trust is given to one exact command line; any edit to it asks again.
   const [trustedLine, setTrustedLine] = useState<string | null>(null)
-  const [conflict, setConflict] = useState(false)
   const [touched, setTouched] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const [saveError, setSaveError] = useState('')
-  const [confirmDiscard, setConfirmDiscard] = useState(false)
+  const [editorStatus, setEditorStatus] = useState<EditorStatus>({ status: 'idle' })
   const footerRef = useRef<HTMLDivElement>(null)
   const keepEditingRef = useRef<HTMLButtonElement>(null)
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => { mounted.current = false }
+  }, [])
   const [advanced, setAdvanced] = useState(() => [draft.startupTimeoutMs, draft.toolCallTimeoutMs, draft.closeTimeoutMs, draft.initialDelayMs, draft.maxDelayMs, draft.maxAttempts].some(text => text !== '') || !draft.reconnectEnabled)
+  const submitState: EditorSubmitState = editorStatus.status === 'confirm-discard' ? editorStatus.previous : editorStatus
+  const saving = submitState.status === 'saving'
+  const confirmDiscard = editorStatus.status === 'confirm-discard'
+  const conflict = submitState.status === 'conflict'
+  const saveError = submitState.status === 'error' || submitState.status === 'conflict' ? submitState.message : ''
   const taken = new Set([
     ...snapshot.rows.map(item => item.name),
     ...(snapshot.host?.unmanaged ?? []).map(server => server.serverName),
@@ -1155,8 +1218,20 @@ function McpEditor({ t, row, initialDraft, snapshot, controller, onClose }: {
   // names the missing field instead of leaving a silently disabled button.
   const canSave = !saving && (!needsTrust || trusted)
   const dirty = isDraftDirty(draft, baseline) || pasteLine.trim() !== ''
+  const resetTransientStatus = () => {
+    setEditorStatus((current): EditorStatus => {
+      if (current.status === 'confirm-discard') {
+        return current.previous.status === 'conflict' ? current.previous : { status: 'idle' }
+      }
+      if (current.status === 'error') return { status: 'idle' }
+      return current
+    })
+  }
+  const keepEditing = () => {
+    setEditorStatus(current => (current.status === 'confirm-discard' ? current.previous : current))
+  }
   const set = (patch: Partial<McpDraft>) => {
-    setConfirmDiscard(false)
+    resetTransientStatus()
     setDraft(current => ({ ...current, ...patch }))
   }
   const setArgs = (text: string) => {
@@ -1166,7 +1241,10 @@ function McpEditor({ t, row, initialDraft, snapshot, controller, onClose }: {
   const requestClose = () => {
     if (saving) return
     if (dirty) {
-      setConfirmDiscard(true)
+      setEditorStatus((current): EditorStatus => {
+        if (current.status === 'saving' || current.status === 'confirm-discard') return current
+        return { status: 'confirm-discard', previous: current }
+      })
       requestAnimationFrame(() => {
         footerRef.current?.scrollIntoView({ block: 'nearest' })
         keepEditingRef.current?.focus()
@@ -1185,12 +1263,12 @@ function McpEditor({ t, row, initialDraft, snapshot, controller, onClose }: {
   const convert = (where: string) => {
     const ref = suggestRef(draft.name || 'server', fieldLabel(draft, where), refsTaken)
     const next = convertToCredential(draft, where, ref)
-    setConfirmDiscard(false)
+    resetTransientStatus()
     setDraft(next)
     setArgsText(next.args.join('\n'))
   }
   const save = async () => {
-    setConfirmDiscard(false)
+    resetTransientStatus()
     setTouched(true)
     if (errors.length > 0) {
       if (errors.some(error => error.field === 'startupTimeoutMs' || error.field === 'toolCallTimeoutMs'
@@ -1201,15 +1279,16 @@ function McpEditor({ t, row, initialDraft, snapshot, controller, onClose }: {
       return
     }
     if (!canSave) return
-    setSaving(true)
-    setSaveError('')
+    setEditorStatus({ status: 'saving' })
     const outcome = await controller.save({ ...draft, name: draft.name.trim() }, row?.name)
-    setSaving(false)
+    if (!mounted.current) return
     if (outcome.ok) {
+      setEditorStatus({ status: 'idle' })
       onClose()
+    } else if (outcome.conflict) {
+      setEditorStatus({ status: 'conflict', message: t('mcp.editor.conflict') })
     } else {
-      setConflict(outcome.conflict)
-      setSaveError(outcome.conflict ? t('mcp.editor.conflict') : t('mcp.saveFailed', { reason: reasonText(t, outcome.message) }))
+      setEditorStatus({ status: 'error', message: t('mcp.saveFailed', { reason: reasonText(t, outcome.message) }) })
     }
   }
   /** Replace the form with the entry as it now stands; the user's edits are dropped on request only. */
@@ -1222,9 +1301,7 @@ function McpEditor({ t, row, initialDraft, snapshot, controller, onClose }: {
     setArgsText(next.args.join('\n'))
     setPasteLine('')
     setTrustedLine(null)
-    setConfirmDiscard(false)
-    setConflict(false)
-    setSaveError('')
+    setEditorStatus({ status: 'idle' })
   }
   const nameEditable = row === null || row.source === 'user'
   return (
@@ -1266,7 +1343,7 @@ function McpEditor({ t, row, initialDraft, snapshot, controller, onClose }: {
                 <span>{t('mcp.field.paste')}</span>
                 <div className="dsh_market_mcpPair">
                   <input value={pasteLine} spellCheck={false} placeholder="npx -y @modelcontextprotocol/server-everything"
-                    aria-label={t('mcp.field.paste')} onChange={event => { setConfirmDiscard(false); setPasteLine(event.target.value) }} />
+                    aria-label={t('mcp.field.paste')} onChange={event => { resetTransientStatus(); setPasteLine(event.target.value) }} />
                   <button type="button" className="dsh_market_chip" disabled={pasteLine.trim() === ''} onClick={applyPaste}>
                     {t('mcp.field.pasteApply')}
                   </button>
@@ -1367,7 +1444,7 @@ function McpEditor({ t, row, initialDraft, snapshot, controller, onClose }: {
             {risks.includes('fetch') && <p className="dsh_market_cardNotice" data-warning="true">{t('mcp.risk.fetch')}</p>}
             {risks.includes('shell') && <p className="dsh_market_cardNotice" data-warning="true">{t('mcp.risk.shell')}</p>}
             <label className="dsh_market_mcpCheck">
-              <input type="checkbox" checked={trusted} onChange={event => { setConfirmDiscard(false); setTrustedLine(event.target.checked ? line : null) }} />
+              <input type="checkbox" checked={trusted} onChange={event => { resetTransientStatus(); setTrustedLine(event.target.checked ? line : null) }} />
               <span>{t('mcp.risk.confirm')}</span>
             </label>
           </div>
@@ -1384,7 +1461,7 @@ function McpEditor({ t, row, initialDraft, snapshot, controller, onClose }: {
             ? (
               <>
                 <span className="dsh_market_cardNotice" role="status">{t('mcp.editor.unsaved')}</span>
-                <MarketButton ref={keepEditingRef} size="md" intent="secondary" disabled={saving} onClick={() => setConfirmDiscard(false)}>
+                <MarketButton ref={keepEditingRef} size="md" intent="secondary" disabled={saving} onClick={keepEditing}>
                   {t('mcp.editor.keepEditing')}
                 </MarketButton>
                 <MarketButton size="md" intent="danger" disabled={saving} onClick={onClose}>

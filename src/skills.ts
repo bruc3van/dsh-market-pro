@@ -104,6 +104,10 @@ interface SkillView {
   readonly release?: () => Promise<void>
 }
 
+type SkillViewResolution =
+  | { readonly ok: true; readonly view: SkillView }
+  | { readonly ok: false; readonly error: string }
+
 function optional<T>(ctx: Context, name: string): T | undefined {
   try {
     return (ctx as unknown as { get(name: string): T | undefined }).get(name)
@@ -112,7 +116,7 @@ function optional<T>(ctx: Context, name: string): T | undefined {
   }
 }
 
-async function resolveView(ctx: Context, sessionId: string): Promise<SkillView | string> {
+async function resolveView(ctx: Context, sessionId: string): Promise<SkillViewResolution> {
   const host: SkillReadHost = {
     agents: optional(ctx, 'agents'),
     sessionQuery: optional(ctx, 'sessionQuery'),
@@ -123,20 +127,24 @@ async function resolveView(ctx: Context, sessionId: string): Promise<SkillView |
   const live = host.agents?.get(sessionId)
   if (live !== undefined) {
     const registry = host.agentPresets?.serviceFor(live, 'skills') ?? root
-    if (registry === undefined) return 'the skill registry is not mounted'
+    if (registry === undefined) return { ok: false, error: 'the skill registry is not mounted' }
     // New hosts separate the execution directory from the original project.
     // Reading the committed value keeps this listing read-only.
     const directory = ctx.reflect?.get('workingDirectory') as { get(session: SkillReadAgent['session']): string } | undefined
-    return { registry, cwd: directory ? directory.get(live.session) : live.session.header.cwd, scope: live }
+    return { ok: true, view: { registry, cwd: directory ? directory.get(live.session) : live.session.header.cwd, scope: live } }
   }
-  if (host.sessionQuery === undefined) return 'this host cannot read the skills of an inactive session; open the session first'
+  if (host.sessionQuery === undefined) {
+    return { ok: false, error: 'this host cannot read the skills of an inactive session; open the session first' }
+  }
   let cwd: string | undefined
   let agentPreset: string | undefined
   let observation: SessionObservationFace
   try {
     observation = await host.sessionQuery.observeSession(sessionId)
   } catch (error) {
-    if ((error as { code?: unknown } | null | undefined)?.code === 'SESSION_QUERY_SESSION_NOT_FOUND') return `session "${sessionId}" not found`
+    if ((error as { code?: unknown } | null | undefined)?.code === 'SESSION_QUERY_SESSION_NOT_FOUND') {
+      return { ok: false, error: `session "${sessionId}" not found` }
+    }
     throw error
   }
   try {
@@ -145,7 +153,7 @@ async function resolveView(ctx: Context, sessionId: string): Promise<SkillView |
   } finally {
     observation[Symbol.dispose]()
   }
-  if (root === undefined) return 'the skill registry is not mounted'
+  if (root === undefined) return { ok: false, error: 'the skill registry is not mounted' }
   // An unknown or unusable recorded preset falls back to the global registry.
   let lease: ({ key: unknown } & AsyncDisposable) | undefined
   try {
@@ -155,8 +163,11 @@ async function resolveView(ctx: Context, sessionId: string): Promise<SkillView |
   }
   const held = lease
   return {
-    registry: root, cwd, scope: held?.key,
-    ...(held === undefined ? {} : { release: async () => { await held[Symbol.asyncDispose]() } }),
+    ok: true,
+    view: {
+      registry: root, cwd, scope: held?.key,
+      ...(held === undefined ? {} : { release: async () => { await held[Symbol.asyncDispose]() } }),
+    },
   }
 }
 
@@ -172,14 +183,15 @@ export async function readSkills(
   sessionId: string,
   signal: AbortSignal,
 ): Promise<MarketSkillsResult> {
-  let view: SkillView | string
+  let resolved: SkillViewResolution
   try {
-    view = await resolveView(ctx, sessionId)
+    resolved = await resolveView(ctx, sessionId)
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     return { skills: [], complete: false, error: message === '' ? 'unknown error' : message }
   }
-  if (typeof view === 'string') return { skills: [], complete: false, error: view }
+  if (!resolved.ok) return { skills: [], complete: false, error: resolved.error }
+  const { view } = resolved
   const { registry, cwd, scope } = view
   try {
     const observation = await registry.snapshot({ cwd, signal, scope })

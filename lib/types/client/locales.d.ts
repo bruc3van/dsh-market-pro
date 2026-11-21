@@ -104,6 +104,7 @@ export declare const zh: {
     readonly 'direct.approve': "允许所列脚本并重试";
     readonly 'direct.cancel': "取消安装";
     readonly 'direct.recover': "查询安装结果";
+    readonly 'direct.recovering': "正在查询安装结果…";
     readonly 'direct.unavailable': "宿主已无法提供安装结果。重新安装前请在官方插件页核对。";
     readonly 'direct.finishUnconfirmed': "结束本次安装操作";
     readonly lang: "zh";

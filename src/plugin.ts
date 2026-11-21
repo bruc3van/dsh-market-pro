@@ -95,11 +95,37 @@ export function applyMarket(ctx: Context, resolved: Config): () => void {
   // cache port answers from memory until it is there — a market opened in the
   // first moments of boot waits briefly for the domain to open instead of
   // bypassing a warm disk cache with a cold network download.
-  let state: SafeMarketDomainState = initialDomainState
-  let persist: ((next: SafeMarketDomainState) => void) | undefined
+  type StorageSeatState =
+    | { readonly status: 'opening'; readonly data: SafeMarketDomainState }
+    | {
+      readonly status: 'durable'
+      readonly data: SafeMarketDomainState
+      readonly persist: (next: SafeMarketDomainState) => void
+      readonly close: () => Promise<void>
+    }
+    | { readonly status: 'memory-only'; readonly data: SafeMarketDomainState }
+    | { readonly status: 'disposed'; readonly data: SafeMarketDomainState }
+
+  let seat: StorageSeatState = { status: 'opening', data: initialDomainState }
   const disposeController = new AbortController()
   let resolveDomainReady!: () => void
   const domainReady = new Promise<void>((resolve) => { resolveDomainReady = resolve })
+
+  const updateSeatData = (next: SafeMarketDomainState): void => {
+    seat = { ...seat, data: next }
+    if (seat.status === 'durable') seat.persist(next)
+  }
+
+  const disposeSeat = (): void => {
+    disposeController.abort()
+    resolveDomainReady()
+    const previous = seat
+    seat = { status: 'disposed', data: previous.data }
+    if (previous.status === 'durable') {
+      void previous.close()
+    }
+  }
+
   // A stored reduction answers a different question than the current config
   // asked, so only adopt state cut with the same market size and base — and
   // derived by a parse of the same shape as this build's.
@@ -109,21 +135,20 @@ export function applyMarket(ctx: Context, resolved: Config): () => void {
   const cache: CatalogCache = {
     ready: domainReady,
     read: () => (
-      usable(state)
-        ? { catalog: state.catalog, marketEtag: state.marketEtag, activeBase: state.activeBase }
+      usable(seat.data)
+        ? { catalog: seat.data.catalog, marketEtag: seat.data.marketEtag, activeBase: seat.data.activeBase }
         : { catalog: null, marketEtag: '', activeBase: '' }
     ),
     write: (next) => {
-      state = {
-        ...state,
+      updateSeatData({
+        ...seat.data,
         catalog: next.catalog,
         marketEtag: next.marketEtag,
         activeBase: next.activeBase,
         catalogFormat: CATALOG_FORMAT,
         marketSize: resolved.marketSize,
         catalogBase: resolved.catalogBase,
-      }
-      persist?.(state)
+      })
     },
   }
 
@@ -151,9 +176,14 @@ export function applyMarket(ctx: Context, resolved: Config): () => void {
   })
 
   ctx.effect(async () => {
+    let legacyPending: SafeMarketDomainState['pendingUninstall'] = []
     try {
       const domain = await ctx.storageDomain.open(safeMarketDomainSpec)
-      persist = (next) => {
+      if (seat.status === 'disposed' || disposeController.signal.aborted) {
+        void domain.close()
+        return disposeSeat
+      }
+      const persist = (next: SafeMarketDomainState): void => {
         // Durability is an optimization, and a failed write must not take the
         // market down with it — the reduction is still in memory either way.
         void domain.global.set(next).catch((error: unknown) => {
@@ -161,51 +191,52 @@ export function applyMarket(ctx: Context, resolved: Config): () => void {
         })
       }
       const stored = domain.global.get()
-      const hadMemoryCatalog = state.catalog !== null
-      state = adoptDomainState(state, stored, usable)
+      const hadMemoryCatalog = seat.data.catalog !== null
+      const adopted = adoptDomainState(seat.data, stored, usable)
+      seat = { status: 'durable', data: adopted, persist, close: () => domain.close() }
       resolveDomainReady()
-      if (hadMemoryCatalog || (state.catalog !== null && stored.catalog !== null && state.catalog !== stored.catalog)) {
+      if (hadMemoryCatalog || (adopted.catalog !== null && stored.catalog !== null && adopted.catalog !== stored.catalog)) {
         // A read landed while the domain was opening, or the adopted disk
         // catalog was compacted (legacy subscription stripped): flush now
         // instead of keeping stale or bloated data on disk.
-        persist(state)
+        persist(adopted)
       }
-      if (readSettings().enabled) catalog.warmup()
-      // A pending-uninstall record an older build kept in the domain store:
-      // seed the file seat so this boot's sweep still takes its rows back,
-      // then forget the field — the file is the seat from now on.
-      const legacy = state.pendingUninstall
-      if (legacy.length > 0) {
-        await installed.adoptPending(legacy)
-        state = { ...state, pendingUninstall: [] }
-        persist?.(state)
-      }
-      // Take back last session's uninstall stop rows before serving: the
-      // composition no longer carries their targets (or a reinstall wants
-      // them gone), and the user's patch file should not keep our litter.
-      await installed.sweep()
-      return () => {
-        disposeController.abort()
-        resolveDomainReady()
-        persist = undefined
-        void domain.close()
-      }
+      legacyPending = adopted.pendingUninstall
     } catch (error) {
+      if (seat.status !== 'disposed') {
+        seat = { status: 'memory-only', data: seat.data }
+      }
       resolveDomainReady()
       // A damaged or version-mismatched store must not take the market down
       // with it: the catalog and the skills page still run from memory, and
       // the next successful read simply cannot survive the restart.
       console.warn('[dsh-market-pro] catalog cache unavailable, running memory-only:', error)
-      if (readSettings().enabled) catalog.warmup()
-      // The pending-uninstall seat is a file, not this domain: the sweep still
-      // runs and takes last session's stop rows back out of the patch layer.
-      await installed.sweep()
-      return () => {
-        disposeController.abort()
-        resolveDomainReady()
-        persist = undefined
+    }
+    if (seat.status === 'disposed' || disposeController.signal.aborted) {
+      return disposeSeat
+    }
+    if (readSettings().enabled) catalog.warmup()
+    // A pending-uninstall record an older build kept in the domain store:
+    // seed the file seat so this boot's sweep still takes its rows back,
+    // then forget the field — the file is the seat from now on. Failures here
+    // must never downgrade an already-open durable storage domain.
+    if (legacyPending.length > 0) {
+      try {
+        await installed.adoptPending(legacyPending)
+        updateSeatData({ ...seat.data, pendingUninstall: [] })
+      } catch (error) {
+        console.warn('[dsh-market-pro] legacy pending-uninstall migration failed:', error)
       }
     }
+    // Take back last session's uninstall stop rows before serving: the
+    // composition no longer carries their targets (or a reinstall wants
+    // them gone), and the user's patch file should not keep our litter.
+    try {
+      await installed.sweep()
+    } catch (error) {
+      console.warn('[dsh-market-pro] boot uninstall sweep failed:', error)
+    }
+    return disposeSeat
   }, 'dsh-market-pro: catalog cache')
 
   const readMcp = () => inspectMcpContext(ctx, ctx.loader.entries() as Iterable<McpLoaderEntry>)
@@ -268,8 +299,5 @@ export function applyMarket(ctx: Context, resolved: Config): () => void {
 
   // Everything above is owned by `ctx` and torn down with the fiber; abort
   // any in-flight catalog refresh immediately so teardown never waits on I/O.
-  return () => {
-    disposeController.abort()
-    resolveDomainReady()
-  }
+  return disposeSeat
 }

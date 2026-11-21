@@ -106,6 +106,7 @@ export const zh = {
   'direct.approve': "允许所列脚本并重试",
   'direct.cancel': "取消安装",
   'direct.recover': "查询安装结果",
+  'direct.recovering': "正在查询安装结果…",
   'direct.unavailable': '宿主已无法提供安装结果。重新安装前请在官方插件页核对。',
   'direct.finishUnconfirmed': '结束本次安装操作',
 
@@ -646,6 +647,7 @@ export const en: Record<SafeMarketLocaleKey, string> = {
   'direct.approve': "Allow listed scripts and retry",
   'direct.cancel': "Cancel installation",
   'direct.recover': "Check installation result",
+  'direct.recovering': "Checking installation result…",
   'direct.unavailable': 'The host can no longer provide the install result. Check the official Plugins page before reinstalling.',
   'direct.finishUnconfirmed': 'End this install operation',
 

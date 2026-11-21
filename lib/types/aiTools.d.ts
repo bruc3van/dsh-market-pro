@@ -119,6 +119,10 @@ export interface MarketAiToolDeps {
     readonly pluginMarket?: () => HostPluginMarketUpdateFace | undefined;
     readonly getApprover?: () => MarketApprovalServiceFace | undefined;
 }
+/** Explicit machine-readable outcome of `check_updates` for Agent branching. */
+export type MarketCheckUpdatesStatus = 'unavailable' | 'updates-available' | 'up-to-date' | 'check-failed';
+/** Explicit machine-readable outcome of `update_plugins` for Agent branching. */
+export type MarketUpdatePluginsOutcome = 'api-unavailable' | 'nothing-to-update' | 'applied' | 'restart-required' | 'partial-failure' | 'failed';
 /** Build the registry-ready `dsh_market_pro` tool definition with a compact schema. */
 export declare function createMarketAiToolDefinition(deps: MarketAiToolDeps): Record<string, unknown>;
 /**

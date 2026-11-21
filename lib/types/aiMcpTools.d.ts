@@ -48,6 +48,12 @@ export interface MarketAiMcpToolDeps {
     }>;
     readonly getApprover: () => McpApprovalServiceFace | undefined;
 }
+/** Explicit machine-readable outcome of MCP install actions for Agent branching. */
+export type McpInstallActionOutcome = 'already-configured-match' | 'already-configured-toggle-needed' | 'installed-credentials-required' | 'installed-disabled' | 'installed-connected' | 'installed-pending';
+/** Explicit machine-readable outcome of MCP `set_enabled` for Agent branching. */
+export type McpToggleActionOutcome = 'enabled' | 'disabled';
+/** Union of all mutating `dsh_mcp_pro` outcomes. */
+export type McpActionOutcome = McpInstallActionOutcome | McpToggleActionOutcome;
 /** Build the registry-ready `dsh_mcp_pro` tool definition. */
 export declare function createMarketAiMcpToolDefinition(deps: MarketAiMcpToolDeps): Record<string, unknown>;
 /**

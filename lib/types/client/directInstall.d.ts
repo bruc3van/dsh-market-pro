@@ -54,6 +54,8 @@ export interface DirectState {
     message: string;
     application?: string;
     pendingBuilds: string[];
+    /** True while `recover()` is polling the Host for an interrupted install's outcome. */
+    recovering: boolean;
     queue: {
         spec: string;
         phase: DirectState['phase'];

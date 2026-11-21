@@ -36,7 +36,7 @@ export function DirectInstallPanel({ item, installer, t, onClose, onInstalled, o
   const showResult = submitted || busy || state.phase === 'unavailable' || !item
   const needsApproval = showResult && state.phase === 'failed' && state.pendingBuilds.length > 0
   const finished = showResult && state.phase === 'done'
-  const canDismiss = !busy || state.phase === 'unknown'
+  const canDismiss = !busy || (state.phase === 'unknown' && !state.recovering)
   const start = () => { if (chosen.length) { setSubmitted(true); void installer.start(chosen.map(target => target.install)) } }
   const outcome = state.application as 'applied' | 'restart-required' | 'overridden' | 'cancelled' | undefined
   const reviewTargets = showResult && !busy ? installedReviewTargets(state) : []
@@ -118,7 +118,7 @@ export function DirectInstallPanel({ item, installer, t, onClose, onInstalled, o
           {reviewButton}
           <MarketButton size="md" intent="primary" onClick={dismiss}>{t('direct.finishUnconfirmed')}</MarketButton>
         </>
-        : state.phase === 'unknown' ? <MarketButton size="md" intent="primary" onClick={() => { void installer.recover() }}>{t('direct.recover')}</MarketButton>
+        : state.phase === 'unknown' ? <MarketButton size="md" intent="primary" disabled={state.recovering} aria-busy={state.recovering} onClick={() => { void installer.recover() }}>{state.recovering ? t('direct.recovering') : t('direct.recover')}</MarketButton>
         : busy ? <MarketButton size="md" intent="secondary" disabled={state.phase !== 'installing'} onClick={() => { void installer.cancel() }}>{t('direct.cancel')}</MarketButton>
         : (available || (showResult && state.phase === 'failed')) ? <>
           <MarketButton size="md" intent="secondary" onClick={dismiss}>{t(showResult ? 'direct.close' : 'direct.dismiss')}</MarketButton>

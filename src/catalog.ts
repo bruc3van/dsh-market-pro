@@ -633,6 +633,18 @@ export function createCatalogSource(options: CatalogOptions): CatalogSource {
   const hedgeDelayMs = options.hedgeDelayMs !== undefined && Number.isFinite(options.hedgeDelayMs) && options.hedgeDelayMs >= 0
     ? options.hedgeDelayMs
     : DEFAULT_HEDGE_DELAY_MS
+  type CatalogSnapshotSlot =
+    | { readonly status: 'empty' }
+    | { readonly status: 'loaded'; readonly catalog: MarketCatalog; readonly marketEtag: string; readonly activeBase: string }
+
+  type RefreshFlightState =
+    | { readonly status: 'idle'; readonly lastFailureAt: number }
+    | { readonly status: 'refreshing'; readonly promise: Promise<{ catalog: MarketCatalog | null; stale: boolean; error: string }> }
+
+  type HedgedRaceState =
+    | { readonly status: 'racing'; readonly nextIndex: number; readonly active: number; readonly hedgeTimer?: ReturnType<typeof setTimeout> }
+    | { readonly status: 'settled' }
+
   // The durable seat is NOT seeded at construction time. The plugin body
   // hands the source a cache port whose backing domain opens asynchronously
   // after this constructor returns, so reading it here would always see the
@@ -641,24 +653,21 @@ export function createCatalogSource(options: CatalogOptions): CatalogSource {
   // the domain is open, and the port answers from the state the effect
   // adopted. Reading it again whenever the closure is still empty also
   // covers a read that raced the domain open.
-  let catalog: MarketCatalog | null = null
-  let marketEtag = ''
-  // The base that served the current catalog: the sticky first choice for
-  // the next read. '' means unknown (memory-only, or a cache written before
-  // the mirror existed) and is treated as "the primary".
-  let activeBase = ''
+  let snapshot: CatalogSnapshotSlot = { status: 'empty' }
   const seedFromCache = (): void => {
-    if (catalog !== null) return
+    if (snapshot.status === 'loaded') return
     const cached = options.cache?.read()
     if (cached === undefined || cached.catalog === null) return
     const migratedBase = cached.activeBase ? migrateBuiltIn(cached.activeBase) : ''
     if (migratedBase && !chain.includes(migratedBase)) return
-    catalog = stripUnusedSubscription(cached.catalog)
-    marketEtag = migratedBase === cached.activeBase ? cached.marketEtag : ''
-    activeBase = migratedBase
+    snapshot = {
+      status: 'loaded',
+      catalog: stripUnusedSubscription(cached.catalog),
+      marketEtag: migratedBase === cached.activeBase ? cached.marketEtag : '',
+      activeBase: migratedBase,
+    }
   }
-  let inFlight: Promise<{ catalog: MarketCatalog | null; stale: boolean; error: string }> | null = null
-  let lastBackgroundFailureAt = 0
+  let flight: RefreshFlightState = { status: 'idle', lastFailureAt: 0 }
 
   const raceWithSignal = async <T>(pending: Promise<T>, signal?: AbortSignal): Promise<T> => {
     if (signal === undefined) return await pending
@@ -676,13 +685,13 @@ export function createCatalogSource(options: CatalogOptions): CatalogSource {
   }
 
   const waitForCache = async (signal?: AbortSignal): Promise<void> => {
-    if (catalog !== null || options.cache?.ready === undefined) return
+    if (snapshot.status === 'loaded' || options.cache?.ready === undefined) return
     await raceWithSignal(options.cache.ready.catch(() => undefined), signal)
   }
 
   const fresh = (): boolean => {
-    if (catalog === null) return false
-    const at = Date.parse(catalog.refreshedAt)
+    if (snapshot.status !== 'loaded') return false
+    const at = Date.parse(snapshot.catalog.refreshedAt)
     return Number.isFinite(at) && Date.now() - at < REFRESH_INTERVAL_MS
   }
 
@@ -695,13 +704,14 @@ export function createCatalogSource(options: CatalogOptions): CatalogSource {
     // The stored ETag certifies one server's content; a conditional request
     // only goes to the base that issued it. An unknown serving base (legacy
     // record) can only have been the primary.
-    const conditional = catalog !== null && marketEtag !== ''
-      && (activeBase === '' ? base === primary : activeBase === base)
-    const wireEtag = conditional && !marketEtag.startsWith(NPMMIRROR_ETAG_PREFIX) ? marketEtag : ''
+    const current = snapshot.status === 'loaded' ? snapshot : null
+    const conditional = current !== null && current.marketEtag !== ''
+      && (current.activeBase === '' ? base === primary : current.activeBase === base)
+    const wireEtag = conditional && !current.marketEtag.startsWith(NPMMIRROR_ETAG_PREFIX) ? current.marketEtag : ''
     const response = await fetchFollowing(base, wireEtag, abortSignal)
     if (response.status === 304) {
-      if (catalog === null) throw new Error('catalog HTTP 304')
-      return { kind: 'not-modified', activeBase }
+      if (current === null) throw new Error('catalog HTTP 304')
+      return { kind: 'not-modified', activeBase: current.activeBase }
     }
     if (!response.ok) throw new Error(`catalog HTTP ${String(response.status)}`)
     const body = await readJson(response)
@@ -712,7 +722,7 @@ export function createCatalogSource(options: CatalogOptions): CatalogSource {
       const versionTag = integrity !== ''
         ? `${NPMMIRROR_ETAG_PREFIX}${version}:${integrity}`
         : version !== '' ? `${NPMMIRROR_ETAG_PREFIX}${version}` : ''
-      if (conditional && versionTag !== '' && marketEtag === versionTag) {
+      if (conditional && versionTag !== '' && current.marketEtag === versionTag) {
         return { kind: 'not-modified', activeBase: base }
       }
       const tarballUrl = manifest.dist.tarball
@@ -740,24 +750,34 @@ export function createCatalogSource(options: CatalogOptions): CatalogSource {
 
   const commitOutcome = (outcome: AttemptOutcome): MarketCatalog => {
     if (outcome.kind === 'not-modified') {
-      if (catalog === null) throw new Error('catalog HTTP 304')
-      catalog = { ...catalog, refreshedAt: new Date().toISOString() }
-      activeBase = outcome.activeBase
-      options.cache?.write({ catalog, marketEtag, activeBase })
-      return catalog
+      if (snapshot.status !== 'loaded') throw new Error('catalog HTTP 304')
+      const nextCatalog = { ...snapshot.catalog, refreshedAt: new Date().toISOString() }
+      snapshot = {
+        status: 'loaded',
+        catalog: nextCatalog,
+        marketEtag: snapshot.marketEtag,
+        activeBase: outcome.activeBase,
+      }
+      options.cache?.write({ catalog: snapshot.catalog, marketEtag: snapshot.marketEtag, activeBase: snapshot.activeBase })
+      return snapshot.catalog
     }
-    catalog = outcome.catalog
-    marketEtag = outcome.marketEtag
-    activeBase = outcome.activeBase
-    options.cache?.write({ catalog, marketEtag, activeBase })
-    return catalog
+    snapshot = {
+      status: 'loaded',
+      catalog: outcome.catalog,
+      marketEtag: outcome.marketEtag,
+      activeBase: outcome.activeBase,
+    }
+    options.cache?.write({ catalog: snapshot.catalog, marketEtag: snapshot.marketEtag, activeBase: snapshot.activeBase })
+    return snapshot.catalog
   }
 
   /** The chain in the order this read tries: the sticky base first. */
-  const orderedBases = (): string[] =>
-    activeBase === '' || !chain.includes(activeBase)
+  const orderedBases = (): string[] => {
+    const base = snapshot.status === 'loaded' ? snapshot.activeBase : ''
+    return base === '' || !chain.includes(base)
       ? chain
-      : [activeBase, ...chain.filter(base => base !== activeBase)]
+      : [base, ...chain.filter(candidate => candidate !== base)]
+  }
 
   /** A short host label for an error that names two failed attempts. */
   const baseLabel = (base: string): string => {
@@ -775,74 +795,66 @@ export function createCatalogSource(options: CatalogOptions): CatalogSource {
         ? raceController.signal
         : AbortSignal.any([raceController.signal, options.disposeSignal])
       const failures: Array<string | undefined> = Array.from({ length: bases.length }, () => undefined)
-      let settled = false
-      let nextIndex = 0
-      let active = 0
-      let hedgeTimer: ReturnType<typeof setTimeout> | undefined
+      let race: HedgedRaceState = { status: 'racing', nextIndex: 0, active: 0 }
 
-      const clearHedge = (): void => {
-        if (hedgeTimer !== undefined) {
-          clearTimeout(hedgeTimer)
-          hedgeTimer = undefined
+      const clearHedgeTimer = (): void => {
+        if (race.status === 'racing' && race.hedgeTimer !== undefined) {
+          clearTimeout(race.hedgeTimer)
+          race = { status: 'racing', nextIndex: race.nextIndex, active: race.active }
         }
+      }
+
+      const settle = (onSettled: () => void): void => {
+        if (race.status === 'settled') return
+        if (race.hedgeTimer !== undefined) clearTimeout(race.hedgeTimer)
+        race = { status: 'settled' }
+        raceController.abort()
+        onSettled()
       }
 
       const scheduleHedge = (): void => {
-        clearHedge()
-        if (settled || nextIndex >= bases.length) return
-        hedgeTimer = setTimeout(() => {
-          hedgeTimer = undefined
+        clearHedgeTimer()
+        if (race.status !== 'racing' || race.nextIndex >= bases.length) return
+        const hedgeTimer = setTimeout(() => {
+          if (race.status !== 'racing') return
+          race = { status: 'racing', nextIndex: race.nextIndex, active: race.active }
           launchNext()
         }, hedgeDelayMs)
-      }
-
-      const finish = (outcome: AttemptOutcome): void => {
-        if (settled) return
-        settled = true
-        clearHedge()
-        raceController.abort()
-        try {
-          resolve(commitOutcome(outcome))
-        } catch (error) {
-          reject(error)
-        }
-      }
-
-      const failAll = (error: unknown): void => {
-        if (settled) return
-        settled = true
-        clearHedge()
-        raceController.abort()
-        reject(error)
+        race = { ...race, hedgeTimer }
       }
 
       const launchNext = (): void => {
-        if (settled || nextIndex >= bases.length) return
-        const idx = nextIndex
+        if (race.status !== 'racing' || race.nextIndex >= bases.length) return
+        const idx = race.nextIndex
         const base = bases[idx]!
-        nextIndex += 1
-        active += 1
+        race = { ...race, nextIndex: idx + 1, active: race.active + 1 }
         scheduleHedge()
         void attempt(base, combinedSignal).then(
           (outcome) => {
-            active -= 1
-            finish(outcome)
+            settle(() => {
+              try {
+                resolve(commitOutcome(outcome))
+              } catch (error) {
+                reject(error)
+              }
+            })
           },
           (error: unknown) => {
-            active -= 1
-            if (settled) return
+            if (race.status === 'settled') return
+            race = { ...race, active: race.active - 1 }
             if (options.disposeSignal?.aborted) {
-              failAll(error)
+              settle(() => reject(error))
               return
             }
             failures[idx] = `${baseLabel(base)}: ${errorText(error)}`
-            if (nextIndex < bases.length && active === 0) {
-              clearHedge()
+            if (race.nextIndex < bases.length && race.active === 0) {
+              clearHedgeTimer()
               launchNext()
               return
             }
-            if (active === 0 && nextIndex >= bases.length) {
-              failAll(new Error(failures.filter((entry): entry is string => entry !== undefined).join('; ')))
+            if (race.active === 0 && race.nextIndex >= bases.length) {
+              const summary = failures.filter((entry): entry is string => entry !== undefined).join('; ')
+              settle(() => reject(new Error(summary)))
             }
           },
         )
@@ -853,27 +865,28 @@ export function createCatalogSource(options: CatalogOptions): CatalogSource {
   }
 
   const startRefresh = (): Promise<{ catalog: MarketCatalog | null; stale: boolean; error: string }> => {
-    return (inFlight ??= (async () => {
+    if (flight.status === 'refreshing') return flight.promise
+    const promise = (async () => {
       try {
         const next = await refresh()
-        lastBackgroundFailureAt = 0
+        flight = { status: 'idle', lastFailureAt: 0 }
         return { catalog: next, stale: false, error: '' }
       } catch (error) {
-        lastBackgroundFailureAt = Date.now()
+        flight = { status: 'idle', lastFailureAt: Date.now() }
         // A catalog already in memory still answers the question; the
         // browser is told the answer is old rather than shown a blank tab.
         const message = errorText(error)
-        if (catalog !== null) return { catalog, stale: true, error: message }
+        if (snapshot.status === 'loaded') return { catalog: snapshot.catalog, stale: true, error: message }
         return { catalog: null, stale: false, error: message }
-      } finally {
-        inFlight = null
       }
-    })())
+    })()
+    flight = { status: 'refreshing', promise }
+    return promise
   }
 
   const maybeRevalidateInBackground = (): void => {
-    if (inFlight !== null || options.disposeSignal?.aborted) return
-    if (Date.now() - lastBackgroundFailureAt < BACKGROUND_RETRY_MS) return
+    if (flight.status !== 'idle' || options.disposeSignal?.aborted) return
+    if (Date.now() - flight.lastFailureAt < BACKGROUND_RETRY_MS) return
     void startRefresh()
   }
 
@@ -882,12 +895,12 @@ export function createCatalogSource(options: CatalogOptions): CatalogSource {
       // A caller that arrives already aborted must not start the network
       // read its answer would have needed.
       if (signal?.aborted) throw signal.reason ?? new Error('This operation was aborted')
-      if (catalog === null && options.cache?.ready !== undefined) await waitForCache(signal)
+      if (snapshot.status === 'empty' && options.cache?.ready !== undefined) await waitForCache(signal)
       seedFromCache()
       if (signal?.aborted) throw signal.reason ?? new Error('This operation was aborted')
-      if (!force && catalog !== null) {
+      if (!force && snapshot.status === 'loaded') {
         if (!fresh()) maybeRevalidateInBackground()
-        return { catalog, stale: false, error: '' }
+        return { catalog: snapshot.catalog, stale: false, error: '' }
       }
       // One network read at a time: the tab can be reopened while the first
       // is still running, and two downloads answer the same question. The
@@ -907,7 +920,7 @@ export function createCatalogSource(options: CatalogOptions): CatalogSource {
         seedFromCache()
         if (!fresh()) maybeRevalidateInBackground()
       }
-      if (catalog === null && options.cache?.ready !== undefined) {
+      if (snapshot.status === 'empty' && options.cache?.ready !== undefined) {
         void options.cache.ready.then(run, run)
         return
       }

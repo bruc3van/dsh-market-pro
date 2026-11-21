@@ -143,6 +143,29 @@ export interface UpdateState {
 
 const IDLE_BATCH: BatchUpdateState = { phase: 'idle', items: [], currentIndex: -1, stopRequested: false }
 
+const IDLE_SINGLE_UPDATE: Pick<
+  UpdateState,
+  'phase' | 'packageName' | 'installed' | 'kind' | 'choices' | 'selected' | 'message' | 'warnings' | 'omitted' | 'step' | 'result' | 'selectionRestore'
+> = {
+  phase: 'idle',
+  packageName: '',
+  installed: '',
+  kind: undefined,
+  choices: [],
+  selected: '',
+  message: '',
+  warnings: [],
+  omitted: 0,
+  step: undefined,
+  result: undefined,
+  selectionRestore: undefined,
+}
+
+type ActiveUpdateRequest =
+  | { readonly kind: 'none' }
+  | { readonly kind: 'single'; readonly requestId: PluginInstallRequestId }
+  | { readonly kind: 'batch'; readonly requestId: PluginInstallRequestId; readonly index: number }
+
 /** Keep caller order while always placing the marketplace itself last so a self-reload cannot interrupt earlier updates. */
 export function orderBatchTargets<T extends { readonly packageName: string }>(
   items: readonly T[],
@@ -232,12 +255,12 @@ function withAvailableDetail(
 /** One shared operation survives switching between the market's three entry points. */
 export function createPluginUpdater(host: () => UpdateHost | undefined, market: () => UpdateMarketHost | undefined) {
   let state: UpdateState = {
-    phase: 'idle', packageName: '', installed: '', choices: [], selected: '', message: '', warnings: [], omitted: 0,
+    ...IDLE_SINGLE_UPDATE,
     revision: 0, available: {}, availableDetails: {}, batch: IDLE_BATCH,
   }
   let generation = 0
   let probeSeq = 0
-  let requestId: PluginInstallRequestId | undefined
+  let activeRequest: ActiveUpdateRequest = { kind: 'none' }
   const listeners = new Set<() => void>()
   const set = (patch: Partial<UpdateState>) => {
     state = { ...state, ...patch }
@@ -339,7 +362,7 @@ export function createPluginUpdater(host: () => UpdateHost | undefined, market: 
     async check(packageName: string) {
       if (state.phase === 'updating' || state.batch.phase === 'running') return
       const current = ++generation
-      set({ phase: 'checking', packageName, installed: '', kind: undefined, choices: [], selected: '', message: '', warnings: [], omitted: 0, result: undefined, selectionRestore: undefined, step: undefined })
+      set({ ...IDLE_SINGLE_UPDATE, phase: 'checking', packageName })
       try {
         const api = host()
         if (!api?.listVersions || !api.updateBundle) throw new Error('The Host does not provide plugin updates. Upgrade DSH to 0.2.2-rc.3 or later.')
@@ -413,7 +436,8 @@ export function createPluginUpdater(host: () => UpdateHost | undefined, market: 
       if (state.phase !== 'ready' || state.batch.phase === 'running') return
       const choice = state.choices.find(version => version.version === state.selected && !version.blocked)
       if (!choice) return
-      requestId = globalThis.crypto.randomUUID() as PluginInstallRequestId
+      const requestId = globalThis.crypto.randomUUID() as PluginInstallRequestId
+      activeRequest = { kind: 'single', requestId }
       set({ phase: 'updating', message: '', step: 'checking', selectionRestore: undefined })
       try {
         const api = host()
@@ -424,6 +448,7 @@ export function createPluginUpdater(host: () => UpdateHost | undefined, market: 
         const applied = answer.ok && (answer.value.result.application === 'applied' || answer.value.result.application === 'restart-required')
         set(answer.ok ? {
           phase: 'done',
+          step: undefined,
           result: answer.value,
           selectionRestore,
           revision: state.revision + 1,
@@ -431,10 +456,10 @@ export function createPluginUpdater(host: () => UpdateHost | undefined, market: 
             available: withAvailable(state.available, state.packageName, ''),
             availableDetails: withAvailableDetail(state.availableDetails, state.packageName, null),
           } : {}),
-        } : { phase: 'unknown', message: answer.error.message, revision: state.revision + 1 })
+        } : { phase: 'unknown', step: undefined, message: answer.error.message, revision: state.revision + 1 })
       } catch (error) {
-        set({ phase: 'unknown', message: error instanceof Error ? error.message : String(error), revision: state.revision + 1 })
-      } finally { requestId = undefined }
+        set({ phase: 'unknown', step: undefined, message: error instanceof Error ? error.message : String(error), revision: state.revision + 1 })
+      } finally { activeRequest = { kind: 'none' } }
     },
     async startBatch(targets: readonly (string | AvailableUpdate)[], selfName = '') {
       if (state.phase === 'updating' || state.batch.phase === 'running') return
@@ -459,7 +484,7 @@ export function createPluginUpdater(host: () => UpdateHost | undefined, market: 
       }))
       generation += 1
       set({
-        phase: 'idle',
+        ...IDLE_SINGLE_UPDATE,
         batch: { phase: 'running', items: queue, currentIndex: 0, stopRequested: false },
       })
       for (let index = 0; index < queue.length; index += 1) {
@@ -476,7 +501,8 @@ export function createPluginUpdater(host: () => UpdateHost | undefined, market: 
             items: state.batch.items.map((item, i) => (i === index ? { ...item, status: 'running', step: 'checking' } : item)),
           },
         })
-        requestId = globalThis.crypto.randomUUID() as PluginInstallRequestId
+        const requestId = globalThis.crypto.randomUUID() as PluginInstallRequestId
+        activeRequest = { kind: 'batch', requestId, index }
         try {
           const api = host()
           if (!api?.updateBundle) throw new Error('The plugin manager is unavailable.')
@@ -524,7 +550,7 @@ export function createPluginUpdater(host: () => UpdateHost | undefined, market: 
           } : item))
           set({ batch: { ...state.batch, items: nextItems }, revision: state.revision + 1 })
         } finally {
-          requestId = undefined
+          activeRequest = { kind: 'none' }
         }
         if (index < queue.length - 1 && blocksHotUpdates(state.batch.items[index]?.result)) {
           const items = state.batch.items.map((entry, i) => (i > index ? { ...entry, status: 'skipped' as const, deferred: 'restart' as const } : entry))
@@ -544,17 +570,17 @@ export function createPluginUpdater(host: () => UpdateHost | undefined, market: 
       set({ batch: IDLE_BATCH })
     },
     progress(event: PluginUpdateProgress) {
-      if (event.requestId !== requestId) return
-      if (state.phase === 'updating') {
+      if (activeRequest.kind === 'none' || event.requestId !== activeRequest.requestId) return
+      if (activeRequest.kind === 'single' && state.phase === 'updating') {
         set({ step: event.step })
-      } else if (state.batch.phase === 'running' && state.batch.currentIndex >= 0) {
-        patchBatchItem(state.batch.currentIndex, { step: event.step })
+      } else if (activeRequest.kind === 'batch' && state.batch.phase === 'running' && activeRequest.index >= 0) {
+        patchBatchItem(activeRequest.index, { step: event.step })
       }
     },
     close() {
       if (state.phase === 'updating') return
       generation += 1
-      set({ phase: 'idle' })
+      set(IDLE_SINGLE_UPDATE)
     },
   }
 }

@@ -14,6 +14,11 @@ export interface SettingsViewProps {
   readonly tryMessage?: string
 }
 
+type SettingsSaveState =
+  | { readonly status: 'idle' }
+  | { readonly status: 'saving'; readonly field: SafeMarketSettingsUpdate['field'] }
+  | { readonly status: 'error'; readonly message: string }
+
 /** Built-in settings tab for toggling the AI assistant and online catalog access. */
 export function SettingsView({
   t,
@@ -24,8 +29,7 @@ export function SettingsView({
   tryBusy = false,
   tryMessage = '',
 }: SettingsViewProps): ReactElement {
-  const [busyField, setBusyField] = useState<SafeMarketSettingsUpdate['field'] | null>(null)
-  const [error, setError] = useState('')
+  const [saveState, setSaveState] = useState<SettingsSaveState>({ status: 'idle' })
   const baseId = useId()
   const aiHeadingId = `${baseId}-ai`
   const catalogHeadingId = `${baseId}-catalog`
@@ -37,20 +41,21 @@ export function SettingsView({
   }, [])
 
   const toggle = (field: SafeMarketSettingsUpdate['field'], next: boolean): void => {
-    if (!updateSettings || busyField !== null) return
-    setBusyField(field)
-    setError('')
+    if (!updateSettings || saveState.status === 'saving') return
+    setSaveState({ status: 'saving', field })
     void updateSettings({ field, value: next }).then(
-      () => { if (mounted.current) setBusyField(null) },
+      () => { if (mounted.current) setSaveState({ status: 'idle' }) },
       (cause: unknown) => {
         if (!mounted.current) return
-        setBusyField(null)
-        setError(t('settings.saveFailed', { reason: cause instanceof Error ? cause.message : String(cause) }))
+        setSaveState({
+          status: 'error',
+          message: t('settings.saveFailed', { reason: cause instanceof Error ? cause.message : String(cause) }),
+        })
       },
     )
   }
 
-  const controlsDisabled = !settingsReady || !updateSettings || busyField !== null
+  const controlsDisabled = !settingsReady || !updateSettings || saveState.status === 'saving'
 
   return (
     <div className="dsh_market_page dsh_market_settingsPage">
@@ -59,7 +64,7 @@ export function SettingsView({
         <p className="dsh_market_settingsDesc">{t('settings.subtitle')}</p>
       </div>
 
-      {error !== '' && <p className="dsh_market_status" data-error="true" role="alert">{error}</p>}
+      {saveState.status === 'error' && <p className="dsh_market_status" data-error="true" role="alert">{saveState.message}</p>}
       {!updateSettings && <p className="dsh_market_status">{t('settings.unavailable')}</p>}
 
       <section className="dsh_market_settingRow" aria-labelledby={aiHeadingId}>

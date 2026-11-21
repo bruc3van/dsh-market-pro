@@ -211,6 +211,10 @@ export interface McpControllerOptions {
   readonly debounceMs?: number
 }
 
+type WatchStreamState =
+  | { readonly status: 'stopped'; readonly generation: number }
+  | { readonly status: 'running'; readonly generation: number; readonly abort?: AbortController }
+
 /** Create the controller over the given Remotes. */
 export function createMcpController(hosts: McpHosts, options: McpControllerOptions = {}): McpController {
   const wait = options.wait ?? ((ms: number) => new Promise<void>((resolve) => { setTimeout(resolve, ms) }))
@@ -219,13 +223,11 @@ export function createMcpController(hosts: McpHosts, options: McpControllerOptio
   let writable = false
   const listeners = new Set<() => void>()
   let attached = 0
-  let watchGeneration = 0
-  let watchAbort: AbortController | undefined
+  let watch: WatchStreamState = { status: 'stopped', generation: 0 }
   let settingsTimer: ReturnType<typeof setTimeout> | undefined
   let inspectTimer: ReturnType<typeof setTimeout> | undefined
   let lastShape = ''
   let lastTools = ''
-  let watching = false
   // Read sequences: a response is applied only if no newer read or write
   // started after it, so a slow describe cannot roll back a fresh revision.
   let settingsSeq = 0
@@ -375,45 +377,45 @@ export function createMcpController(hosts: McpHosts, options: McpControllerOptio
   }
 
   const runWatch = async (generation: number): Promise<void> => {
-    watching = true
     try {
       await watchLoop(generation)
     } finally {
-      if (generation === watchGeneration) watching = false
+      if (watch.status === 'running' && watch.generation === generation) {
+        watch = { status: 'stopped', generation }
+      }
     }
   }
 
   const watchLoop = async (generation: number): Promise<void> => {
     let backoff = 1_000
-    while (attached > 0 && generation === watchGeneration) {
+    while (attached > 0 && watch.status === 'running' && watch.generation === generation) {
       const manager = hosts.manager()
       if (manager === undefined) {
         set({ watchError: 'manager-unavailable' })
         return
       }
       const abort = new AbortController()
-      watchAbort = abort
+      watch = { status: 'running', generation, abort }
       try {
         for await (const views of manager.watch(abort.signal)) {
-          if (generation !== watchGeneration) return
+          if (watch.status !== 'running' || watch.generation !== generation) return
           onViews(views)
           backoff = 1_000
         }
       } catch (error) {
-        if (abort.signal.aborted || generation !== watchGeneration) return
+        if (abort.signal.aborted || watch.status !== 'running' || watch.generation !== generation) return
         set({ watchError: message(error) })
       }
-      if (generation !== watchGeneration) return
+      if (watch.status !== 'running' || watch.generation !== generation) return
       await wait(backoff)
       backoff = Math.min(backoff * 2, 15_000)
     }
   }
 
   const stopWatch = (): void => {
-    watchGeneration += 1
-    watching = false
-    watchAbort?.abort()
-    watchAbort = undefined
+    const nextGeneration = watch.generation + 1
+    if (watch.status === 'running') watch.abort?.abort()
+    watch = { status: 'stopped', generation: nextGeneration }
   }
 
   const startWatch = (): void => {
@@ -421,12 +423,14 @@ export function createMcpController(hosts: McpHosts, options: McpControllerOptio
     if (state.host?.managerEntry === null || state.host?.managerEntry === undefined) return
     lastShape = ''
     lastTools = ''
-    void runWatch(watchGeneration)
+    const generation = watch.generation
+    watch = { status: 'running', generation }
+    void runWatch(generation)
   }
 
   /** Start the stream unless one is already running; safe to call after every read. */
   const ensureWatch = (): void => {
-    if (attached > 0 && !watching && state.host !== null && state.host.managerEntry !== null) startWatch()
+    if (attached > 0 && watch.status === 'stopped' && state.host !== null && state.host.managerEntry !== null) startWatch()
   }
 
   /**
