@@ -2,7 +2,7 @@ import { MarketButton } from './MarketButton.tsx'
 import { useId } from 'react'
 import { IconCloseOutlineRegular, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { MarketLocale } from './copy.ts'
-import type { PluginUpdater, UpdateState } from './pluginUpdates.ts'
+import { isBundleInUse, type PluginUpdater, type UpdateState } from './pluginUpdates.ts'
 
 /** Checking is read-only; only the version confirmation invokes updateBundle. */
 export function PluginUpdatePanel({ open, state, updater, t, onClose }: {
@@ -58,7 +58,10 @@ export function PluginUpdatePanel({ open, state, updater, t, onClose }: {
       {state.phase === 'unknown' && <p role="alert">{t('update.unknown')} {state.message}</p>}
       {state.phase === 'error' && <p role="alert">{t('update.failed', { reason: state.message })}</p>}
       {state.phase === 'done' && result && <>
-        <p role="status">{t(result.result.application === 'failed' ? 'update.failedResult' : `update.${result.result.application}`)}</p>
+        <p role="status">{t(isBundleInUse(result) ? 'update.inUse' : result.result.application === 'failed' ? 'update.failedResult' : `update.${result.result.application}`)}</p>
+        {state.selectionRestore && <p role={state.selectionRestore === 'failed' ? 'alert' : undefined}>
+          {t(state.selectionRestore === 'restored' ? 'update.selectionRestored' : 'update.selectionRestoreFailed')}
+        </p>}
         {restore && <p>{t(restore.application === 'applied' ? 'update.restored' : restore.application === 'restart-required' ? 'update.restoreRestart' : 'update.restoreFailed')}</p>}
         <details className="dsh_market_installDetails"><summary>{t('direct.diagnostic')}</summary>
           <pre className="dsh_market_directMessage">{JSON.stringify(result, null, 2).slice(-12000)}</pre>

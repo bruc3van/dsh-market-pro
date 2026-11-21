@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import type { MarketListingEntry, MarketListingVersion, MarketSearchResult, PluginVersion, PluginVersionList, PluginUpdateResult } from '@deepseek-ai/dsh-api-remotes/client'
-import { createPluginUpdater, type UpdateHost, type UpdateMarketHost } from '../src/client/pluginUpdates.ts'
+import { blocksHotUpdates, createPluginUpdater, isBundleInUse, type UpdateHost, type UpdateMarketHost } from '../src/client/pluginUpdates.ts'
 
 const ok = <T>(value: T) => ({ ok: true as const, value })
 const failed = (message: string) => ({ ok: false as const, error: { message } })
@@ -394,4 +394,101 @@ test('retrying a failed batch target pins the shown target version even if backg
   }])
   assert.deepEqual(submitted, ['demo@2.0.0', 'demo@2.0.0'])
   assert.equal(updater.getSnapshot().available.demo, '3.0.0')
+})
+
+const inUse: PluginUpdateResult = { from: '1.0.0', to: '2.0.0', step: 'remove',
+  result: { changed: false, application: 'failed', stage: 'remove', target: 'demo', error: { code: 'bundle-in-use' } } }
+
+test('a removal refused as bundle-in-use re-enables the bundle the Host deselected', async () => {
+  let enabled = true
+  const calls: unknown[][] = []
+  const manager = host({
+    listBundles: async () => ok([{ name: 'demo', version: '1.0.0', installed: true, update: 'registry', enabled }]),
+    updateBundle: async () => { enabled = false; return ok(inUse) },
+    setBundleEnabled: async (...args) => { calls.push(args); enabled = args[1]; return ok({ application: 'applied' }) },
+  })
+  const updater = createPluginUpdater(() => manager, () => undefined)
+  await updater.check('demo')
+  await updater.confirm()
+  assert.deepEqual(calls, [['demo', true]])
+  assert.equal(enabled, true)
+  const snap = updater.getSnapshot()
+  assert.equal(snap.selectionRestore, 'restored')
+  assert.ok(isBundleInUse(snap.result))
+})
+
+test('selection is left alone when the bundle was not enabled, stayed enabled, or the update succeeded', async () => {
+  for (const scenario of ['was-disabled', 'still-enabled', 'succeeded'] as const) {
+    let enabled = scenario !== 'was-disabled'
+    let toggles = 0
+    const manager = host({
+      listBundles: async () => ok([{ name: 'demo', version: '1.0.0', installed: true, update: 'registry', enabled }]),
+      updateBundle: async () => {
+        if (scenario === 'succeeded') return ok(outcome)
+        if (scenario === 'was-disabled') enabled = false
+        return ok(inUse)
+      },
+      setBundleEnabled: async () => { toggles++; return ok({ application: 'applied' }) },
+    })
+    const updater = createPluginUpdater(() => manager, () => undefined)
+    await updater.check('demo')
+    await updater.confirm()
+    assert.equal(toggles, 0, scenario)
+    assert.equal(updater.getSnapshot().selectionRestore, undefined, scenario)
+  }
+})
+
+test('batch records a failed re-enable and keeps bundle-in-use items out of plain failures', async () => {
+  let enabled = true
+  const manager = host({
+    listBundles: async () => ok([{ name: 'demo', version: '1.0.0', installed: true, update: 'registry', enabled }]),
+    updateBundle: async () => { enabled = false; return ok(inUse) },
+    setBundleEnabled: async () => ok({ application: 'failed' }),
+  })
+  const updater = createPluginUpdater(() => manager, () => undefined)
+  await updater.probe(['demo'])
+  await updater.startBatch(['demo'])
+  const [item] = updater.getSnapshot().batch.items
+  assert.equal(item?.status, 'failed')
+  assert.equal(item?.selectionRestore, 'failed')
+  assert.ok(isBundleInUse(item?.result))
+  assert.equal(isBundleInUse(outcome), false)
+})
+
+test('a batch holds back later items once an update leaves the process needing a restart', async () => {
+  for (const blocker of ['package-moved', 'bundle-in-use'] as const) {
+    const order: string[] = []
+    const names = ['first', 'second', 'third']
+    const manager = host({
+      listBundles: async () => ok(names.map(name => ({ name, version: '1.0.0', installed: true, update: 'registry' as const }))),
+      updateBundle: async (name, to) => {
+        order.push(name)
+        if (name !== 'first') return ok(outcome)
+        return ok(blocker === 'bundle-in-use' ? inUse : { from: '1.0.0', to, step: 'install',
+          result: { changed: true, application: 'restart-required', restartReason: 'package-moved', stage: 'install', target: `${name}@${to}` } })
+      },
+    })
+    const updater = createPluginUpdater(() => manager, () => undefined)
+    await updater.probe(names)
+    await updater.startBatch(names)
+    assert.deepEqual(order, ['first'], blocker)
+    const { batch } = updater.getSnapshot()
+    assert.equal(batch.phase, 'done')
+    assert.deepEqual(batch.items.map(item => [item.packageName, item.status, item.deferred]), [
+      ['first', blocker === 'bundle-in-use' ? 'failed' : 'restart-required', undefined],
+      ['second', 'skipped', 'restart'],
+      ['third', 'skipped', 'restart'],
+    ], blocker)
+  }
+})
+
+test('only profile-wide restart reasons block later hot updates', () => {
+  const withReason = (restartReason: string): PluginUpdateResult => ({ from: '1.0.0', to: '2.0.0', step: 'install',
+    result: { changed: true, application: 'restart-required', restartReason, stage: 'install', target: 'demo@2.0.0' } as PluginUpdateResult['result'] })
+  assert.equal(blocksHotUpdates(withReason('no-hmr')), false)
+  assert.equal(blocksHotUpdates(withReason('host-module')), false)
+  assert.equal(blocksHotUpdates(withReason('module-comparison')), true)
+  assert.equal(blocksHotUpdates({ ...outcome, restore: { changed: true, application: 'restart-required', restartReason: 'package-moved', stage: 'install', target: 'demo@1.0.0' } }), true)
+  assert.equal(blocksHotUpdates(outcome), false)
+  assert.equal(blocksHotUpdates(undefined), false)
 })

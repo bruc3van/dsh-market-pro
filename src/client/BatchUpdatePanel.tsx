@@ -4,7 +4,7 @@ import { PACKAGE_NAME } from '../shapes.ts'
 import type { MarketLocale } from './copy.ts'
 import { MarketButton } from './MarketButton.tsx'
 import { shortName } from './owned.ts'
-import { orderBatchTargets, type AvailableUpdate, type BatchItemStatus, type BatchUpdateItem, type PluginUpdater, type UpdateState } from './pluginUpdates.ts'
+import { isBundleInUse, orderBatchTargets, type AvailableUpdate, type BatchItemStatus, type BatchUpdateItem, type PluginUpdater, type UpdateState } from './pluginUpdates.ts'
 
 function isSuccessStatus(status: BatchItemStatus): boolean {
   return status === 'applied' || status === 'restart-required'
@@ -24,7 +24,15 @@ function itemTone(status: BatchItemStatus): 'ok' | 'warn' | 'error' | 'active' |
 
 function statusText(t: MarketLocale, item: BatchUpdateItem): string {
   if (item.status === 'running') return t(`update.${item.step ?? 'checking'}`)
+  if (isBundleInUse(item.result)) return t('batchUpdate.status.inUse')
+  if (item.deferred === 'restart') return t('batchUpdate.status.deferred')
   return t(`batchUpdate.status.${item.status}`)
+}
+
+function selectionText(t: MarketLocale, item: BatchUpdateItem): string {
+  if (item.selectionRestore === 'restored') return t('update.selectionRestored')
+  if (item.selectionRestore === 'failed') return t('update.selectionRestoreFailed')
+  return ''
 }
 
 function restoreText(t: MarketLocale, restore: BatchUpdateItem['restoreApplication']): string {
@@ -96,8 +104,12 @@ export function BatchUpdatePanel({ open, state, updater, t, onClose }: {
   const restartCount = batch.items.filter(
     item => item.status === 'restart-required' || item.restoreApplication === 'restart-required',
   ).length
+  const inUseCount = batch.items.filter(item => isBundleInUse(item.result)).length
+  const deferredCount = batch.items.filter(item => item.deferred === 'restart').length
+  // A hot removal the Host refused because the plugin still runs fails the same way until a restart.
   const retryableTargets: AvailableUpdate[] = batch.items
     .filter(item => (item.status === 'failed' || item.status === 'unknown' || item.status === 'cancelled')
+      && !isBundleInUse(item.result)
       && state.availableDetails[item.packageName] !== undefined)
     .map(item => ({
       packageName: item.packageName,
@@ -183,7 +195,7 @@ export function BatchUpdatePanel({ open, state, updater, t, onClose }: {
                         <strong>{shortName(item.packageName)}</strong>
                         {item.self && <em className="dsh_market_updateBadge">{t('batchUpdate.selfLast')}</em>}
                       </span>
-                      <span className="dsh_market_batchState" data-tone={itemTone(item.status)}>
+                      <span className="dsh_market_batchState" data-tone={isBundleInUse(item.result) ? 'warn' : itemTone(item.status)}>
                         {statusText(t, item)}
                       </span>
                     </div>
@@ -203,11 +215,14 @@ export function BatchUpdatePanel({ open, state, updater, t, onClose }: {
                     : t('batchUpdate.summary', { total: String(total), succeeded: String(succeeded), failed: String(failed) })}
                 </strong>
                 {restartCount > 0 && <p>{t('batchUpdate.restartHint', { count: String(restartCount) })}</p>}
+                {inUseCount > 0 && <p>{t('batchUpdate.inUseHint', { count: String(inUseCount) })}</p>}
+                {deferredCount > 0 && <p>{t('batchUpdate.deferredHint', { count: String(deferredCount) })}</p>}
               </div>
               <ul className="dsh_market_installQueue dsh_market_batchQueue" aria-label={t('batchUpdate.doneTitle')}>
                 {batch.items.map(item => {
                   const hasDiagnostic = isFailedStatus(item.status) && (item.message || item.result)
                   const restore = restoreText(t, item.restoreApplication)
+                  const selection = selectionText(t, item)
                   return (
                     <li key={item.packageName}>
                       <div className="dsh_market_batchRowHead">
@@ -215,7 +230,7 @@ export function BatchUpdatePanel({ open, state, updater, t, onClose }: {
                           <strong>{shortName(item.packageName)}</strong>
                           {item.self && <em className="dsh_market_updateBadge">{t('batchUpdate.selfLast')}</em>}
                         </span>
-                        <span className="dsh_market_batchState" data-tone={itemTone(item.status)}>
+                        <span className="dsh_market_batchState" data-tone={isBundleInUse(item.result) ? 'warn' : itemTone(item.status)}>
                           {statusText(t, item)}
                         </span>
                       </div>
@@ -223,6 +238,7 @@ export function BatchUpdatePanel({ open, state, updater, t, onClose }: {
                         {item.from ? `v${item.from} → v${item.to}` : `v${item.to}`}
                         {restore !== '' && ` · ${restore}`}
                       </small>
+                      {selection !== '' && <small>{selection}</small>}
                       {hasDiagnostic && (
                         <details className="dsh_market_installDiagnostic">
                           <summary>{t('direct.diagnostic')}</summary>

@@ -6,9 +6,67 @@ import type {
 
 type Reply<T> = { ok: true; value: T } | { ok: false; error: { message: string } }
 export interface UpdateHost {
-  listBundles(): Promise<Reply<readonly Pick<BundleInfo, 'name' | 'version' | 'installed' | 'update'>[]>>
+  listBundles(): Promise<Reply<readonly (Pick<BundleInfo, 'name' | 'version' | 'installed' | 'update'> & Partial<Pick<BundleInfo, 'enabled'>>)[]>>
   listVersions(name: string, options: object): Promise<Reply<PluginVersionList>>
   updateBundle(name: string, version: string, options: { registry?: Registry; spec?: string; requestId: PluginInstallRequestId }): Promise<Reply<PluginUpdateResult>>
+  /** Used only to put back a selection the Host dropped during a refused removal. */
+  setBundleEnabled?(name: string, enabled: boolean): Promise<Reply<{ readonly application: string }>>
+}
+
+/** Whether the Host refused the hot removal because the installed version's rows are still running. */
+export function isBundleInUse(result: PluginUpdateResult | undefined): boolean {
+  return result?.step === 'remove' && result.result.application === 'failed' && result.result.error?.code === 'bundle-in-use'
+}
+
+/**
+ * Whether this process can no longer hot-swap profile packages after the given update. The Host keeps every later
+ * recomposition waiting once a runtime resolution cannot publish (`package-moved`) or modules cannot be compared
+ * (`module-comparison`); a removal it then refuses as `bundle-in-use` is the same state. Later hot updates would
+ * deselect and fail the same way, so a batch stops and leaves them for after a restart. `no-hmr` is not such a state:
+ * without HMR every update installs over the running version.
+ */
+export function blocksHotUpdates(result: PluginUpdateResult | undefined): boolean {
+  if (result === undefined) return false
+  if (isBundleInUse(result)) return true
+  const profileWide = (reason: string | undefined) => reason === 'package-moved' || reason === 'module-comparison'
+  return profileWide(result.result.restartReason) || profileWide(result.restore?.restartReason)
+}
+
+/** Outcome of putting back the bundle selection after a failed removal step. */
+export type SelectionRestore = 'restored' | 'failed'
+
+/**
+ * Run one Host update and, when it fails at the removal step, re-select a bundle that was enabled before.
+ * With HMR the Host deselects the bundle before checking whether its rows stopped; a refusal such as
+ * `bundle-in-use` leaves it deselected, so the plugin would silently stop loading at the next boot.
+ */
+async function updateKeepingSelection(
+  api: UpdateHost,
+  name: string,
+  version: string,
+  options: { registry?: Registry; spec?: string; requestId: PluginInstallRequestId },
+): Promise<{ answer: Reply<PluginUpdateResult>; selectionRestore?: SelectionRestore }> {
+  const enabledNow = async (): Promise<boolean | undefined> => {
+    try {
+      const listed = await api.listBundles()
+      if (!listed.ok) return undefined
+      const row = listed.value.find(item => item.name === name)
+      return row?.installed ? row.enabled : undefined
+    } catch { return undefined }
+  }
+  const wasEnabled = typeof api.setBundleEnabled === 'function' ? await enabledNow() : undefined
+  const answer = await api.updateBundle(name, version, options)
+  if (!answer.ok || answer.value.step !== 'remove' || wasEnabled !== true) return { answer }
+  const app = answer.value.result.application
+  if (app !== 'failed' && app !== 'cancelled') return { answer }
+  if (await enabledNow() !== false) return { answer }
+  try {
+    const restored = await api.setBundleEnabled!(name, true)
+    const ok = restored.ok && (restored.value.application === 'applied' || restored.value.application === 'restart-required')
+    return { answer, selectionRestore: ok ? 'restored' : 'failed' }
+  } catch {
+    return { answer, selectionRestore: 'failed' }
+  }
 }
 export interface UpdateMarketHost {
   listIndexes(): Promise<Reply<readonly MarketIndexSummary[]>>
@@ -50,6 +108,9 @@ export interface BatchUpdateItem {
   readonly message?: string
   readonly restoreApplication?: 'applied' | 'restart-required' | 'overridden' | 'cancelled' | 'failed'
   readonly result?: PluginUpdateResult
+  readonly selectionRestore?: SelectionRestore
+  /** Set on a skipped item the batch held back because an earlier update left the process needing a restart. */
+  readonly deferred?: 'restart'
 }
 export interface BatchUpdateState {
   readonly phase: 'idle' | 'running' | 'done'
@@ -69,6 +130,7 @@ export interface UpdateState {
   omitted: number
   step?: PluginUpdateProgress['step']
   result?: PluginUpdateResult
+  selectionRestore?: SelectionRestore
   /** Every settled update invalidates installed facts, including a failed update with restoration. */
   revision: number
   /** Newest compatible stable version detected per installed package name. */
@@ -277,7 +339,7 @@ export function createPluginUpdater(host: () => UpdateHost | undefined, market: 
     async check(packageName: string) {
       if (state.phase === 'updating' || state.batch.phase === 'running') return
       const current = ++generation
-      set({ phase: 'checking', packageName, installed: '', kind: undefined, choices: [], selected: '', message: '', warnings: [], omitted: 0, result: undefined, step: undefined })
+      set({ phase: 'checking', packageName, installed: '', kind: undefined, choices: [], selected: '', message: '', warnings: [], omitted: 0, result: undefined, selectionRestore: undefined, step: undefined })
       try {
         const api = host()
         if (!api?.listVersions || !api.updateBundle) throw new Error('The Host does not provide plugin updates. Upgrade DSH to 0.2.2-rc.3 or later.')
@@ -352,17 +414,18 @@ export function createPluginUpdater(host: () => UpdateHost | undefined, market: 
       const choice = state.choices.find(version => version.version === state.selected && !version.blocked)
       if (!choice) return
       requestId = globalThis.crypto.randomUUID() as PluginInstallRequestId
-      set({ phase: 'updating', message: '', step: 'checking' })
+      set({ phase: 'updating', message: '', step: 'checking', selectionRestore: undefined })
       try {
         const api = host()
         if (!api) throw new Error('The plugin manager is unavailable.')
         const source = choice.source
-        const answer = await api.updateBundle(state.packageName, choice.version,
+        const { answer, selectionRestore } = await updateKeepingSelection(api, state.packageName, choice.version,
           { ...('registry' in source ? { registry: source.registry } : { spec: source.spec }), requestId })
         const applied = answer.ok && (answer.value.result.application === 'applied' || answer.value.result.application === 'restart-required')
         set(answer.ok ? {
           phase: 'done',
           result: answer.value,
+          selectionRestore,
           revision: state.revision + 1,
           ...(applied ? {
             available: withAvailable(state.available, state.packageName, ''),
@@ -418,7 +481,7 @@ export function createPluginUpdater(host: () => UpdateHost | undefined, market: 
           const api = host()
           if (!api?.updateBundle) throw new Error('The plugin manager is unavailable.')
           const source = entry.source
-          const answer = await api.updateBundle(entry.packageName, entry.to, {
+          const { answer, selectionRestore } = await updateKeepingSelection(api, entry.packageName, entry.to, {
             ...('registry' in source ? { registry: source.registry } : { spec: source.spec }),
             requestId,
           })
@@ -432,6 +495,7 @@ export function createPluginUpdater(host: () => UpdateHost | undefined, market: 
               step: undefined,
               result: answer.value,
               restoreApplication: answer.value.restore?.application,
+              selectionRestore,
             } : item))
             set({
               batch: { ...state.batch, items: nextItems },
@@ -461,6 +525,11 @@ export function createPluginUpdater(host: () => UpdateHost | undefined, market: 
           set({ batch: { ...state.batch, items: nextItems }, revision: state.revision + 1 })
         } finally {
           requestId = undefined
+        }
+        if (index < queue.length - 1 && blocksHotUpdates(state.batch.items[index]?.result)) {
+          const items = state.batch.items.map((entry, i) => (i > index ? { ...entry, status: 'skipped' as const, deferred: 'restart' as const } : entry))
+          set({ batch: { phase: 'done', items, currentIndex: -1, stopRequested: false } })
+          return
         }
       }
       set({ batch: { ...state.batch, phase: 'done', currentIndex: -1, stopRequested: false } })

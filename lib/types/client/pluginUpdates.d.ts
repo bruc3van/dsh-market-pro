@@ -10,14 +10,30 @@ type Reply<T> = {
     };
 };
 export interface UpdateHost {
-    listBundles(): Promise<Reply<readonly Pick<BundleInfo, 'name' | 'version' | 'installed' | 'update'>[]>>;
+    listBundles(): Promise<Reply<readonly (Pick<BundleInfo, 'name' | 'version' | 'installed' | 'update'> & Partial<Pick<BundleInfo, 'enabled'>>)[]>>;
     listVersions(name: string, options: object): Promise<Reply<PluginVersionList>>;
     updateBundle(name: string, version: string, options: {
         registry?: Registry;
         spec?: string;
         requestId: PluginInstallRequestId;
     }): Promise<Reply<PluginUpdateResult>>;
+    /** Used only to put back a selection the Host dropped during a refused removal. */
+    setBundleEnabled?(name: string, enabled: boolean): Promise<Reply<{
+        readonly application: string;
+    }>>;
 }
+/** Whether the Host refused the hot removal because the installed version's rows are still running. */
+export declare function isBundleInUse(result: PluginUpdateResult | undefined): boolean;
+/**
+ * Whether this process can no longer hot-swap profile packages after the given update. The Host keeps every later
+ * recomposition waiting once a runtime resolution cannot publish (`package-moved`) or modules cannot be compared
+ * (`module-comparison`); a removal it then refuses as `bundle-in-use` is the same state. Later hot updates would
+ * deselect and fail the same way, so a batch stops and leaves them for after a restart. `no-hmr` is not such a state:
+ * without HMR every update installs over the running version.
+ */
+export declare function blocksHotUpdates(result: PluginUpdateResult | undefined): boolean;
+/** Outcome of putting back the bundle selection after a failed removal step. */
+export type SelectionRestore = 'restored' | 'failed';
 export interface UpdateMarketHost {
     listIndexes(): Promise<Reply<readonly MarketIndexSummary[]>>;
     search(url: string, query: MarketQuery): Promise<Reply<MarketSearchResult>>;
@@ -54,6 +70,9 @@ export interface BatchUpdateItem {
     readonly message?: string;
     readonly restoreApplication?: 'applied' | 'restart-required' | 'overridden' | 'cancelled' | 'failed';
     readonly result?: PluginUpdateResult;
+    readonly selectionRestore?: SelectionRestore;
+    /** Set on a skipped item the batch held back because an earlier update left the process needing a restart. */
+    readonly deferred?: 'restart';
 }
 export interface BatchUpdateState {
     readonly phase: 'idle' | 'running' | 'done';
@@ -73,6 +92,7 @@ export interface UpdateState {
     omitted: number;
     step?: PluginUpdateProgress['step'];
     result?: PluginUpdateResult;
+    selectionRestore?: SelectionRestore;
     /** Every settled update invalidates installed facts, including a failed update with restoration. */
     revision: number;
     /** Newest compatible stable version detected per installed package name. */

@@ -31,6 +31,9 @@ export declare const zh: {
     readonly 'update.restored': "已恢复原版本。";
     readonly 'update.restoreRestart': "原版本已恢复，请重启客户端。";
     readonly 'update.restoreFailed': "原版本未成功恢复，请到官方插件页处理。";
+    readonly 'update.inUse': "插件仍在运行，宿主无法热替换，原版本未改动。请重启 DSH 后再更新。";
+    readonly 'update.selectionRestored': "已重新启用原版本，重启后仍会加载。";
+    readonly 'update.selectionRestoreFailed': "宿主已停用原版本且未能重新启用，请到官方插件页重新启用，否则重启后不会加载。";
     readonly 'update.partial': "部分订阅源检查失败：";
     readonly 'update.action': "确认更新";
     readonly 'update.recheck': "重新检查";
@@ -49,6 +52,8 @@ export declare const zh: {
     readonly 'batchUpdate.summary': "共 {total} 个：成功 {succeeded} 个，失败 {failed} 个";
     readonly 'batchUpdate.summarySkipped': "共 {total} 个：成功 {succeeded} 个，失败 {failed} 个，已跳过 {skipped} 个";
     readonly 'batchUpdate.restartHint': "其中 {count} 个更新需要重启客户端后生效。";
+    readonly 'batchUpdate.inUseHint': "其中 {count} 个插件正在运行，无法热更新，请重启 DSH 后再更新。";
+    readonly 'batchUpdate.deferredHint': "前面的更新使 DSH 需要重启才能继续热更新，已暂停其余 {count} 项，未做任何改动。请重启 DSH 后再更新它们。";
     readonly 'batchUpdate.status.pending': "等待中";
     readonly 'batchUpdate.status.applied': "已生效";
     readonly 'batchUpdate.status.restart-required': "需重启生效";
@@ -57,6 +62,8 @@ export declare const zh: {
     readonly 'batchUpdate.status.failed': "更新失败";
     readonly 'batchUpdate.status.unknown': "结果未确认";
     readonly 'batchUpdate.status.skipped': "已跳过";
+    readonly 'batchUpdate.status.inUse': "运行中，需重启后更新";
+    readonly 'batchUpdate.status.deferred': "重启后再更新";
     readonly 'audit.action': "AI 审查";
     readonly 'direct.authorization': "需要授权";
     readonly 'direct.buildHint': "以下依赖需要运行安装脚本，允许后继续安装。";
