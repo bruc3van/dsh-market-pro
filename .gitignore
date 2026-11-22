@@ -6,4 +6,6 @@ node_modules/
 .verification/
 .playwright-cli/
 output/playwright/catalog-*
+output/imagegen/
+output/xiaohongshu/
 lib/**/*.map

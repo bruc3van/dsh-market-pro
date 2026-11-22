@@ -1,16 +1,24 @@
 import { MarketButton } from './MarketButton.tsx'
-import { useEffect, useId, useState, useSyncExternalStore } from 'react'
+import { useEffect, useId, useRef, useState, useSyncExternalStore } from 'react'
 import { IconCloseOutlineRegular, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { MarketPlugin } from '../contract.ts'
+import type { MarketInstalledPackage, MarketPlugin } from '../contract.ts'
+import { isSafeVersion } from '../shapes.ts'
 import type { MarketLocale } from './copy.ts'
 import { installChoices, installLabel } from './installTargets.ts'
-import type { DirectInstaller } from './directInstall.ts'
+import { ownedByTarget } from './owned.ts'
+import {
+  reconcileSelectedTargets,
+  shouldRefreshInstalledAfterDirect,
+  type DirectInstaller,
+} from './directInstall.ts'
 import { installedReviewTargets, type ReviewTarget } from './reviewPrompt.ts'
 import { PluginLogo } from './PluginLogo.tsx'
 
 /** One shared installation remains observable if the recommendation page remounts. */
-export function DirectInstallPanel({ item, installer, t, onClose, onInstalled, onReview, onAgentInstall, reviewBusy, reviewAvailable, reviewMessage }: {
-  item: MarketPlugin | null; installer: DirectInstaller; t: MarketLocale
+export function DirectInstallPanel({ item, installer, ownedIndex, t, onClose, onInstalled, onReview, onAgentInstall, reviewBusy, reviewAvailable, reviewMessage }: {
+  item: MarketPlugin | null; installer: DirectInstaller
+  ownedIndex?: ReadonlyMap<string, MarketInstalledPackage>
+  t: MarketLocale
   onClose: () => void; onInstalled: () => void
   onReview: (targets: ReviewTarget[]) => Promise<boolean>
   onAgentInstall?: () => void
@@ -20,20 +28,45 @@ export function DirectInstallPanel({ item, installer, t, onClose, onInstalled, o
   const [selected, setSelected] = useState<number[]>([0])
   const [submitted, setSubmitted] = useState(false)
   const [dismissed, setDismissed] = useState(false)
+  const ownedIndexRef = useRef(ownedIndex)
+  ownedIndexRef.current = ownedIndex
+  const userTouchedRef = useRef(false)
   const id = useId()
   const open = !dismissed && (item !== null || state.phase !== 'idle')
   const busy = ['checking', 'installing', 'cancelling', 'unknown'].includes(state.phase)
-  useEffect(() => { setSelected([0]); setSubmitted(false); if (item) setDismissed(false) }, [item])
-  useEffect(() => { if (state.phase === 'done' || state.phase === 'unavailable') onInstalled() }, [state, onInstalled])
   const visibleItem = busy && !submitted ? null : item
   const dismiss = () => { setDismissed(true); installer.reset(); onClose() }
   const info = visibleItem?.installInfo
   const targets = installChoices(info?.targets ?? [])
-  const chosen = targets.filter((_, i) => selected.includes(i))
-  const available = info?.mode === 'command' && targets.length > 0
-  const manual = available ? '' : info?.manual
-  const showDetails = chosen.length > 0 || Boolean(info?.requirements.length || info?.note || manual)
   const showResult = submitted || busy || state.phase === 'unavailable' || !item
+  useEffect(() => {
+    userTouchedRef.current = false
+    const initialTargets = installChoices(item?.installInfo?.targets ?? [])
+    setSelected(reconcileSelectedTargets(initialTargets, [], ownedIndexRef.current, false))
+    setSubmitted(false)
+    if (item) setDismissed(false)
+  }, [item])
+  useEffect(() => {
+    if (showResult || !item) return
+    const itemTargets = installChoices(item.installInfo?.targets ?? [])
+    setSelected(previous => reconcileSelectedTargets(itemTargets, previous, ownedIndex, userTouchedRef.current))
+  }, [item, ownedIndex, showResult])
+  useEffect(() => {
+    if (shouldRefreshInstalledAfterDirect(state)) onInstalled()
+  }, [state, onInstalled])
+  const targetOwned = (spec: string): MarketInstalledPackage | undefined =>
+    ownedIndex ? ownedByTarget(ownedIndex, spec) : undefined
+  const chosen = targets.filter((target, i) =>
+    selected.includes(i) && (showResult || targetOwned(target.install) === undefined))
+  const available = info?.mode === 'command' && targets.length > 0
+  const singleAlreadyInstalled = !showResult && available && targets.length === 1
+    ? targetOwned(targets[0]!.install)
+    : undefined
+  const allAlreadyInstalled = !showResult && available && targets.length > 0
+    && targets.every(target => targetOwned(target.install) !== undefined)
+  const detailTargets = singleAlreadyInstalled !== undefined ? targets : chosen
+  const manual = available ? '' : info?.manual
+  const showDetails = detailTargets.length > 0 || Boolean(info?.requirements.length || info?.note || manual)
   const needsApproval = showResult && state.phase === 'failed' && state.pendingBuilds.length > 0
   const finished = showResult && state.phase === 'done'
   const canDismiss = !busy || (state.phase === 'unknown' && !state.recovering)
@@ -67,6 +100,13 @@ export function DirectInstallPanel({ item, installer, t, onClose, onInstalled, o
       </button>}
     </div>
     {visibleItem && !showResult && description && <p className="dsh_market_installSummary">{description}</p>}
+    {singleAlreadyInstalled !== undefined && <div className="dsh_market_installStatus" role="status" aria-live="polite">
+      <strong>
+        {isSafeVersion(singleAlreadyInstalled.version)
+          ? t('installedHere', { version: singleAlreadyInstalled.version })
+          : t('installedHereUnknown')}
+      </strong>
+    </div>}
     {showResult && <div className="dsh_market_installStatus" role="status" aria-live="polite">
       <strong>{needsApproval ? t('direct.authorization') : finished && state.queue.length > 1 ? t('direct.batchDone') : finished && outcome ? t(`direct.${outcome}`) : t(`direct.${state.phase}`)}</strong>
       {needsApproval && <>
@@ -90,16 +130,31 @@ export function DirectInstallPanel({ item, installer, t, onClose, onInstalled, o
     </div>}
     {visibleItem && available && !showResult && targets.length > 1 && <fieldset className="dsh_market_installChoices" disabled={busy || showResult}>
       <legend>{t('direct.target')}</legend><p>{t('direct.multiHint')}</p>
-      {targets.map((entry, i) => <label key={entry.install} className="dsh_market_installChoice">
-        <input type="checkbox" name={`${id}-component`} value={i} checked={selected.includes(i)}
-          onChange={() => { setSelected(previous => previous.includes(i) ? previous.filter(index => index !== i) : [...previous, i]); setSubmitted(false) }} />
-        <span>{installLabel(entry.install)}</span>
-      </label>)}
+      {targets.map((entry, i) => {
+        const alreadyInstalled = targetOwned(entry.install)
+        return <label key={entry.install} className="dsh_market_installChoice" data-installed={alreadyInstalled ? 'true' : undefined}>
+          <input type="checkbox" name={`${id}-component`} value={i} disabled={alreadyInstalled !== undefined}
+            checked={alreadyInstalled === undefined && selected.includes(i)}
+            onChange={() => {
+              userTouchedRef.current = true
+              setSelected(previous => previous.includes(i) ? previous.filter(index => index !== i) : [...previous, i])
+              setSubmitted(false)
+            }} />
+          <span>{installLabel(entry.install)}</span>
+          {alreadyInstalled !== undefined && (
+            <span className="dsh_market_owned dsh_market_choiceOwned" title={alreadyInstalled.packageName}>
+              {isSafeVersion(alreadyInstalled.version)
+                ? t('installedHere', { version: alreadyInstalled.version })
+                : t('installedHereUnknown')}
+            </span>
+          )}
+        </label>
+      })}
     </fieldset>}
     {visibleItem && showDetails && <details className="dsh_market_installDetails" key={visibleItem.packageName || visibleItem.fullName} open={available}>
       <summary>{t('direct.more')}<svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg></summary>
       <div className="dsh_market_installDetailsBody">
-        {chosen.map(target => <div key={target.install} className="dsh_market_installTarget"><code>{target.install}</code>{target.note && <p>{target.note}</p>}</div>)}
+        {detailTargets.map(target => <div key={target.install} className="dsh_market_installTarget"><code>{target.install}</code>{target.note && <p>{target.note}</p>}</div>)}
         {info?.requirements.length ? <ul className="dsh_market_installRequirements">{info.requirements.map((r, i) => <li key={i}>{r}</li>)}</ul> : null}
         {info?.note && <p>{info.note}</p>}
         {manual && <p>{manual}</p>}
@@ -120,6 +175,7 @@ export function DirectInstallPanel({ item, installer, t, onClose, onInstalled, o
         </>
         : state.phase === 'unknown' ? <MarketButton size="md" intent="primary" disabled={state.recovering} aria-busy={state.recovering} onClick={() => { void installer.recover() }}>{state.recovering ? t('direct.recovering') : t('direct.recover')}</MarketButton>
         : busy ? <MarketButton size="md" intent="secondary" disabled={state.phase !== 'installing'} onClick={() => { void installer.cancel() }}>{t('direct.cancel')}</MarketButton>
+        : allAlreadyInstalled ? <MarketButton size="md" intent="primary" onClick={dismiss}>{t('direct.close')}</MarketButton>
         : (available || (showResult && state.phase === 'failed')) ? <>
           <MarketButton size="md" intent="secondary" onClick={dismiss}>{t(showResult ? 'direct.close' : 'direct.dismiss')}</MarketButton>
           {reviewButton}

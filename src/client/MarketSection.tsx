@@ -37,7 +37,7 @@ import type {
 } from '../contract.ts'
 import { FEATURED_CATEGORY, PACKAGE_NAME, SUBSCRIPTION_CATEGORY, isSafeVersion } from '../shapes.ts'
 import type { MarketLocale } from './copy.ts'
-import { ownedBy, ownedIndexOf, shortName } from './owned.ts'
+import { hasRemainingTargets, ownedBy, ownedIndexOf, shortName } from './owned.ts'
 import {
   INSTALLED_FILTER, SELF_CARD_KEY, allCatalogMatchCount, featuredRows, installedReviewCardKey, marketKey, marketRows, matches, pageOf, sortMarketRows, starCount, stateOf, type MarketSort,
 } from './rows.ts'
@@ -219,6 +219,7 @@ function useInstalled({ t, active, listInstalled, subscribeInstalledChanges, set
   feedback: InstalledFeedback
   count: number
   reload: () => void
+  refresh: () => void
   toggle: (item: MarketInstalledPackage) => void
   uninstall: (item: MarketInstalledPackage) => void
   requestUninstall: (name: string) => void
@@ -334,7 +335,7 @@ function useInstalled({ t, active, listInstalled, subscribeInstalledChanges, set
   }, [load])
 
   const count = state.status === 'ready' && state.result.error === '' ? state.result.packages.length : 0
-  return { state, action, feedback, count, reload, toggle, uninstall, requestUninstall, cancelUninstall }
+  return { state, action, feedback, count, reload, refresh: load, toggle, uninstall, requestUninstall, cancelUninstall }
 }
 
 /**
@@ -776,7 +777,7 @@ function InstalledCards({ t, installed, needle, installedFilter, updatableCount,
 }
 
 /** The Plugins page. */
-function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInstalled, subscribeInstalledChanges, setInstalledEnabled, uninstallInstalled, chooseWorkspace, workspaceReadiness, cards, installBusy, onReviewDraft, onOpenSettings, directInstaller, setDirectItem, installedRevision, appliedUpdateRevision, onCheckUpdate, onOpenBatchUpdate, availableUpdates, onProbeUpdates, onRegisterRefresh }: {
+function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInstalled, subscribeInstalledChanges, setInstalledEnabled, uninstallInstalled, chooseWorkspace, workspaceReadiness, cards, installBusy, onReviewDraft, onOpenSettings, directInstaller, setDirectItem, installedRevision, appliedUpdateRevision, onCheckUpdate, onOpenBatchUpdate, availableUpdates, onProbeUpdates, onRegisterRefresh, onOwnedIndexChange }: {
   setDirectItem: (item: MarketPlugin) => void
   installedRevision: number
   appliedUpdateRevision: number
@@ -785,6 +786,7 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
   availableUpdates?: Readonly<Record<string, string>>
   onProbeUpdates?: (packageNames: readonly string[]) => void
   onRegisterRefresh?: (action: HeaderRefreshAction | null) => void
+  onOwnedIndexChange?: (index: ReadonlyMap<string, MarketInstalledPackage>) => void
   t: MarketLocale
   english: boolean
   snapshot: SafeMarketSnapshot
@@ -830,7 +832,7 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
   useEffect(() => {
     if (snapshot.settingsReady && !enabled) setCategory(INSTALLED_FILTER)
   }, [snapshot.settingsReady, enabled])
-  useEffect(() => { if (installedRevision > 0) installed.reload() }, [installedRevision, installed.reload])
+  useEffect(() => { if (installedRevision > 0) installed.refresh() }, [installedRevision, installed.refresh])
   useLayoutEffect(() => {
     if (appliedUpdateRevision > 0) scrollResultsToTop('instant')
   }, [appliedUpdateRevision])
@@ -857,6 +859,7 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
     () => ownedIndexOf(installed.state.status === 'ready' ? installed.state.result.packages : []),
     [installed.state],
   )
+  useEffect(() => { onOwnedIndexChange?.(ownedIndex) }, [ownedIndex, onOwnedIndexChange])
   // The notice's own state, kept apart from the cards': it can be answered
   // before any card has been clicked.
   const [workspacePick, setWorkspacePick] = useState<WorkspacePickState>({ status: 'idle' })
@@ -1276,6 +1279,7 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
         <ul className="dsh_market_cards dsh_market_cardsUniform">
           {paged.items.map(({ item, reason }) => {
             const owned = ownedBy(ownedIndex, item)
+            const moreTargets = owned !== undefined && hasRemainingTargets(ownedIndex, item)
             return (
               <li key={marketKey(item)} className="dsh_market_card dsh_market_catalogCard">
                 <div className="dsh_market_head">
@@ -1320,11 +1324,17 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
                   {/* Manage updates using the installed package's exact identity. */}
                   {owned !== undefined
                     ? (
-                      <MarketButton intent="primary"
-                        onClick={() => {
-                          scrollResultsToTop()
-                          setCategory(INSTALLED_FILTER)
-                        }}>{t('direct.manage')}</MarketButton>
+                      <>
+                        <MarketButton intent={moreTargets ? 'secondary' : 'primary'}
+                          onClick={() => {
+                            scrollResultsToTop()
+                            setCategory(INSTALLED_FILTER)
+                          }}>{t('direct.manage')}</MarketButton>
+                        {moreTargets && (
+                          <MarketButton intent="primary" disabled={!directInstaller || installBusy}
+                            onClick={() => setDirectItem(item)}>{t('direct.install')}</MarketButton>
+                        )}
+                      </>
                       )
                     : (
                       <MarketButton intent="primary" disabled={!directInstaller || installBusy}
@@ -1388,6 +1398,7 @@ export function MarketSection({
   }, [])
   const updateState = useSyncExternalStore(pluginUpdater?.subscribe ?? (() => () => {}), pluginUpdater?.getSnapshot ?? (() => null))
   const [installedRevision, setInstalledRevision] = useState(0)
+  const [ownedIndex, setOwnedIndex] = useState<ReadonlyMap<string, MarketInstalledPackage>>(() => new Map())
   const refreshInstalled = useCallback(() => setInstalledRevision(value => value + 1), [])
   useEffect(() => { if (updateState?.revision) refreshInstalled() }, [updateState?.revision, refreshInstalled])
   const application = updateState?.result?.result.application
@@ -1607,7 +1618,7 @@ export function MarketSection({
           {t('batchUpdate.resume')}
         </button>
       )}
-      {directInstaller && <DirectInstallPanel item={directItem} installer={directInstaller} t={t}
+      {directInstaller && <DirectInstallPanel item={directItem} installer={directInstaller} ownedIndex={ownedIndex} t={t}
         onClose={closeInstallPanel} onInstalled={refreshInstalled}
         onReview={reviewInstalled} onAgentInstall={directItem ? () => agentInstall(directItem) : undefined}
         reviewBusy={installBusy} reviewAvailable={snapshot.profile !== null}
@@ -1675,6 +1686,7 @@ export function MarketSection({
           availableUpdates={updateState?.available}
           onProbeUpdates={probeUpdates}
           onRegisterRefresh={onRegisterPluginsRefresh}
+          onOwnedIndexChange={setOwnedIndex}
           t={t}
           english={english}
           snapshot={snapshot}

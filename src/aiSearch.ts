@@ -13,6 +13,8 @@ import type {
   MarketPlugin,
   McpHostContext,
 } from './contract.ts'
+import { packageNameFromInstallSpec } from './installInfo.ts'
+import { ownedBy, ownedIndexOf } from './ownedMatch.ts'
 import { FEATURED_CATEGORY, SUBSCRIPTION_CATEGORY } from './shapes.ts'
 
 export type AiSearchScope = 'all' | 'featured'
@@ -211,14 +213,6 @@ function pushedDayOf(value: string): string {
   return `${String(year).padStart(4, '0')}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`
 }
 
-function packageNameFromSpec(spec: string): string {
-  const trimmed = spec.trim()
-  if (trimmed === '') return ''
-  return trimmed.startsWith('@')
-    ? trimmed.replace(/^(@[^/]+\/[^@]+)@.+$/, '$1')
-    : trimmed.replace(/^([^@/:]+)@.+$/, '$1')
-}
-
 function heatScore(item: MarketPlugin, referenceMs: number): number {
   const stars = safeStars(item.stars)
   if (item.archived || item.disabled || stars === 0 || !Number.isFinite(referenceMs)) return 0
@@ -237,40 +231,14 @@ export function installStatusOf(item: MarketPlugin): AiInstallStatus {
   return 'none'
 }
 
-interface InstalledLookup {
-  readonly byPackage: ReadonlyMap<string, MarketInstalledPackage>
-  readonly byRepo: ReadonlyMap<string, MarketInstalledPackage>
-}
+type InstalledLookup = ReadonlyMap<string, MarketInstalledPackage>
 
 function buildInstalledLookup(packages: readonly MarketInstalledPackage[]): InstalledLookup {
-  const byPackage = new Map<string, MarketInstalledPackage>()
-  const byRepo = new Map<string, MarketInstalledPackage>()
-  for (const pkg of packages) {
-    if (pkg.error !== '') continue
-    byPackage.set(pkg.packageName.toLowerCase(), pkg)
-    if (pkg.repository !== '') {
-      const repoKey = pkg.repository.toLowerCase()
-      if (!byRepo.has(repoKey)) byRepo.set(repoKey, pkg)
-    }
-  }
-  return { byPackage, byRepo }
+  return ownedIndexOf(packages)
 }
 
 function matchInstalled(lookup: InstalledLookup, item: MarketPlugin): MarketInstalledPackage | undefined {
-  if (item.packageName) {
-    return lookup.byPackage.get(item.packageName.toLowerCase())
-  }
-  const targets = item.installInfo?.targets ?? []
-  for (const target of targets) {
-    const base = packageNameFromSpec(target.install)
-    if (base === '') continue
-    const found = lookup.byPackage.get(base.toLowerCase())
-    if (found !== undefined) return found
-  }
-  if (item.fullName !== '') {
-    return lookup.byRepo.get(item.fullName.toLowerCase())
-  }
-  return undefined
+  return ownedBy(lookup, item, { allowNameFallback: false })
 }
 
 function hasExtraDetailsOf(item: MarketPlugin, maxTargets: number): boolean {
@@ -817,7 +785,8 @@ function matchesExactIdentity(item: MarketPlugin, key: string): boolean {
 function matchesInstallTarget(item: MarketPlugin, key: string): boolean {
   return item.installInfo?.targets.some((target) => {
     const spec = target.install.toLowerCase()
-    return spec === key || packageNameFromSpec(spec) === key
+    const pkg = packageNameFromInstallSpec(spec)
+    return spec === key || (pkg !== '' && pkg === key)
   }) ?? false
 }
 

@@ -120,8 +120,10 @@ export const cssText = `
   .dsh_market_directPanel .dsh_market_installChoice:hover { background: var(--dsw-alias-interactive-bg-hover); }
 }
 .dsh_market_installChoice:has(input:checked) { background: var(--dsw-alias-interactive-bg-hover); border-color: var(--dsw-alias-label-secondary); }
+.dsh_market_directPanel .dsh_market_installChoice[data-installed="true"] { opacity: 0.72; cursor: default; }
 .dsh_market_installChoice input { flex: none; margin: 0; accent-color: var(--dsw-alias-label-primary); }
 .dsh_market_installChoice span { min-width: 0; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.dsh_market_installChoice .dsh_market_choiceOwned { margin-left: auto; font-family: inherit; }
 .dsh_market_directPanel .dsh_market_installChoice span p { margin: 2px 0 0; font-family: inherit; }
 
 /* "Installation details": a disclosure with a rotating chevron over the

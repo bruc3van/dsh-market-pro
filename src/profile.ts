@@ -23,7 +23,7 @@ import { readFile, readdir, realpath, rename, rm, writeFile } from 'node:fs/prom
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { isMap, isScalar, isSeq, parse, parseDocument, type ScalarTag } from 'yaml'
-import { REPOSITORY_SLUG_PATTERN } from './shapes.ts'
+import { normalizeRepoDirectory, parseGitHubInstallSpec, parseGitHubRepoSlug, type GitHubLocator } from './installInfo.ts'
 
 /** Environment variable overriding the default harness home. */
 export const DSH_HOME_ENV = 'DSH_HOME'
@@ -439,9 +439,15 @@ export function packageDirFromProfile(profileDir: string, packageName: string): 
 export interface BundleInfo {
   version: string
   description: string
-  /** `owner/name` when the manifest points at a GitHub repository; '' otherwise. */
+  /** `owner/name` when the manifest or install spec points at a GitHub repository; '' otherwise. */
   repository: string
+  /** Normalized subdirectory inside `repository` (e.g. `packages/dsh-plugin`), or `''` for repo root. */
+  repositoryDirectory: string
   entries: { id: string; name: string }[]
+}
+
+function githubSlugFromUrl(url: string): string {
+  return parseGitHubRepoSlug(url, { allowBareSlug: true })
 }
 
 /**
@@ -472,26 +478,50 @@ export function repositorySlugOf(manifest: unknown): string {
   } else {
     return ''
   }
-  const trimmed = url.trim()
-  // The shorthand forms: a bare `owner/name`, optionally with the `github:`
-  // host prefix npm treats as the default.
-  const shorthand = trimmed.startsWith('github:') ? trimmed.slice('github:'.length) : trimmed
-  if (REPOSITORY_SLUG_PATTERN.test(shorthand)) return shorthand
-  // The URL forms: git+https://, https://, git://, ssh://git@ and the scp-like
-  // git@github.com:owner/name — all reduced by their host and path.
-  const match = /^(?:git\+)?(?:https?|git|ssh):\/\/(?:[^@/]*@)?github\.com\/(.+)$/.exec(trimmed)
-    ?? /^(?:git\+ssh:\/\/)?git@github\.com:(.+)$/.exec(trimmed)
-  if (match === null) return ''
-  // Trailing slashes come off FIRST: `owner/name.git/` is a real spelling,
-  // and stripping the suffix before the slash leaves `.git` attached — which
-  // the slug pattern accepts (it allows dots), so the wrong slug would travel
-  // on and silently join nothing.
-  const path = match[1]!.replace(/\/+$/, '').replace(/\.git$/, '')
-  return REPOSITORY_SLUG_PATTERN.test(path) ? path : ''
+  return githubSlugFromUrl(url)
+}
+
+/**
+ * Resolve the GitHub repository and optional subdirectory for an installed
+ * package from its manifest `repository` field and/or the profile's
+ * `dependencies` git spec. Preserves `directory` / `#path:...` so monorepo and
+ * subdirectory plugins match their exact catalog target without conflating
+ * sibling packages.
+ */
+export function repositoryLocatorOf(manifest: unknown, dependencySpec?: string): GitHubLocator {
+  const field = (manifest as { repository?: unknown } | null)?.repository
+  let repository = ''
+  let directory = ''
+  if (typeof field === 'string') {
+    repository = githubSlugFromUrl(field)
+  } else if (field !== null && typeof field === 'object') {
+    const record = field as { url?: unknown; directory?: unknown }
+    if (typeof record.url === 'string') {
+      repository = githubSlugFromUrl(record.url)
+      if (repository !== '' && typeof record.directory === 'string') {
+        directory = normalizeRepoDirectory(record.directory)
+      }
+    }
+  }
+  const depLocator = typeof dependencySpec === 'string' ? parseGitHubInstallSpec(dependencySpec) : null
+  if (repository !== '') {
+    if (directory === '' && depLocator !== null
+      && depLocator.repository.toLowerCase() === repository.toLowerCase()
+      && depLocator.directory !== '') {
+      return { repository, directory: depLocator.directory }
+    }
+    return { repository, directory }
+  }
+  if (depLocator !== null) return depLocator
+  return { repository: '', directory: '' }
 }
 
 /** Read one installed bundle: its manifest display facts and its patch's entry rows. */
-export async function readBundleInfo(profileDir: string, packageName: string): Promise<BundleInfo> {
+export async function readBundleInfo(
+  profileDir: string,
+  packageName: string,
+  dependencySpec?: string,
+): Promise<BundleInfo> {
   const dir = packageDirFromProfile(profileDir, packageName)
   if (dir === undefined) {
     throw new Error(`package ${packageName} is not resolvable from the profile`)
@@ -505,10 +535,12 @@ export async function readBundleInfo(profileDir: string, packageName: string): P
   for (const file of files) patches.push(...await readPatchList(join(dir, file)))
   const seen = new Set<string>()
   const entries = collectEntryRows(patches).filter(entry => !seen.has(entry.id) && seen.add(entry.id))
+  const locator = repositoryLocatorOf(manifest, dependencySpec)
   return {
     version: typeof (manifest as { version?: unknown }).version === 'string' ? (manifest as { version: string }).version : '',
     description: typeof manifest.description === 'string' ? manifest.description : '',
-    repository: repositorySlugOf(manifest),
+    repository: locator.repository,
+    repositoryDirectory: locator.directory,
     entries,
   }
 }

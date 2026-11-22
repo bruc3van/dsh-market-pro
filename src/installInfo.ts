@@ -1,15 +1,99 @@
 /** Feed installation metadata is data, never a shell command. */
+import { REPOSITORY_SLUG_PATTERN } from './shapes.ts'
+
+const NPM_INSTALL_SPEC_PATTERN = /^((?:@[a-z0-9._-]+\/)?[a-z0-9][a-z0-9._-]*)(?:@[a-zA-Z0-9.*^~+_-][a-zA-Z0-9.*^~+_-]*)?$/
+
+/** Maximum length accepted for a normalized repository subdirectory on the wire. */
+export const MAX_REPO_DIRECTORY_LENGTH = 1024
+
+/** A GitHub repository and optional normalized subdirectory path. */
+export interface GitHubLocator {
+  readonly repository: string
+  readonly directory: string
+}
+
+/** Normalize a repository subdirectory path (`packages/dsh-plugin`), or `''` for root / unsafe / overlong paths. */
+export function normalizeRepoDirectory(raw: string): string {
+  if (raw.length > MAX_REPO_DIRECTORY_LENGTH * 4) return ''
+  const cleaned = raw.trim().replaceAll('\\', '/').replace(/^(?:\.\/)+/, '').replace(/^\/+/, '').replace(/\/+$/, '')
+  if (cleaned === '' || cleaned === '.') return ''
+  const parts = cleaned.split('/').filter(Boolean)
+  if (parts.length === 0 || parts.some(part => part === '.' || part === '..' || /[\x00-\x1f]/.test(part))) return ''
+  const normalized = parts.join('/')
+  return normalized.length <= MAX_REPO_DIRECTORY_LENGTH ? normalized : ''
+}
+
+/** Extract the npm package name from an npm install spec (`@scope/pkg@1.2.3` → `@scope/pkg`), or `''`. */
+export function packageNameFromInstallSpec(spec: string): string {
+  const match = NPM_INSTALL_SPEC_PATTERN.exec(spec.trim())
+  return match?.[1] ?? ''
+}
+
+/**
+ * Reduce a GitHub URL or shorthand (`github:owner/name`, optional bare `owner/name`)
+ * to `owner/name`, stripping trailing slashes and `.git` case-insensitively.
+ */
+export function parseGitHubRepoSlug(
+  value: string,
+  options: { allowBareSlug?: boolean; allowCodeload?: boolean } = {},
+): string {
+  const trimmed = value.trim()
+  if (trimmed === '') return ''
+  if (trimmed.toLowerCase().startsWith('github:')) {
+    const slug = trimmed.slice('github:'.length).replace(/\/+$/, '').replace(/\.git$/i, '')
+    return REPOSITORY_SLUG_PATTERN.test(slug) ? slug : ''
+  }
+  if (options.allowBareSlug && REPOSITORY_SLUG_PATTERN.test(trimmed)) return trimmed
+  const urlMatch = /^(?:git\+)?(?:https?|git|ssh):\/\/(?:[^@/]*@)?github\.com\/(.+)$/i.exec(trimmed)
+    ?? /^(?:git\+ssh:\/\/)?git@github\.com:(.+)$/i.exec(trimmed)
+  if (urlMatch !== null) {
+    const slug = urlMatch[1]!.replace(/\/+$/, '').replace(/\.git$/i, '')
+    return REPOSITORY_SLUG_PATTERN.test(slug) ? slug : ''
+  }
+  if (options.allowCodeload) {
+    const codeloadMatch = /^https:\/\/codeload\.github\.com\/([^/]+\/[^/]+)\//i.exec(trimmed)
+    if (codeloadMatch !== null && REPOSITORY_SLUG_PATTERN.test(codeloadMatch[1]!)) {
+      return codeloadMatch[1]!
+    }
+  }
+  return ''
+}
+
+/**
+ * Extract the GitHub `owner/name` and optional `#path:...` subdirectory from a
+ * catalog install target or profile `dependencies` git spec. Rejects invalid
+ * `#path:` values instead of degrading them to the repository root.
+ */
+export function parseGitHubInstallSpec(spec: string): GitHubLocator | null {
+  const trimmed = spec.trim()
+  if (trimmed === '') return null
+  const hashIndex = trimmed.indexOf('#')
+  const base = hashIndex >= 0 ? trimmed.slice(0, hashIndex) : trimmed
+  const hash = hashIndex >= 0 ? trimmed.slice(hashIndex + 1) : ''
+  const pathMatch = /(?:^|&)path:([^&#]*)/.exec(hash)
+  let directory = ''
+  if (pathMatch !== null) {
+    let rawDir = pathMatch[1]!
+    try { rawDir = decodeURIComponent(rawDir) } catch { /* keep raw */ }
+    const normalized = normalizeRepoDirectory(rawDir)
+    const explicitRoot = /^\s*(?:\.?\/+|\.)?\s*$/.test(rawDir.replaceAll('\\', '/'))
+    if (normalized === '' && !explicitRoot) return null
+    directory = normalized
+  }
+  const repository = parseGitHubRepoSlug(base, { allowCodeload: true })
+  return repository !== '' ? { repository, directory } : null
+}
 
 export function isInstallSpec(value: string): boolean {
   if (value.length > 2048 || /[\s\x00-\x1f`$<>\\]/.test(value)) return false
-  if (/^(?:@[a-z0-9._-]+\/)?[a-z0-9][a-z0-9._-]*(?:@[a-zA-Z0-9.*^~+_-][a-zA-Z0-9.*^~+_-]*)?$/.test(value)) return true
+  if (NPM_INSTALL_SPEC_PATTERN.test(value)) return true
   try {
     const url = new URL(value.replace(/^git\+/, ''))
     return url.protocol === 'https:' && !url.username && !url.password && !url.search
       && ['github.com', 'codeload.github.com', 'raw.githubusercontent.com', 'gitee.com'].includes(url.hostname)
       && /^\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_./-]+)?$/.test(url.pathname)
       && !url.pathname.split('/').some(p => p === '.' || p === '..')
-      && (!url.hash || /^#(?:[A-Za-z0-9_./-]+)?(?:&?path:\/?[A-Za-z0-9_./-]*)?$/.test(url.hash))
+      && (!url.hash || (/^#(?:[A-Za-z0-9_./-]+)?(?:&?path:\/?[A-Za-z0-9_./-]*)?$/.test(url.hash) && !url.hash.includes('..')))
   } catch { return false }
 }
 export interface InstallInfo {

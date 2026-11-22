@@ -428,6 +428,129 @@ test('aiSearch merges monorepo/featured entries, avoids sibling false-installed,
   assert.equal(fixtureDetail.reason, '画架构图又快又清晰')
 })
 
+test('aiSearch matches git subdirectory plugins via repositoryDirectory and ignores external companion targets', () => {
+  const drawioRepo = makePlugin({
+    fullName: 'DayuanJiang/next-ai-draw-io',
+    owner: 'DayuanJiang',
+    name: 'next-ai-draw-io',
+    titleZh: 'Next AI Draw.io',
+    description: 'draw.io diagrams in DSH',
+    stars: 37000,
+    installStatus: 'command',
+    installInfo: {
+      mode: 'command',
+      targets: [{ install: 'https://github.com/DayuanJiang/next-ai-draw-io#path:/packages/dsh-plugin', profile: 'web', note: '' }],
+      tasks: [],
+      requirements: [],
+      note: '',
+      manual: '',
+    },
+  })
+  const multiRepo = makePlugin({
+    fullName: 'rison114514/dsh-endfield-ui',
+    owner: 'rison114514',
+    name: 'dsh-endfield-ui',
+    description: 'Endfield theme',
+    stars: 99,
+    installStatus: 'command',
+    installInfo: {
+      mode: 'command',
+      targets: [
+        { install: 'https://github.com/rison114514/dsh-endfield-ui#path:/endfield-ui-plugin', profile: 'web', note: '' },
+        { install: 'dsh-better-sidebar', profile: 'desktop', note: '' },
+      ],
+      tasks: [],
+      requirements: [],
+      note: '',
+      manual: '',
+    },
+  })
+  const catalog: MarketCatalog = {
+    items: [drawioRepo, multiRepo],
+    categories: [{ key: 'web-browser', zh: '网页与浏览器', en: 'Web & Browser', count: 2 }],
+    fetchedAt: '2026-11-22T00:00:00Z',
+    refreshedAt: '2026-11-22T00:00:00Z',
+    scanned: 2,
+  }
+  const installed: readonly MarketInstalledPackage[] = [
+    {
+      packageName: '@next-ai-drawio/dsh',
+      version: '0.1.0',
+      description: 'draw.io',
+      repository: 'DayuanJiang/next-ai-draw-io',
+      repositoryDirectory: 'packages/dsh-plugin',
+      self: false,
+      inBox: false,
+      unregistered: false,
+      enabled: true,
+      entries: [],
+      error: '',
+      heldDown: false,
+    },
+    {
+      packageName: 'dsh-better-sidebar',
+      version: '1.0.0',
+      description: 'sidebar',
+      repository: 'omdsh-dev/DSH-better-sidebar',
+      self: false,
+      inBox: false,
+      unregistered: false,
+      enabled: true,
+      entries: [],
+      error: '',
+      heldDown: false,
+    },
+  ]
+
+  const result = searchAiCatalog(catalog, false, installed, { scope: 'all' })
+  const foundDrawio = result.entries.find(entry => entry.fullName === 'DayuanJiang/next-ai-draw-io')
+  const foundMulti = result.entries.find(entry => entry.fullName === 'rison114514/dsh-endfield-ui')
+  assert.ok(foundDrawio && foundMulti)
+  assert.equal(foundDrawio.installed, true)
+  assert.equal(foundDrawio.installedVersion, '0.1.0')
+  assert.equal(foundMulti.installed, false)
+
+  // Explicit #path: or npm targets must not match sibling packages via repo/subRepo fallback,
+  // and manual-mode rows must not match command targets.
+  const siblingPathCard = makePlugin({
+    fullName: 'DayuanJiang/next-ai-draw-io',
+    owner: 'DayuanJiang',
+    name: 'next-ai-draw-io',
+    installStatus: 'command',
+    installInfo: {
+      mode: 'command',
+      targets: [{ install: 'https://github.com/DayuanJiang/next-ai-draw-io#path:/packages/other', profile: 'web', note: '' }],
+      tasks: [], requirements: [], note: '', manual: '',
+    },
+  })
+  const siblingNpmCard = makePlugin({
+    fullName: 'DayuanJiang/next-ai-draw-io',
+    owner: 'DayuanJiang',
+    name: 'next-ai-draw-io',
+    installStatus: 'command',
+    installInfo: {
+      mode: 'command',
+      targets: [{ install: '@next-ai-drawio/other', profile: 'web', note: '' }],
+      tasks: [], requirements: [], note: '', manual: '',
+    },
+  })
+  const manualCard = makePlugin({
+    fullName: 'other/manual',
+    owner: 'other',
+    name: 'manual',
+    installStatus: 'manual',
+    installInfo: {
+      mode: 'manual',
+      targets: [{ install: '@next-ai-drawio/dsh', profile: 'web', note: '' }],
+      tasks: [], requirements: [], note: '', manual: 'See README',
+    },
+  })
+  for (const card of [siblingPathCard, siblingNpmCard, manualCard]) {
+    const check = searchAiCatalog({ ...catalog, items: [card] }, false, installed, { scope: 'all' })
+    assert.equal(check.entries[0]?.installed, false)
+  }
+})
+
 test('built-in dsh-market-pro skill registers into real SkillRegistry, allows user override, and toggles live', async () => {
   const ctx = new Context()
   try {

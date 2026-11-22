@@ -1,3 +1,4 @@
+import { type GitHubLocator } from './installInfo.ts';
 /** Environment variable overriding the default harness home. */
 export declare const DSH_HOME_ENV = "DSH_HOME";
 /** Directory under the harness home holding every profile. */
@@ -169,8 +170,10 @@ export declare function packageDirFromProfile(profileDir: string, packageName: s
 export interface BundleInfo {
     version: string;
     description: string;
-    /** `owner/name` when the manifest points at a GitHub repository; '' otherwise. */
+    /** `owner/name` when the manifest or install spec points at a GitHub repository; '' otherwise. */
     repository: string;
+    /** Normalized subdirectory inside `repository` (e.g. `packages/dsh-plugin`), or `''` for repo root. */
+    repositoryDirectory: string;
     entries: {
         id: string;
         name: string;
@@ -190,8 +193,16 @@ export interface BundleInfo {
  * @returns the `owner/name` slug, or '' when the field names no GitHub repository.
  */
 export declare function repositorySlugOf(manifest: unknown): string;
+/**
+ * Resolve the GitHub repository and optional subdirectory for an installed
+ * package from its manifest `repository` field and/or the profile's
+ * `dependencies` git spec. Preserves `directory` / `#path:...` so monorepo and
+ * subdirectory plugins match their exact catalog target without conflating
+ * sibling packages.
+ */
+export declare function repositoryLocatorOf(manifest: unknown, dependencySpec?: string): GitHubLocator;
 /** Read one installed bundle: its manifest display facts and its patch's entry rows. */
-export declare function readBundleInfo(profileDir: string, packageName: string): Promise<BundleInfo>;
+export declare function readBundleInfo(profileDir: string, packageName: string, dependencySpec?: string): Promise<BundleInfo>;
 /**
  * Set or clear this manager's disable rows for the given entry ids in the
  * profile's user patch layer — the edit every enable/disable/uninstall funnel

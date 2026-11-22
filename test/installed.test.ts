@@ -24,6 +24,7 @@ import {
   readManifest,
   removeBundle,
   removePackageInstallGate,
+  repositoryLocatorOf,
   repositorySlugOf,
   resolveProfileDir,
   setEntryDisabled,
@@ -34,7 +35,8 @@ import {
 } from '../src/profile.ts'
 import { createInstalledManager, type PendingUninstall, type RemoveDependencyResult } from '../src/installed.ts'
 import { adoptDomainState, initialDomainState, safeMarketDomainState, type SafeMarketDomainState } from '../src/store.ts'
-import { describeInstalled, ownedBy, ownedIndexOf } from '../src/client/owned.ts'
+import { describeInstalled, hasRemainingTargets, ownedBy, ownedByTarget, ownedIndexOf } from '../src/client/owned.ts'
+import { MAX_REPO_DIRECTORY_LENGTH, normalizeRepoDirectory, parseGitHubInstallSpec } from '../src/installInfo.ts'
 import { isSafeVersion } from '../src/shapes.ts'
 import {
   marketInstalledResultSchema,
@@ -1202,6 +1204,210 @@ test('repositorySlugOf strips a trailing slash before the .git suffix, not after
   // the wrong slug travelled on and silently joined nothing.
   assert.equal(repositorySlugOf({ repository: 'https://github.com/owner/name.git/' }), 'owner/name')
   assert.equal(repositorySlugOf({ repository: 'https://github.com/owner/name/' }), 'owner/name')
+})
+
+test('repositoryLocatorOf preserves repository + directory from manifest and git dependency specs', () => {
+  // Subdirectory plugin like @next-ai-drawio/dsh installed from DayuanJiang/next-ai-draw-io
+  assert.deepEqual(
+    repositoryLocatorOf(
+      { repository: { type: 'git', url: 'git+https://github.com/DayuanJiang/next-ai-draw-io.git', directory: 'packages/dsh-plugin' } },
+      'github:DayuanJiang/next-ai-draw-io#path:/packages/dsh-plugin',
+    ),
+    { repository: 'DayuanJiang/next-ai-draw-io', directory: 'packages/dsh-plugin' },
+  )
+  // Manifest omits directory, while git dependency spec pins the exact subfolder
+  assert.deepEqual(
+    repositoryLocatorOf(
+      { repository: { type: 'git', url: 'https://github.com/rison114514/dsh-endfield-ui' } },
+      'github:rison114514/dsh-endfield-ui#path:/endfield-ui-plugin',
+    ),
+    { repository: 'rison114514/dsh-endfield-ui', directory: 'endfield-ui-plugin' },
+  )
+  // Manifest omits repository completely, while profile dependencies records github: spec
+  assert.deepEqual(
+    repositoryLocatorOf({}, 'github:owner/custom-repo#main&path:/packages/plugin/'),
+    { repository: 'owner/custom-repo', directory: 'packages/plugin' },
+  )
+  // Unsafe traversal directory is discarded cleanly
+  assert.deepEqual(
+    repositoryLocatorOf({ repository: { url: 'https://github.com/owner/repo.git', directory: '../escape' } }),
+    { repository: 'owner/repo', directory: '' },
+  )
+})
+
+test('list reports repository and repositoryDirectory for subdirectory plugins and joins the catalog card', async () => {
+  const { home, profileDir } = await makeHome()
+  try {
+    const manifest = await readManifest(profileDir)
+    manifest.dependencies!['@next-ai-drawio/dsh'] = 'github:DayuanJiang/next-ai-draw-io#path:/packages/dsh-plugin'
+    manifest.dsh!.profile!.bundles!.push('@next-ai-drawio/dsh')
+    await writeManifest(profileDir, manifest)
+    await makeBundle(profileDir, '@next-ai-drawio/dsh', '- insert:\n    - id: drawio\n      name: "@next-ai-drawio/dsh"\n')
+    const pkgManifestPath = join(profileDir, 'node_modules', '@next-ai-drawio/dsh', 'package.json')
+    const pkgManifest = JSON.parse(await readFile(pkgManifestPath, 'utf8')) as Record<string, unknown>
+    await writeFile(pkgManifestPath, JSON.stringify({
+      ...pkgManifest,
+      version: '0.1.0',
+      repository: { type: 'git', url: 'git+https://github.com/DayuanJiang/next-ai-draw-io.git', directory: 'packages/dsh-plugin' },
+    }, undefined, 2))
+    const { loader } = stubLoader([{ id: 'include:drawio' }])
+    const listed = marketInstalledResultSchema.parse(await makeManager(home, loader).list())
+    const drawioPkg = listed.packages.find(pkg => pkg.packageName === '@next-ai-drawio/dsh')
+    assert.ok(drawioPkg)
+    assert.equal(drawioPkg.repository, 'DayuanJiang/next-ai-draw-io')
+    assert.equal(drawioPkg.repositoryDirectory, 'packages/dsh-plugin')
+
+    const index = ownedIndexOf(listed.packages)
+    const drawioCard: MarketPlugin = {
+      ...row('DayuanJiang/next-ai-draw-io'),
+      installStatus: 'command',
+      installInfo: {
+        mode: 'command',
+        targets: [{ install: 'https://github.com/DayuanJiang/next-ai-draw-io#path:/packages/dsh-plugin', profile: 'web', note: '' }],
+        tasks: [],
+        requirements: [],
+        note: '',
+        manual: '',
+      },
+    }
+    assert.equal(ownedBy(index, drawioCard), drawioPkg)
+    assert.equal(hasRemainingTargets(index, drawioCard), false)
+  } finally {
+    await rm(home, { recursive: true, force: true })
+  }
+})
+
+test('ownedBy matches subdirectory, npm-targeted, and multi-target repository cards without false positives', () => {
+  const mole = owned({ packageName: 'dsh-mole', version: '0.1.4', repository: 'tw93/Mole', repositoryDirectory: 'plugins/mole' })
+  const sidebar = owned({ packageName: 'dsh-better-sidebar', version: '1.0.0', repository: 'omdsh-dev/DSH-better-sidebar' })
+  const teamCore = owned({ packageName: 'dsh-team-control', version: '0.5.0', repository: 'hunmer/dsh-team-control' })
+  const subA = owned({ packageName: '@mono/a', version: '1.0.0', repository: 'owner/mono', repositoryDirectory: 'packages/a' })
+  const index = ownedIndexOf([mole, sidebar, teamCore, subA])
+
+  // Single npm target on a repository card whose manifest has repository.directory (tw93/Mole → dsh-mole)
+  const moleCard: MarketPlugin = {
+    ...row('tw93/Mole'),
+    installStatus: 'command',
+    installInfo: {
+      mode: 'command',
+      targets: [{ install: 'dsh-mole', profile: 'web', note: '' }],
+      tasks: [], requirements: [], note: '', manual: '',
+    },
+  }
+  assert.equal(ownedBy(index, moleCard), mole)
+  assert.equal(hasRemainingTargets(index, moleCard), false)
+
+  // Multi-target card listing an external companion plugin (dsh-better-sidebar) must NOT claim the repo card
+  const endfieldCard: MarketPlugin = {
+    ...row('rison114514/dsh-endfield-ui'),
+    installStatus: 'command',
+    installInfo: {
+      mode: 'command',
+      targets: [
+        { install: 'https://github.com/rison114514/dsh-endfield-ui#path:/endfield-ui-plugin', profile: 'web', note: '' },
+        { install: 'dsh-better-sidebar', profile: 'desktop', note: '' },
+      ],
+      tasks: [], requirements: [], note: '', manual: '',
+    },
+  }
+  assert.equal(ownedBy(index, endfieldCard), undefined)
+  // DirectInstallPanel still recognizes the companion target itself as already installed
+  assert.equal(ownedByTarget(index, 'dsh-better-sidebar'), sidebar)
+
+  // Multi-target card with 1 of 2 own plugins installed is owned AND still exposes remaining targets
+  const teamCard: MarketPlugin = {
+    ...row('hunmer/dsh-team-control'),
+    installStatus: 'command',
+    installInfo: {
+      mode: 'command',
+      targets: [
+        { install: 'dsh-team-control', profile: 'web', note: '' },
+        { install: 'dsh-team-control-ui', profile: 'web', note: '' },
+      ],
+      tasks: [], requirements: [], note: '', manual: '',
+    },
+  }
+  assert.equal(ownedBy(index, teamCard), teamCore)
+  assert.equal(hasRemainingTargets(index, teamCard), true)
+  assert.equal(ownedByTarget(index, 'dsh-team-control'), teamCore)
+  assert.equal(ownedByTarget(index, 'dsh-team-control-ui'), undefined)
+
+  // A different subdirectory target in the same monorepo does NOT match packages/a
+  const monoOtherCard: MarketPlugin = {
+    ...row('owner/mono'),
+    installStatus: 'command',
+    installInfo: {
+      mode: 'command',
+      targets: [{ install: 'https://github.com/owner/mono#path:/packages/b', profile: 'web', note: '' }],
+      tasks: [], requirements: [], note: '', manual: '',
+    },
+  }
+  assert.equal(ownedBy(index, monoOtherCard), undefined)
+})
+
+test('normalizeRepoDirectory caps length, parseGitHubInstallSpec rejects invalid #path:, and repositorySlugOf matches case-insensitively', () => {
+  const exactMax = 'a'.repeat(MAX_REPO_DIRECTORY_LENGTH)
+  const overMax = 'a'.repeat(MAX_REPO_DIRECTORY_LENGTH + 1)
+  assert.equal(normalizeRepoDirectory(exactMax), exactMax)
+  assert.equal(normalizeRepoDirectory(overMax), '')
+  assert.deepEqual(
+    repositoryLocatorOf({ repository: { url: 'https://github.com/owner/repo.git', directory: overMax } }),
+    { repository: 'owner/repo', directory: '' },
+  )
+
+  // Invalid #path: must return null instead of degrading to repo root
+  assert.equal(parseGitHubInstallSpec('https://github.com/owner/repo#path:../escape'), null)
+  assert.equal(parseGitHubInstallSpec('github:owner/repo#main&path:a/../b'), null)
+  assert.equal(parseGitHubInstallSpec(`https://github.com/owner/repo#path:/${overMax}`), null)
+  // Explicit root #path:/ or #path:. still resolves to root
+  assert.deepEqual(parseGitHubInstallSpec('https://github.com/owner/repo#path:/'), { repository: 'owner/repo', directory: '' })
+  assert.deepEqual(parseGitHubInstallSpec('https://github.com/owner/repo#path:.'), { repository: 'owner/repo', directory: '' })
+
+  // Unified case-insensitive GitHub slug parsing with trailing slash and .git stripping
+  assert.equal(repositorySlugOf({ repository: 'GITHUB:owner/repo.git/' }), 'owner/repo')
+  assert.equal(repositorySlugOf({ repository: 'https://GITHUB.COM/owner/repo.GIT/' }), 'owner/repo')
+})
+
+test('explicit #path: or npm targets never fall back to root repo, subRepo, or short name', () => {
+  const rootMono = owned({ packageName: 'mono-root', repository: 'owner/mono' })
+  const unnamedMono = owned({ packageName: 'mono', repository: '' })
+  const subA = owned({ packageName: '@mono/a', repository: 'owner/mono', repositoryDirectory: 'packages/a' })
+
+  // Card explicitly targeting #path:/packages/b must not match a root package or short-name package
+  const pathBCard: MarketPlugin = {
+    ...row('owner/mono'),
+    installStatus: 'command',
+    installInfo: {
+      mode: 'command',
+      targets: [{ install: 'https://github.com/owner/mono#path:/packages/b', profile: 'web', note: '' }],
+      tasks: [], requirements: [], note: '', manual: '',
+    },
+  }
+  assert.equal(ownedBy(ownedIndexOf([rootMono, unnamedMono]), pathBCard), undefined)
+
+  // Card explicitly targeting npm package `pkg-b` must not fall back to sibling subRepo `@mono/a`
+  const npmBCard: MarketPlugin = {
+    ...row('owner/mono'),
+    installStatus: 'command',
+    installInfo: {
+      mode: 'command',
+      targets: [{ install: 'pkg-b', profile: 'web', note: '' }],
+      tasks: [], requirements: [], note: '', manual: '',
+    },
+  }
+  assert.equal(ownedBy(ownedIndexOf([subA, rootMono]), npmBCard), undefined)
+
+  // Manual-mode card does not treat its reference targets as command targets
+  const manualCard: MarketPlugin = {
+    ...row('other/repo'),
+    installStatus: 'manual',
+    installInfo: {
+      mode: 'manual',
+      targets: [{ install: '@mono/a', profile: 'web', note: '' }],
+      tasks: [], requirements: [], note: '', manual: 'See README',
+    },
+  }
+  assert.equal(ownedBy(ownedIndexOf([subA]), manualCard), undefined)
 })
 
 // ——— the desktop client's in-box seat: listed so it can be removed ———

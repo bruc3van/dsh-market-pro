@@ -1,9 +1,15 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createDirectInstaller, type InstallHost } from '../src/client/directInstall.ts'
+import {
+  createDirectInstaller,
+  reconcileSelectedTargets,
+  shouldRefreshInstalledAfterDirect,
+  type InstallHost,
+} from '../src/client/directInstall.ts'
+import { ownedIndexOf } from '../src/client/owned.ts'
 import { parseInstallInfo, isInstallSpec } from '../src/installInfo.ts'
 import { deriveMarket } from '../src/catalog.ts'
-import { marketCatalogSchema } from '../src/contract.ts'
+import { marketCatalogSchema, type MarketInstalledPackage } from '../src/contract.ts'
 
 function host(overrides: Partial<InstallHost> = {}): InstallHost {
   return {
@@ -53,7 +59,7 @@ test('the current upstream Gitee target survives the catalog and wire validation
   }
 })
 test('feed rejects shell commands, flags, local paths and credential URLs', () => {
-  for (const value of ['npm install demo', '--help', '/tmp/demo', 'file:../demo', 'demo;id', 'demo@$(id)', 'https://user:pass@github.com/a/b']) assert.equal(isInstallSpec(value), false, value)
+  for (const value of ['npm install demo', '--help', '/tmp/demo', 'file:../demo', 'demo;id', 'demo@$(id)', 'https://user:pass@github.com/a/b', 'https://github.com/a/b#path:/../escape', 'https://github.com/a/b#main&path:a/../b', 'https://github.com/a/b#../ref']) assert.equal(isInstallSpec(value), false, value)
   for (const value of ['demo', '@owner/demo@1.2.3', 'demo@latest', 'git+https://github.com/a/b.git', 'https://github.com/a/b#main', 'https://github.com/a/b#main&path:/packages/plugin', 'https://codeload.github.com/a/b/tar.gz/refs/heads/main', 'https://raw.githubusercontent.com/a/b/main/dist/plugin.tgz', 'https://github.com/a/b/releases/download/v1/demo.tgz']) assert.equal(isInstallSpec(value), true, value)
   assert.equal(parseInstallInfo({ mode: 'manual', manual_instructions: 'Read README', targets: [{ install: 'demo' }] })?.mode, 'manual')
 })
@@ -257,4 +263,63 @@ test('approvals name only the current pending builds and retries carry none', as
   await installer.retry()
   assert.deepEqual(calls, [undefined, ['native-addon'], ['second-addon'], undefined])
   assert.equal(installer.getSnapshot().phase, 'done')
+})
+
+test('reconcileSelectedTargets advances past async already-installed targets while respecting manual edits', () => {
+  const targets = [
+    { install: 'dsh-team-control', profile: 'web', note: '' },
+    { install: 'dsh-team-control-ui', profile: 'web', note: '' },
+  ]
+  const installedA = ownedIndexOf([{
+    packageName: 'dsh-team-control',
+    version: '1.0.0',
+    description: '',
+    repository: 'hunmer/dsh-team-control',
+    self: false, inBox: false, unregistered: false, enabled: true, entries: [], error: '', heldDown: false,
+  } as MarketInstalledPackage])
+  const installedBoth = ownedIndexOf([
+    {
+      packageName: 'dsh-team-control',
+      version: '1.0.0',
+      description: '',
+      repository: 'hunmer/dsh-team-control',
+      self: false, inBox: false, unregistered: false, enabled: true, entries: [], error: '', heldDown: false,
+    },
+    {
+      packageName: 'dsh-team-control-ui',
+      version: '1.0.0',
+      description: '',
+      repository: 'hunmer/dsh-team-control',
+      self: false, inBox: false, unregistered: false, enabled: true, entries: [], error: '', heldDown: false,
+    },
+  ])
+
+  // Before ownedIndex loads, defaults to [0]
+  assert.deepEqual(reconcileSelectedTargets(targets, [], undefined, false), [0])
+  // Once ownedIndex arrives showing target 0 is installed, auto-advances to [1]
+  assert.deepEqual(reconcileSelectedTargets(targets, [0], installedA, false), [1])
+  // If user manually unchecked everything, do not re-select automatically
+  assert.deepEqual(reconcileSelectedTargets(targets, [], installedA, true), [])
+  // If user checked both and target 0 became installed, keep only [1]
+  assert.deepEqual(reconcileSelectedTargets(targets, [0, 1], installedA, true), [1])
+  // When all targets are installed, selection is empty
+  assert.deepEqual(reconcileSelectedTargets(targets, [1], installedBoth, false), [])
+})
+
+test('shouldRefreshInstalledAfterDirect refreshes only when profile state may have changed or diverged', () => {
+  assert.equal(shouldRefreshInstalledAfterDirect({ phase: 'done', queue: [], message: '' }), true)
+  assert.equal(shouldRefreshInstalledAfterDirect({ phase: 'unavailable', queue: [], message: '' }), true)
+  assert.equal(shouldRefreshInstalledAfterDirect({
+    phase: 'failed',
+    queue: [
+      { spec: 'one', phase: 'done', message: '' },
+      { spec: 'two', phase: 'failed', message: 'pnpm-failed' },
+    ],
+    message: 'pnpm-failed',
+  }), true)
+  assert.equal(shouldRefreshInstalledAfterDirect({ phase: 'failed', queue: [], message: 'already-installed\n...' }), true)
+  assert.equal(shouldRefreshInstalledAfterDirect({ phase: 'failed', queue: [], message: 'ambiguous-install\n...' }), true)
+  assert.equal(shouldRefreshInstalledAfterDirect({ phase: 'failed', queue: [], message: 'not-a-bundle: refused' }), false)
+  assert.equal(shouldRefreshInstalledAfterDirect({ phase: 'failed', queue: [], message: 'build-approval-required' }), false)
+  assert.equal(shouldRefreshInstalledAfterDirect({ phase: 'installing', queue: [], message: '' }), false)
 })

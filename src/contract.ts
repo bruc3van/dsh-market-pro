@@ -11,7 +11,7 @@
  * already fixed the shape of.
  */
 import { z } from 'zod'
-import { isInstallSpec, type InstallInfo } from './installInfo.ts'
+import { isInstallSpec, MAX_REPO_DIRECTORY_LENGTH, normalizeRepoDirectory, type InstallInfo } from './installInfo.ts'
 import type { InvocationDescriptor } from '@deepseek-ai/dsh-typert-protocol'
 // The dependency-free shapes live in their own module so `./index.ts` and
 // `./catalog.ts` can reach them without evaluating every codec below.
@@ -222,6 +222,8 @@ export interface MarketInstalledPackage {
    * package name, and the two are only sometimes spelled alike.
    */
   readonly repository: string
+  /** Normalized subdirectory within `repository` (e.g. `packages/dsh-plugin`), when installed from a subfolder. */
+  readonly repositoryDirectory?: string
   /** The market's own row: listed, but the panel must not disable it. */
   readonly self: boolean
   /**
@@ -422,6 +424,7 @@ export const marketInstalledPackageSchema = z.object({
   // pointing somewhere unparseable must not fail the whole panel read, so the
   // Host reduces it to '' rather than passing the raw field on.
   repository: z.union([z.string().regex(REPOSITORY_SLUG_PATTERN), z.literal('')]),
+  repositoryDirectory: z.string().max(MAX_REPO_DIRECTORY_LENGTH).refine(value => value === '' || normalizeRepoDirectory(value) === value).optional(),
   self: z.boolean(),
   inBox: z.boolean(),
   unregistered: z.boolean(),

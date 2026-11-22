@@ -1,3 +1,5 @@
+import { type InstallInfo } from '../installInfo.ts';
+import type { MarketInstalledPackage } from '../contract.ts';
 type Reply<T> = {
     ok: true;
     value: T;
@@ -74,4 +76,17 @@ export declare function createDirectInstaller(host: () => InstallHost | undefine
     recover(): Promise<void>;
 };
 export type DirectInstaller = ReturnType<typeof createDirectInstaller>;
+/**
+ * Keep checkbox selection aligned with live `ownedIndex` updates before submission:
+ * drop any target that is now installed, and if the user has not manually edited
+ * selection yet, automatically advance to the first uninstalled target.
+ */
+export declare function reconcileSelectedTargets(targets: readonly InstallInfo['targets'][number][], selected: readonly number[], ownedIndex: ReadonlyMap<string, MarketInstalledPackage> | undefined, userTouched: boolean): number[];
+/**
+ * Whether a settled direct-install snapshot warrants re-reading the profile's
+ * installed list. Avoids redundant reloads on `inspect` refusals or script
+ * approval prompts while still reconciling partial batches and already-installed
+ * errors.
+ */
+export declare function shouldRefreshInstalledAfterDirect(state: Pick<DirectState, 'phase' | 'queue' | 'message'>): boolean;
 export {};

@@ -379,11 +379,12 @@ export function createInstalledManager(options: InstalledManagerOptions): Instal
   }
 
   async function list(): Promise<MarketInstalledResult> {
+    let manifest: ProfileManifest
     let bundles: string[]
     let unregistered: string[]
     let seats: string[]
     try {
-      ;({ bundles, unregistered, seats } = await readUserBundles())
+      ;({ manifest, bundles, unregistered, seats } = await readUserBundles())
     } catch (error) {
       return { packages: [], profile: options.profile, error: messageOf(error) }
     }
@@ -402,8 +403,11 @@ export function createInstalledManager(options: InstalledManagerOptions): Instal
       seen.add(packageName)
       const self = packageName === options.selfName
       const bundleEnabled = hostControlsBundles && !flags.inBox ? !flags.unregistered : undefined
+      const dependencySpec = typeof manifest.dependencies?.[packageName] === 'string'
+        ? manifest.dependencies[packageName]
+        : undefined
       try {
-        const info = await readBundleInfo(profileDir, packageName)
+        const info = await readBundleInfo(profileDir, packageName, dependencySpec)
         const entries: MarketInstalledEntry[] = info.entries.map(({ id, name }) => {
           const entry = findLive(live, id)
           return {
@@ -420,6 +424,7 @@ export function createInstalledManager(options: InstalledManagerOptions): Instal
           version: info.version,
           description: info.description,
           repository: info.repository,
+          ...(info.repositoryDirectory !== '' ? { repositoryDirectory: info.repositoryDirectory } : {}),
           self,
           inBox: flags.inBox,
           unregistered: flags.unregistered && bundleEnabled === undefined,
@@ -550,7 +555,9 @@ export function createInstalledManager(options: InstalledManagerOptions): Instal
     // client that may no longer exist to take it back. Removing the files is
     // therefore part of the uninstall, not litter for someone else to sweep.
     const seatDir = inBox ? desktopSeatDir(profileDir, packageName) : undefined
-    const info = await readBundleInfo(profileDir, packageName).catch(() => ({ version: '', description: '', repository: '', entries: [] as { id: string; name: string }[] }))
+    const info = await readBundleInfo(profileDir, packageName).catch(() => ({
+      version: '', description: '', repository: '', repositoryDirectory: '', entries: [] as { id: string; name: string }[],
+    }))
     const ids = info.entries.map(entry => entry.id)
     const faults: UninstallFault[] = []
     // Stop first: a live plugin holds files open, and on Windows that is

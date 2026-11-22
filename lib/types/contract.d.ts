@@ -208,6 +208,8 @@ export interface MarketInstalledPackage {
      * package name, and the two are only sometimes spelled alike.
      */
     readonly repository: string;
+    /** Normalized subdirectory within `repository` (e.g. `packages/dsh-plugin`), when installed from a subfolder. */
+    readonly repositoryDirectory?: string;
     /** The market's own row: listed, but the panel must not disable it. */
     readonly self: boolean;
     /**
@@ -798,6 +800,7 @@ export declare const marketInstalledPackageSchema: z.ZodReadonly<z.ZodObject<{
     version: z.ZodString;
     description: z.ZodString;
     repository: z.ZodUnion<readonly [z.ZodString, z.ZodLiteral<"">]>;
+    repositoryDirectory: z.ZodOptional<z.ZodString>;
     self: z.ZodBoolean;
     inBox: z.ZodBoolean;
     unregistered: z.ZodBoolean;
@@ -827,6 +830,7 @@ export declare const marketInstalledResultSchema: z.ZodReadonly<z.ZodObject<{
         version: z.ZodString;
         description: z.ZodString;
         repository: z.ZodUnion<readonly [z.ZodString, z.ZodLiteral<"">]>;
+        repositoryDirectory: z.ZodOptional<z.ZodString>;
         self: z.ZodBoolean;
         inBox: z.ZodBoolean;
         unregistered: z.ZodBoolean;

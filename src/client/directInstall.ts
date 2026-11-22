@@ -1,4 +1,6 @@
-import { isInstallSpec } from '../installInfo.ts'
+import { isInstallSpec, type InstallInfo } from '../installInfo.ts'
+import type { MarketInstalledPackage } from '../contract.ts'
+import { ownedByTarget } from './owned.ts'
 
 // Structural boundary for the optional host service. Do not rely on ambient
 // plugin-manager declarations contributed by unrelated development packages.
@@ -178,3 +180,44 @@ export function createDirectInstaller(host: () => InstallHost | undefined) {
   }
 }
 export type DirectInstaller = ReturnType<typeof createDirectInstaller>
+
+/**
+ * Keep checkbox selection aligned with live `ownedIndex` updates before submission:
+ * drop any target that is now installed, and if the user has not manually edited
+ * selection yet, automatically advance to the first uninstalled target.
+ */
+export function reconcileSelectedTargets(
+  targets: readonly InstallInfo['targets'][number][],
+  selected: readonly number[],
+  ownedIndex: ReadonlyMap<string, MarketInstalledPackage> | undefined,
+  userTouched: boolean,
+): number[] {
+  const isInstalled = (index: number): boolean =>
+    ownedIndex !== undefined && ownedByTarget(ownedIndex, targets[index]!.install) !== undefined
+  const remaining = selected.filter(index => index >= 0 && index < targets.length && !isInstalled(index))
+  let next = remaining
+  if (!userTouched && next.length === 0) {
+    const firstUninstalled = targets.findIndex((_, index) => !isInstalled(index))
+    next = firstUninstalled >= 0 ? [firstUninstalled] : []
+  }
+  if (next.length === selected.length && next.every((value, index) => value === selected[index])) {
+    return selected as number[]
+  }
+  return next
+}
+
+/**
+ * Whether a settled direct-install snapshot warrants re-reading the profile's
+ * installed list. Avoids redundant reloads on `inspect` refusals or script
+ * approval prompts while still reconciling partial batches and already-installed
+ * errors.
+ */
+export function shouldRefreshInstalledAfterDirect(
+  state: Pick<DirectState, 'phase' | 'queue' | 'message'>,
+): boolean {
+  if (state.phase === 'done' || state.phase === 'unavailable') return true
+  if (state.phase !== 'failed') return false
+  if (state.queue.some(entry => entry.phase === 'done')) return true
+  const code = state.message.split('\n', 1)[0]?.trim()
+  return code === 'already-installed' || code === 'ambiguous-install'
+}
