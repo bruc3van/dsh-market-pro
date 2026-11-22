@@ -10,7 +10,9 @@ type Reply<T> = {
     };
 };
 export interface UpdateHost {
-    listBundles(): Promise<Reply<readonly (Pick<BundleInfo, 'name' | 'version' | 'installed' | 'update'> & Partial<Pick<BundleInfo, 'enabled'>>)[]>>;
+    listBundles(): Promise<Reply<readonly (Pick<BundleInfo, 'name' | 'version' | 'installed' | 'update'> & Partial<Pick<BundleInfo, 'enabled'>> & {
+        readonly updatable?: boolean;
+    })[]>>;
     listVersions(name: string, options: object): Promise<Reply<PluginVersionList>>;
     updateBundle(name: string, version: string, options: {
         registry?: Registry;

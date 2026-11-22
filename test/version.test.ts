@@ -29,17 +29,17 @@ const plugin = JSON.parse(await readFile(resolve(root, 'dsh.plugin.json'), 'utf8
 }
 
 test('the real rc.5 host accepts our declared baseline without compatibility exemptions', () => {
-  for (const version of ['0.2.2-rc.3', '0.2.2-rc.4', '0.2.2-rc.5', '0.2.2', '0.2.3']) {
+  for (const version of ['0.2.2-rc.1', '0.2.2-rc.2', '0.2.2-rc.3', '0.2.2-rc.4', '0.2.2-rc.5', '0.2.2', '0.2.3']) {
     assert.equal(evaluatePluginCompatibility(pkg, {}, version), undefined)
   }
-  for (const version of ['0.1.7-rc.2', '0.2.0', '0.2.1-rc.4', '0.2.2-rc.2', '0.3.0']) {
+  for (const version of ['0.1.7-rc.2', '0.2.0', '0.2.1-rc.4', '0.2.1-rc.5', '0.3.0']) {
     assert.ok(evaluatePluginCompatibility(pkg, {}, version))
   }
 })
 
 test('DSH dependencies keep the declared runtime and development baseline', () => {
   for (const [kind, expected] of [
-    ['peerDependencies', '>=0.2.2-rc.3 <0.3.0'],
+    ['peerDependencies', '>=0.2.2-rc.1 <0.3.0'],
     ['devDependencies', '0.2.2-rc.5'],
   ] as const) {
     const dependencies = Object.entries(pkg[kind]).filter(([name]) => name.startsWith('@deepseek-ai/dsh-'))

@@ -29,6 +29,7 @@ export interface HostPluginManagerUpdateFace {
         readonly version?: string;
         readonly installed?: boolean;
         readonly update?: 'registry' | 'git';
+        readonly updatable?: boolean;
     }[]>;
     listVersions?: (name: string, options?: object, signal?: AbortSignal) => Promise<{
         readonly status: 'listed';

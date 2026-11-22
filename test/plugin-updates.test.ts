@@ -492,3 +492,27 @@ test('only profile-wide restart reasons block later hot updates', () => {
   assert.equal(blocksHotUpdates(outcome), false)
   assert.equal(blocksHotUpdates(undefined), false)
 })
+
+test('DSH 0.2.2-rc.1 BundleInfo.updatable fallback enables registry probe, check, and update', async () => {
+  const calls: unknown[][] = []
+  const manager = host({
+    listBundles: async () => ok([
+      { name: 'demo', version: '1.0.0', installed: true, updatable: true },
+      { name: 'pinned', version: '1.0.0', installed: true, updatable: false },
+    ]),
+    updateBundle: async (...args) => { calls.push(args); return ok(outcome) },
+  })
+  const updater = createPluginUpdater(() => manager, () => undefined)
+  await updater.probe(['demo', 'pinned'])
+  assert.equal(updater.getSnapshot().available.demo, '2.0.0')
+  assert.equal(updater.getSnapshot().available.pinned, undefined)
+  await updater.check('pinned')
+  assert.equal(updater.getSnapshot().phase, 'error')
+  await updater.check('demo')
+  assert.equal(updater.getSnapshot().phase, 'ready')
+  assert.equal(updater.getSnapshot().kind, 'registry')
+  await updater.confirm()
+  assert.equal(updater.getSnapshot().phase, 'done')
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0]?.[0], 'demo')
+})

@@ -4,7 +4,7 @@
 
 ## 宿主适配
 
-`dsh-market-pro@1.0.0` 的开发依赖固定到 DSH `0.2.2-rc.3`，Cordis / Loader / Schemastery 使用宿主的 `4.1.0` / `1.1.0` / `3.19.0`，Zod 固定到宿主的 `4.6.6`。DSH peer 范围接纳 `0.2.2-rc.1` 起的同系列 RC；`engines.dsh` 沿用 `>=0.1.7-rc.2 <0.3.0`，宿主使用 `includePrerelease: true` 检查。
+`dsh-market-pro@1.0.0` 的开发依赖固定到 DSH `0.2.2-rc.3`，Cordis / Loader / Schemastery 使用宿主的 `4.1.0` / `1.1.0` / `3.19.0`，Zod 固定到宿主的 `4.6.6`。DSH peer 范围与 `engines.dsh` 均放宽到 `>=0.2.2-rc.1 <0.3.0`；开发依赖仍固定到 DSH `0.2.2-rc.5`。
 
 核对了 rc.1 → rc.3 的插件页、侧栏插槽、会话控制器、Loader/Settings 和安装 Remote。`plugins.tab` 新增 owner 的 `update` 回调，市场与 owner 的安装、更新回调保持隔离；侧栏仍通过 `sidebar.panellist` 注册。现有市场直接安装、审查草稿和技能列表接口继续适用。本插件的菜单使用原生 disclosure，没有使用本次改变的宿主浮层定位接口。
 

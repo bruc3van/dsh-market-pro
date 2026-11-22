@@ -148,6 +148,7 @@ export interface HostPluginManagerUpdateFace {
     readonly version?: string
     readonly installed?: boolean
     readonly update?: 'registry' | 'git'
+    readonly updatable?: boolean
   }[]>
   listVersions?: (name: string, options?: object, signal?: AbortSignal) => Promise<{
     readonly status: 'listed'
@@ -264,6 +265,10 @@ function normalizeVersion(value: string): string {
   return value.trim().replace(/^v/i, '')
 }
 
+function bundleUpdateKind(bundle: { readonly update?: 'registry' | 'git'; readonly updatable?: boolean }): 'registry' | 'git' | undefined {
+  return bundle.update ?? (bundle.updatable === true ? 'registry' : undefined)
+}
+
 function extractUpdateFailureReason(result: {
   readonly error?: { readonly code?: string; readonly diagnostic?: string }
   readonly packageResult?: { readonly output?: string }
@@ -346,7 +351,7 @@ async function scanInstalledUpdates(
   if (!manager?.listVersions || !manager.updateBundle) {
     return {
       available: false,
-      reason: 'Host pluginManager update API is unavailable (requires DSH >= 0.2.2-rc.3).',
+      reason: 'Host pluginManager update API is unavailable (requires DSH >= 0.2.2-rc.1).',
       totalInstalled: 0,
       updatable: [],
       upToDateCount: 0,
@@ -374,12 +379,13 @@ async function scanInstalledUpdates(
 
   for (const bundle of matched) {
     signal?.throwIfAborted()
-    if (bundle.update === undefined) {
+    const kind = bundleUpdateKind(bundle)
+    if (kind === undefined) {
       notUpdatable.push(bundle.name)
       continue
     }
     try {
-      if (bundle.update === 'registry') {
+      if (kind === 'registry') {
         const list = await manager.listVersions(bundle.name, {}, signal)
         if (list.status === 'refused') {
           errors.push({ packageName: bundle.name, reason: sanitizeUntrustedText(list.reason, 200) })
@@ -399,7 +405,7 @@ async function scanInstalledUpdates(
           self: bundle.name === PACKAGE_NAME,
           source: { registry: list.registry },
         })
-      } else if (bundle.update === 'git') {
+      } else if (kind === 'git') {
         if (!market) {
           errors.push({ packageName: bundle.name, reason: 'Git update discovery requires the official pluginMarket service.' })
           continue
@@ -461,7 +467,7 @@ async function resolvePinnedUpdates(
   if (!manager?.listVersions || !manager.updateBundle) {
     return {
       available: false,
-      reason: 'Host pluginManager update API is unavailable (requires DSH >= 0.2.2-rc.3).',
+      reason: 'Host pluginManager update API is unavailable (requires DSH >= 0.2.2-rc.1).',
       plan: [],
       unavailable: [],
     }
@@ -482,12 +488,13 @@ async function resolvePinnedUpdates(
       unavailable.push({ packageName: item.packageName, version: targetVersion, reason: 'Plugin is not installed in this profile.' })
       continue
     }
-    if (bundle.update === undefined) {
+    const kind = bundleUpdateKind(bundle)
+    if (kind === undefined) {
       unavailable.push({ packageName: item.packageName, version: targetVersion, reason: 'Official plugin manager does not allow updating this installation.' })
       continue
     }
     try {
-      if (bundle.update === 'registry') {
+      if (kind === 'registry') {
         const list = await manager.listVersions(bundle.name, {}, signal)
         if (list.status === 'refused') {
           unavailable.push({ packageName: bundle.name, version: targetVersion, reason: sanitizeUntrustedText(list.reason, 200) })
@@ -609,7 +616,7 @@ function checkUpdatesMeta(report: {
   if (!report.available) {
     return {
       status: 'unavailable',
-      nextStep: 'Inform the user that Host plugin updates require DSH >= 0.2.2-rc.3.',
+      nextStep: 'Inform the user that Host plugin updates require DSH >= 0.2.2-rc.1.',
     }
   }
   if (report.updatableCount > 0) {
@@ -844,7 +851,7 @@ export function createMarketAiToolDefinition(deps: MarketAiToolDeps): Record<str
             updated: false,
             available: false,
             reason: resolved.reason,
-            nextStep: 'Inform the user that Host plugin updates require DSH >= 0.2.2-rc.3.',
+            nextStep: 'Inform the user that Host plugin updates require DSH >= 0.2.2-rc.1.',
           })
         }
         if (resolved.plan.length === 0) {

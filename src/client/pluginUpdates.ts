@@ -6,11 +6,16 @@ import type {
 
 type Reply<T> = { ok: true; value: T } | { ok: false; error: { message: string } }
 export interface UpdateHost {
-  listBundles(): Promise<Reply<readonly (Pick<BundleInfo, 'name' | 'version' | 'installed' | 'update'> & Partial<Pick<BundleInfo, 'enabled'>>)[]>>
+  listBundles(): Promise<Reply<readonly (Pick<BundleInfo, 'name' | 'version' | 'installed' | 'update'> & Partial<Pick<BundleInfo, 'enabled'>> & { readonly updatable?: boolean })[]>>
   listVersions(name: string, options: object): Promise<Reply<PluginVersionList>>
   updateBundle(name: string, version: string, options: { registry?: Registry; spec?: string; requestId: PluginInstallRequestId }): Promise<Reply<PluginUpdateResult>>
   /** Used only to put back a selection the Host dropped during a refused removal. */
   setBundleEnabled?(name: string, enabled: boolean): Promise<Reply<{ readonly application: string }>>
+}
+
+function bundleUpdateKind(bundle: { readonly update?: 'registry' | 'git'; readonly updatable?: boolean } | undefined): 'registry' | 'git' | undefined {
+  if (!bundle) return undefined
+  return bundle.update ?? (bundle.updatable === true ? 'registry' : undefined)
 }
 
 /** Whether the Host refused the hot removal because the installed version's rows are still running. */
@@ -281,7 +286,7 @@ export function createPluginUpdater(host: () => UpdateHost | undefined, market: 
         const inventory = await api.listBundles()
         if (currentProbe !== probeSeq || !inventory.ok) return
         const eligible = new Set(
-          inventory.value.filter(item => item.installed && item.update !== undefined).map(item => item.name),
+          inventory.value.filter(item => item.installed && bundleUpdateKind(item) !== undefined).map(item => item.name),
         )
         let nextAvailable = state.available
         let nextDetails = state.availableDetails
@@ -300,12 +305,13 @@ export function createPluginUpdater(host: () => UpdateHost | undefined, market: 
         }
         if (pruned) set({ available: nextAvailable, availableDetails: nextDetails })
         const wanted = packageNames === undefined ? undefined : new Set(packageNames)
-        const targets = inventory.value.filter(item => item.installed && item.update !== undefined && (wanted === undefined || wanted.has(item.name)))
+        const targets = inventory.value.filter(item => item.installed && bundleUpdateKind(item) !== undefined && (wanted === undefined || wanted.has(item.name)))
         const indexes = market()
         let gitSources: readonly MarketIndexSummary[] | undefined
         for (const bundle of targets) {
           if (currentProbe !== probeSeq) return
-          if (bundle.update === 'registry') {
+          const kind = bundleUpdateKind(bundle)
+          if (kind === 'registry') {
             const answer = await api.listVersions(bundle.name, {})
             if (currentProbe !== probeSeq) return
             if (!answer.ok) continue
@@ -332,7 +338,7 @@ export function createPluginUpdater(host: () => UpdateHost | undefined, market: 
               available: withAvailable(state.available, bundle.name, nextVersion),
               availableDetails: withAvailableDetail(state.availableDetails, bundle.name, detail),
             })
-          } else if (bundle.update === 'git' && indexes) {
+          } else if (kind === 'git' && indexes) {
             if (gitSources === undefined) {
               const listed = await indexes.listIndexes()
               if (currentProbe !== probeSeq) return
@@ -365,18 +371,19 @@ export function createPluginUpdater(host: () => UpdateHost | undefined, market: 
       set({ ...IDLE_SINGLE_UPDATE, phase: 'checking', packageName })
       try {
         const api = host()
-        if (!api?.listVersions || !api.updateBundle) throw new Error('The Host does not provide plugin updates. Upgrade DSH to 0.2.2-rc.3 or later.')
+        if (!api?.listVersions || !api.updateBundle) throw new Error('The Host does not provide plugin updates. Upgrade DSH to 0.2.2-rc.1 or later.')
         const inventory = await api.listBundles()
         if (current !== generation) return
         if (!inventory.ok) throw new Error(inventory.error.message)
         const bundle = inventory.value.find(item => item.name === packageName && item.installed)
-        if (!bundle?.update) throw new Error('The official manager does not allow this installation to be updated. Built-in, local and unpinned Git copies may require their original installer.')
-        let installedVersion = bundle.version ?? ''
-        set({ installed: installedVersion, kind: bundle.update })
+        const kind = bundleUpdateKind(bundle)
+        if (!kind) throw new Error('The official manager does not allow this installation to be updated. Built-in, local and unpinned Git copies may require their original installer.')
+        let installedVersion = bundle?.version ?? ''
+        set({ installed: installedVersion, kind })
         let choices: UpdateChoice[] = []
         let warnings: string[] = []
         let omitted = 0
-        if (bundle.update === 'registry') {
+        if (kind === 'registry') {
           // Supply every business argument: the strict Remote does not omit optional options.
           const answer = await api.listVersions(packageName, {})
           if (current !== generation) return
@@ -413,7 +420,7 @@ export function createPluginUpdater(host: () => UpdateHost | undefined, market: 
           packageName,
           installed: installedVersion,
           version: chosen.version,
-          kind: bundle.update,
+          kind,
           source: chosen.source,
         } : null
         set({

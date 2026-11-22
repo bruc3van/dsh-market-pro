@@ -1203,3 +1203,53 @@ test('dsh_market_pro check_updates and update_plugins enforce pinned scope, full
     ],
   )
 })
+
+test('dsh_market_pro check_updates and update_plugins support DSH 0.2.2-rc.1 BundleInfo.updatable', async () => {
+  const updatedOrder: string[] = []
+  const tool = createMarketAiToolDefinition({
+    profile: 'web',
+    readSettings: () => ({ enabled: false, aiAssistantEnabled: true }),
+    readCatalog: async () => { throw new Error('catalog must not be called for plugin updates') },
+    listInstalled: async () => installedResultFixture,
+    readMcp: () => mcpFixture,
+    pluginManager: () => ({
+      listBundles: async () => [
+        { name: 'dsh-context', version: '0.86.0', installed: true, updatable: true },
+        { name: 'local-plugin', version: '0.1.0', installed: true, updatable: false },
+      ],
+      listVersions: async () => ({
+        status: 'listed',
+        installed: '0.86.0',
+        registry: 'https://registry.npmjs.org/',
+        versions: [{ version: '0.88.0', prerelease: false, bundle: true }],
+      }),
+      updateBundle: async (name, version) => {
+        updatedOrder.push(`${name}@${version}`)
+        return { from: '0.86.0', to: version, step: 'install', result: { changed: true, application: 'applied' } }
+      },
+    }),
+    getApprover: () => ({ request: async () => 'allowed-once' }),
+  }) as {
+    execute: (args: unknown, exec?: { agent?: unknown }) => Promise<string>
+  }
+
+  const checked = JSON.parse(await tool.execute({ action: 'check_updates' })) as {
+    available: boolean
+    updatableCount: number
+    updatable: { packageName: string; latest: string }[]
+    notUpdatable: string[]
+  }
+  assert.equal(checked.available, true)
+  assert.equal(checked.updatableCount, 1)
+  assert.deepEqual(checked.updatable.map(u => [u.packageName, u.latest]), [['dsh-context', '0.88.0']])
+  assert.deepEqual(checked.notUpdatable, ['local-plugin'])
+
+  const updated = JSON.parse(await tool.execute(
+    { action: 'update_plugins', updates: [{ packageName: 'dsh-context', version: '0.88.0' }] },
+    { agent: { id: 'a1' } },
+  )) as { updated: boolean; summary: { applied: number; failed: number } }
+  assert.equal(updated.updated, true)
+  assert.deepEqual(updatedOrder, ['dsh-context@0.88.0'])
+  assert.equal(updated.summary.applied, 1)
+  assert.equal(updated.summary.failed, 0)
+})
