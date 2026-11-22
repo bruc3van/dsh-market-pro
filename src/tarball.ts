@@ -51,10 +51,13 @@ function parsePaxPath(data: Buffer): string | undefined {
 }
 
 /**
- * Extract the first matching file from a gzipped tar response stream,
- * cancelling the underlying HTTP stream as soon as the entry is complete.
+ * Extract the highest-priority matching file from a gzipped tar response
+ * stream. When the primary target (`targetPaths[0]`) finishes, the underlying
+ * HTTP stream is cancelled immediately so the remaining archive is never
+ * downloaded. If a lower-priority fallback path appears earlier in the tar
+ * stream, it is retained while scanning continues for the primary target.
  * @param response - HTTP 200 response whose body is a `.tgz` stream.
- * @param targetPaths - Normalized paths to accept (checked in order of arrival).
+ * @param targetPaths - Normalized paths in descending preference order.
  * @param maxBytes - Upper bound for both compressed download and decompressed output.
  * @returns The extracted file bytes.
  */
@@ -70,7 +73,12 @@ export async function extractFileFromTgzResponse(
   }
   if (response.body === null) throw new Error('catalog tarball response is empty')
 
-  const wanted = new Set(targetPaths.map(normalizeTarPath))
+  const normalizedTargets = targetPaths.map(normalizeTarPath)
+  const targetRank = new Map<string, number>()
+  for (let i = 0; i < normalizedTargets.length; i += 1) {
+    const path = normalizedTargets[i]!
+    if (!targetRank.has(path)) targetRank.set(path, i)
+  }
   const reader = response.body.getReader()
   const gunzip = createGunzip()
 
@@ -81,16 +89,27 @@ export async function extractFileFromTgzResponse(
   let remainingBody = 0
   let remainingPad = 0
   let captureKind: 'none' | 'target' | 'longname' | 'pax' = 'none'
+  let captureRank = Number.POSITIVE_INFINITY
   let capturedChunks: Buffer[] = []
   let nextLongName: string | undefined
   let nextPaxPath: string | undefined
   let found: Buffer | undefined
+  let foundRank = Number.POSITIVE_INFINITY
   let doneParsing = false
   let streamError: unknown
 
   const resetCapture = (): void => {
     captureKind = 'none'
+    captureRank = Number.POSITIVE_INFINITY
     capturedChunks = []
+  }
+
+  const commitTarget = (bytes: Buffer): void => {
+    if (captureRank < foundRank) {
+      found = bytes
+      foundRank = captureRank
+    }
+    if (foundRank === 0) doneParsing = true
   }
 
   const processDecompressed = (chunk: Buffer): void => {
@@ -124,8 +143,11 @@ export async function extractFileFromTgzResponse(
         const isLongName = typeFlag === 0x4c /* 'L' */
         const isPax = typeFlag === 0x78 /* 'x' */
         resetCapture()
-        if (isRegularFile && wanted.has(resolvedPath)) captureKind = 'target'
-        else if (isLongName) captureKind = 'longname'
+        const rank = isRegularFile ? targetRank.get(resolvedPath) : undefined
+        if (rank !== undefined && rank < foundRank) {
+          captureKind = 'target'
+          captureRank = rank
+        } else if (isLongName) captureKind = 'longname'
         else if (isPax) captureKind = 'pax'
 
         remainingBody = size
@@ -134,9 +156,9 @@ export async function extractFileFromTgzResponse(
           phase = 'body'
         } else {
           if (captureKind === 'target') {
-            found = Buffer.alloc(0)
-            doneParsing = true
-            break
+            commitTarget(Buffer.alloc(0))
+            resetCapture()
+            if (doneParsing) break
           }
           phase = remainingPad > 0 ? 'padding' : 'header'
         }
@@ -150,11 +172,10 @@ export async function extractFileFromTgzResponse(
         remainingBody -= take
         if (remainingBody === 0) {
           if (captureKind === 'target') {
-            found = capturedChunks.length === 1 ? capturedChunks[0]! : Buffer.concat(capturedChunks)
-            doneParsing = true
-            break
-          }
-          if (captureKind === 'longname') {
+            commitTarget(capturedChunks.length === 1 ? capturedChunks[0]! : Buffer.concat(capturedChunks))
+            resetCapture()
+            if (doneParsing) break
+          } else if (captureKind === 'longname') {
             const raw = Buffer.concat(capturedChunks).toString('utf8').replace(/\0.*$/, '')
             nextLongName = raw
           } else if (captureKind === 'pax') {

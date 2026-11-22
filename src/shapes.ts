@@ -28,10 +28,10 @@ export const PACKAGE_NAME = 'dsh-market-pro'
 
 /** Logos render only as image elements, from inline image data or HTTPS. */
 export function isMarketIcon(value: string): boolean {
-  if (/^data:image\/(?:png|jpeg|gif|webp|svg\+xml);base64,[A-Za-z0-9+/]+={0,2}$/.test(value)) return true
+  if (/^data:image\/(?:png|jpe?g|gif|webp|avif|svg\+xml|x-icon|vnd\.microsoft\.icon);base64,[A-Za-z0-9+/]+={0,2}$/.test(value)) return true
   try {
     const url = new URL(value)
-    return url.protocol === 'https:' && !url.username && !url.password
+    return url.protocol === 'https:' && url.hostname !== '' && !url.username && !url.password
   } catch { return false }
 }
 

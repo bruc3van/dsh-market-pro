@@ -52,8 +52,10 @@ export interface CatalogOptions {
     readonly cache?: CatalogCache;
     /** Aborted when the owning plugin tears down, cancelling in-flight background refreshes. */
     readonly disposeSignal?: AbortSignal;
-    /** Delay before launching the next mirror concurrently during multi-source failover. */
+    /** Delay before launching the next mirror concurrently when no response headers arrive. */
     readonly hedgeDelayMs?: number;
+    /** Grace window before hedging a source whose headers already arrived but whose body download stalled. */
+    readonly bodyHedgeDelayMs?: number;
 }
 /**
  * Drop the redundant `subscription` payload when an editorial `featured` list

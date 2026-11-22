@@ -17,8 +17,11 @@ const LEGACY_CN_MIRROR_FILES_PREFIX = 'https://registry.npmmirror.com/awesome-ds
 const TARBALL_CATALOG_PATHS = ['package/data/market-catalog-v4.json', 'package/data/market-catalog.json'] as const
 const NPMMIRROR_ETAG_PREFIX = 'npmmirror:'
 
-/** Start the next mirror concurrently if the leading source has not answered within this window. */
-const DEFAULT_HEDGE_DELAY_MS = 3_000
+/** Start the next mirror concurrently if the leading source has not returned headers within this window. */
+const DEFAULT_HEDGE_DELAY_MS = 1_500
+
+/** Once valid response headers arrive, wait this long before hedging a stalled body download. */
+const DEFAULT_BODY_HEDGE_DELAY_MS = 8_000
 
 /** The market is refreshed daily upstream; asking more often than this is noise. */
 const REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1_000
@@ -147,8 +150,10 @@ export interface CatalogOptions {
   readonly cache?: CatalogCache
   /** Aborted when the owning plugin tears down, cancelling in-flight background refreshes. */
   readonly disposeSignal?: AbortSignal
-  /** Delay before launching the next mirror concurrently during multi-source failover. */
+  /** Delay before launching the next mirror concurrently when no response headers arrive. */
   readonly hedgeDelayMs?: number
+  /** Grace window before hedging a source whose headers already arrived but whose body download stalled. */
+  readonly bodyHedgeDelayMs?: number
 }
 
 /**
@@ -584,11 +589,35 @@ function isAllowedTarballUrl(metadataUrl: string, tarballUrl: string): boolean {
     const meta = new URL(metadataUrl)
     const target = new URL(tarballUrl)
     if (target.protocol !== 'https:' && !(target.protocol === 'http:' && meta.protocol === 'http:')) return false
-    return target.host === meta.host
-      || (meta.host === 'registry.npmmirror.com' && target.host === 'cdn.npmmirror.com')
+    if (target.host === meta.host) return true
+    return meta.host === 'registry.npmmirror.com'
+      && target.port === ''
+      && (target.hostname === 'cdn.npmmirror.com' || target.hostname.endsWith('.npmmirror.com'))
   } catch {
     return false
   }
+}
+
+function parseSnapshotTime(value: string): number {
+  if (value === '') return Number.NaN
+  const ms = Date.parse(value)
+  return Number.isFinite(ms) ? ms : Number.NaN
+}
+
+/**
+ * Maximum backward drift treated as a lagging `@latest` mirror cache across
+ * different hosts. Larger backward jumps (e.g. an upstream rollback or a prior
+ * clock-skewed future timestamp) are accepted so the cache can never lock up.
+ */
+const STALE_MIRROR_WINDOW_MS = 7 * 24 * 60 * 60 * 1_000
+
+/** Whether `candidateFetchedAt` is within the cross-mirror stale-cache window behind `currentFetchedAt`. */
+function isStaleMirrorSnapshot(candidateFetchedAt: string, currentFetchedAt: string): boolean {
+  const candidateMs = parseSnapshotTime(candidateFetchedAt)
+  const currentMs = parseSnapshotTime(currentFetchedAt)
+  if (!Number.isFinite(candidateMs) || !Number.isFinite(currentMs)) return false
+  const lagMs = currentMs - candidateMs
+  return lagMs > 0 && lagMs <= STALE_MIRROR_WINDOW_MS
 }
 
 interface PackageManifest {
@@ -633,6 +662,9 @@ export function createCatalogSource(options: CatalogOptions): CatalogSource {
   const hedgeDelayMs = options.hedgeDelayMs !== undefined && Number.isFinite(options.hedgeDelayMs) && options.hedgeDelayMs >= 0
     ? options.hedgeDelayMs
     : DEFAULT_HEDGE_DELAY_MS
+  const bodyHedgeDelayMs = options.bodyHedgeDelayMs !== undefined && Number.isFinite(options.bodyHedgeDelayMs) && options.bodyHedgeDelayMs >= 0
+    ? options.bodyHedgeDelayMs
+    : Math.max(hedgeDelayMs * 4, DEFAULT_BODY_HEDGE_DELAY_MS)
   type CatalogSnapshotSlot =
     | { readonly status: 'empty' }
     | { readonly status: 'loaded'; readonly catalog: MarketCatalog; readonly marketEtag: string; readonly activeBase: string }
@@ -700,7 +732,11 @@ export function createCatalogSource(options: CatalogOptions): CatalogSource {
    * abort signal. Pure until committed by {@link commitOutcome}, so concurrent
    * hedged attempts never overwrite each other's state.
    */
-  const attempt = async (base: string, abortSignal?: AbortSignal): Promise<AttemptOutcome> => {
+  const attempt = async (
+    base: string,
+    abortSignal?: AbortSignal,
+    onHeaders?: () => void,
+  ): Promise<AttemptOutcome> => {
     // The stored ETag certifies one server's content; a conditional request
     // only goes to the base that issued it. An unknown serving base (legacy
     // record) can only have been the primary.
@@ -711,9 +747,11 @@ export function createCatalogSource(options: CatalogOptions): CatalogSource {
     const response = await fetchFollowing(base, wireEtag, abortSignal)
     if (response.status === 304) {
       if (current === null) throw new Error('catalog HTTP 304')
+      onHeaders?.()
       return { kind: 'not-modified', activeBase: current.activeBase }
     }
     if (!response.ok) throw new Error(`catalog HTTP ${String(response.status)}`)
+    if (base !== CN_MIRROR_CATALOG_BASE) onHeaders?.()
     const body = await readJson(response)
     const manifest = body !== null && typeof body === 'object' ? body as PackageManifest : null
     if (manifest !== null && manifest.schema_version === undefined && typeof manifest.dist?.tarball === 'string') {
@@ -723,6 +761,7 @@ export function createCatalogSource(options: CatalogOptions): CatalogSource {
         ? `${NPMMIRROR_ETAG_PREFIX}${version}:${integrity}`
         : version !== '' ? `${NPMMIRROR_ETAG_PREFIX}${version}` : ''
       if (conditional && versionTag !== '' && current.marketEtag === versionTag) {
+        onHeaders?.()
         return { kind: 'not-modified', activeBase: base }
       }
       const tarballUrl = manifest.dist.tarball
@@ -731,6 +770,7 @@ export function createCatalogSource(options: CatalogOptions): CatalogSource {
       }
       const tarResponse = await fetchFollowing(tarballUrl, '', abortSignal, 'identity')
       if (!tarResponse.ok) throw new Error(`catalog tarball HTTP ${String(tarResponse.status)}`)
+      onHeaders?.()
       const extracted = await extractFileFromTgzResponse(tarResponse, TARBALL_CATALOG_PATHS, MAX_CATALOG_BYTES)
       const parsed = JSON.parse(extracted.toString('utf8')) as unknown
       return {
@@ -789,6 +829,9 @@ export function createCatalogSource(options: CatalogOptions): CatalogSource {
     if (bases.length === 1) {
       return commitOutcome(await attempt(bases[0]!, options.disposeSignal))
     }
+    const baselineFetchedAt = snapshot.status === 'loaded' ? snapshot.catalog.fetchedAt : ''
+    const baselineActiveBase = snapshot.status === 'loaded' ? snapshot.activeBase : ''
+    const baselineEffectiveBase = baselineActiveBase === '' ? primary : baselineActiveBase
     return await new Promise<MarketCatalog>((resolve, reject) => {
       const raceController = new AbortController()
       const combinedSignal = options.disposeSignal === undefined
@@ -796,6 +839,7 @@ export function createCatalogSource(options: CatalogOptions): CatalogSource {
         : AbortSignal.any([raceController.signal, options.disposeSignal])
       const failures: Array<string | undefined> = Array.from({ length: bases.length }, () => undefined)
       let race: HedgedRaceState = { status: 'racing', nextIndex: 0, active: 0 }
+      let sawOlderSnapshot = false
 
       const clearHedgeTimer = (): void => {
         if (race.status === 'racing' && race.hedgeTimer !== undefined) {
@@ -812,25 +856,79 @@ export function createCatalogSource(options: CatalogOptions): CatalogSource {
         onSettled()
       }
 
-      const scheduleHedge = (): void => {
+      const scheduleHedge = (delayMs: number): void => {
         clearHedgeTimer()
         if (race.status !== 'racing' || race.nextIndex >= bases.length) return
         const hedgeTimer = setTimeout(() => {
           if (race.status !== 'racing') return
           race = { status: 'racing', nextIndex: race.nextIndex, active: race.active }
           launchNext()
-        }, hedgeDelayMs)
+        }, delayMs)
         race = { ...race, hedgeTimer }
+      }
+
+      const finishExhausted = (): void => {
+        if (sawOlderSnapshot && snapshot.status === 'loaded') {
+          // Every reachable mirror served an older `@latest` snapshot than our
+          // current cache; preserve the newer local catalog and refresh its timestamp.
+          settle(() => {
+            try {
+              resolve(commitOutcome({ kind: 'not-modified', activeBase: baselineActiveBase }))
+            } catch (error) {
+              reject(error)
+            }
+          })
+          return
+        }
+        const summary = failures.filter((entry): entry is string => entry !== undefined).join('; ')
+        settle(() => reject(new Error(summary)))
       }
 
       const launchNext = (): void => {
         if (race.status !== 'racing' || race.nextIndex >= bases.length) return
         const idx = race.nextIndex
         const base = bases[idx]!
+        let attemptExtended = false
         race = { ...race, nextIndex: idx + 1, active: race.active + 1 }
-        scheduleHedge()
-        void attempt(base, combinedSignal).then(
+        scheduleHedge(hedgeDelayMs)
+        void attempt(base, combinedSignal, () => {
+          // Valid response headers arrived for the latest launched attempt:
+          // switch its tight TTFB hedge to the body-transfer grace period once
+          // so healthy downloads avoid redundant mirrors while stalled streams still fail over.
+          if (
+            race.status === 'racing'
+            && !attemptExtended
+            && idx === race.nextIndex - 1
+            && race.nextIndex < bases.length
+          ) {
+            attemptExtended = true
+            scheduleHedge(bodyHedgeDelayMs)
+          }
+        }).then(
           (outcome) => {
+            if (race.status === 'settled') return
+            // Only guard against lagging `@latest` caches when switching across
+            // different mirrors within the drift window. Same-source responses
+            // (or jumps beyond the window) are always accepted so upstream
+            // rollbacks or prior future timestamps can never lock the cache.
+            if (
+              outcome.kind === 'fresh'
+              && baselineFetchedAt !== ''
+              && outcome.activeBase !== baselineEffectiveBase
+              && isStaleMirrorSnapshot(outcome.catalog.fetchedAt, baselineFetchedAt)
+            ) {
+              sawOlderSnapshot = true
+              race = { ...race, active: race.active - 1 }
+              if (race.nextIndex < bases.length && race.active === 0) {
+                clearHedgeTimer()
+                launchNext()
+                return
+              }
+              if (race.active === 0 && race.nextIndex >= bases.length) {
+                finishExhausted()
+              }
+              return
+            }
             settle(() => {
               try {
                 resolve(commitOutcome(outcome))
@@ -853,8 +951,7 @@ export function createCatalogSource(options: CatalogOptions): CatalogSource {
               return
             }
             if (race.active === 0 && race.nextIndex >= bases.length) {
-              const summary = failures.filter((entry): entry is string => entry !== undefined).join('; ')
-              settle(() => reject(new Error(summary)))
+              finishExhausted()
             }
           },
         )

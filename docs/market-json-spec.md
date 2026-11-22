@@ -2,7 +2,7 @@
 
 ## 默认 schema 4：market-catalog-v4.json（兼容 schema 3 `market-catalog.json`）
 
-默认地址为 `https://cdn.jsdelivr.net/npm/awesome-dsh-plugin-feed@latest/data/market-catalog-v4.json`，失败自动按序回退至国内可达的 `https://registry.npmmirror.com/awesome-dsh-plugin-feed/latest/files/data/market-catalog-v4.json` 与 `https://unpkg.com/awesome-dsh-plugin-feed@latest/data/market-catalog-v4.json`（粘滞成功源）。上游 `scripts/safe-market-catalog.mjs` 在 npm 打包时同时生成 schema 4 紧凑主源（约 11.6 MB，gzip 约 4.5 MB）与兼容旧版客户端的 schema 3 精简源（约 16.5 MB），不提交另一份全量生成文件。
+默认地址为 `https://cdn.jsdelivr.net/npm/awesome-dsh-plugin-feed@latest/data/market-catalog-v4.json`，失败或首包响应（TTFB）超过 1.5s 自动对冲回退至国内可达的 `https://registry.npmmirror.com/awesome-dsh-plugin-feed/latest`（流式按优先级提取 `market-catalog-v4.json`，支持 `*.npmmirror.com` 官方 tarball 节点）与 `https://unpkg.com/awesome-dsh-plugin-feed@latest/data/market-catalog-v4.json`（粘滞成功源；每个源收到响应头后各自放宽至 8s 下载宽限避免健康下载触发冗余拉取）。多源切换时若候选镜像的 `source_fetched_at` 落后本地缓存且在 7 天窗口内，会拒绝倒退并继续询问其他镜像；同源响应（含自定义单源 `catalogBase`）及超过 7 天的回退直接采纳，确保上游主动回滚或时钟修正不会锁死缓存。上游 `scripts/safe-market-catalog.mjs` 在 npm 打包时同时生成 schema 4 紧凑主源（约 11.6 MB，gzip 约 4.5 MB）与兼容旧版客户端的 schema 3 精简源（约 16.5 MB），不提交另一份全量生成文件。
 
 - `schema_version: 4`（同时完整兼容 `schema_version: 3` 与 `schema_version: 2`）。
 - schema 4 使用顶层 `category_table` 字典与紧凑字段键（`n/d/s/c/p/l/lic/b/is/pkg/tz/te/de/ar/di`），省略默认值（`install_status: none`、`default_branch: main`、空语言/许可证），且不在 `entries[]` 重复内联订阅插件的 base64 图标与关键词——客户端解析时按仓库 slug 从内嵌 `subscription` 自动补全。
@@ -19,7 +19,7 @@
 
 订阅（以及精选里采用插件身份的卡片）安装目标取订阅首个版本：npm 使用 `name@version`，Git 使用 HTTPS 仓库、完整提交和可选的 `path:` 子目录。安装前仍由当前宿主执行 `inspect` 和 `installBundle`。宿主版本要求在详情中展示，过长的显示文本带省略号，安装目标不截断。
 
-Logo 支持订阅内联的 SVG、PNG、JPEG、WebP、GIF 图片及 HTTPS 图片，通过图片元素展示并懒加载；无图或加载失败显示名称首字母。仓库卡片复用关联订阅插件已提供的图标。
+Logo 兼容订阅内联的 base64 图片（SVG、PNG、JPEG、WebP、GIF、AVIF、ICO）与 HTTPS 图片 URL（如 `https://cdn.jsdelivr.net/...`），以格式无关方式直接通过 `<img src>` 展示并懒加载；jsDelivr 图标加载失败时自动回退至官方备用边缘 `fastly.jsdelivr.net`（连续 2 次故障切换成功后在当前会话记忆可达边缘，避免单次抖动误切）；全部失败则依次回退至仓库作者头像与内置默认图标（名称首字母）。仓库卡片复用关联订阅插件已提供的图标。
 
 「全部」按仓库计数，订阅按插件包计数，精选按推荐条目计数。schema 3 忽略旧 `marketSize` 截断，数量随发布变化；各列表先对完整数据筛选，再每页显示 50 条。**「全部」展示完整目录**（约 2.7 万条，不默认过滤），每张卡片都可点「安装」，由 `install_status` 决定走直接安装还是 AI 核对安装提示词。精选、订阅与全部使用各自的分类计数。包级已安装状态按精确包名匹配，避免同仓库其他插件被误标为已安装。
 

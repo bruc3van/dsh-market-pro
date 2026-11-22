@@ -82,18 +82,74 @@ test('npm-only, Gitee, and Git subdirectory packages retain usable links and exa
 })
 
 test('plugin logos preserve supported image sources and discard executable or local URLs', () => {
-  const icon = 'data:image/svg+xml;base64,PHN2Zy8+'
+  const dataIcon = 'data:image/svg+xml;base64,PHN2Zy8+'
+  const icoIcon = 'data:image/vnd.microsoft.icon;base64,AAABAAE='
+  const jsdelivrIcon = 'https://cdn.jsdelivr.net/gh/owner/monorepo@main/assets/logo.svg'
   const catalog = marketCatalogSchema.parse(deriveMarket(feed([
-    packageRow('with-logo', { icon }),
+    packageRow('with-data-logo', { icon: dataIcon }),
+    packageRow('with-ico-logo', { icon: icoIcon }),
+    packageRow('with-jsdelivr-logo', { icon: jsdelivrIcon }),
     packageRow('without-logo'),
+    packageRow('plaintext-http-logo', { icon: 'http://cdn.example.com/logo.png' }),
     packageRow('unsafe-logo', { icon: 'javascript:alert(1)' }),
+    packageRow('credential-logo', { icon: 'https://user:pass@cdn.jsdelivr.net/logo.png' }),
   ]), 1000))
-  assert.equal(catalog.featured?.entries[0]?.item.icon, icon)
-  assert.equal(catalog.featured?.entries[1]?.item.icon, undefined)
-  assert.equal(catalog.featured?.entries[2]?.item.icon, undefined)
+  assert.equal(catalog.featured?.entries[0]?.item.icon, dataIcon)
+  assert.equal(catalog.featured?.entries[1]?.item.icon, icoIcon)
+  assert.equal(catalog.featured?.entries[2]?.item.icon, jsdelivrIcon)
+  assert.equal(catalog.featured?.entries[3]?.item.icon, undefined)
+  assert.equal(catalog.featured?.entries[4]?.item.icon, undefined)
+  assert.equal(catalog.featured?.entries[5]?.item.icon, undefined)
+  assert.equal(catalog.featured?.entries[6]?.item.icon, undefined)
   assert.ok(isMarketIcon('https://example.com/logo.png'))
+  assert.ok(isMarketIcon('https://cdn.jsdelivr.net/npm/demo@1.0.0/logo.png'))
+  assert.ok(isMarketIcon('data:image/x-icon;base64,AAABAAE='))
+  assert.ok(isMarketIcon('data:image/vnd.microsoft.icon;base64,AAABAAE='))
+  assert.ok(!isMarketIcon('http://example.com/logo.png'))
   assert.ok(!isMarketIcon('file:///C:/logo.png'))
   assert.ok(!isMarketIcon('data:text/html;base64,PHN2Zy8+'))
+  assert.ok(!isMarketIcon('https://user:pass@cdn.jsdelivr.net/logo.png'))
+})
+
+test('schema-4 compact catalogs hydrate both base64 data URI and jsDelivr URL icons from subscription', () => {
+  const cases = [
+    { label: 'base64 data URI', icon: 'data:image/webp;base64,UklGRh4AAABXRUJQVlA4TBEAAAAvAAAAAAfQ//73v/+BiOh/AAA=' },
+    { label: 'base64 ICO (vnd.microsoft.icon)', icon: 'data:image/vnd.microsoft.icon;base64,AAABAAE=' },
+    { label: 'jsDelivr HTTPS URL', icon: 'https://cdn.jsdelivr.net/gh/owner/monorepo@main/assets/logo.png' },
+    { label: 'generic HTTPS URL', icon: 'https://cdn.example.com/plugins/one/logo.png' },
+  ]
+  for (const { label, icon } of cases) {
+    const compactFeed = {
+      schema_version: 4,
+      source_fetched_at: '2026-11-22T00:00:00Z',
+      source_repo_count: 1,
+      repository_count: 1,
+      subscription_updated_at: '2026-11-22T00:00:00Z',
+      category_table: [['agents-workflows', 'Agent 工作流', 'Agent workflows']],
+      entries: [{
+        n: 'owner/monorepo',
+        d: '编排任务',
+        s: 42,
+        c: 0,
+        is: 'command',
+        pkg: { mode: 'command', targets: [{ install: '@demo/one', profile: 'web', note: '' }], tasks: [], requirements: [], note: '', manual: '' },
+      }],
+      featured: {
+        title_zh: '编辑精选',
+        title_en: "Editor's Picks",
+        updated_at: '2026-11-22',
+        entries: [{ full_name: 'owner/monorepo', description: '编辑推荐语' }],
+      },
+      subscription: {
+        format: 1,
+        metadata: { categories: { 'agents-workflows': { title: { zh: 'Agent 工作流', en: 'Agent workflows' } } } },
+        plugins: [packageRow('@demo/one', { icon })],
+      },
+    }
+    const catalog = marketCatalogSchema.parse(deriveMarket(compactFeed, 1))
+    assert.equal(catalog.items[0]?.icon, icon, `${label}: repository row must inherit icon`)
+    assert.equal(catalog.featured?.entries[0]?.item.icon, icon, `${label}: featured entry must preserve icon`)
+  }
 })
 
 test('repository rows carry install_status and the subscription plugin copy', () => {

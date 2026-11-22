@@ -1275,3 +1275,253 @@ test('hedged failover starts the next mirror when the primary stalls and aborts 
     fetch.restore()
   }
 })
+
+test('TTFB-aware hedging extends grace once valid headers arrive and only hedges stalled body streams', async () => {
+  const fetch = stubFetch()
+  try {
+    const source = createCatalogSource({
+      base: DEFAULT_CATALOG_BASE,
+      marketSize: 200,
+      hedgeDelayMs: 40,
+      bodyHedgeDelayMs: 220,
+    })
+    const pending = source.read(false)
+    assert.equal(fetch.calls.length, 1)
+
+    // Primary answers headers immediately, then streams its body slowly (~100ms > hedgeDelayMs, < bodyHedgeDelayMs).
+    const payload = Buffer.from(JSON.stringify({
+      schema_version: 2,
+      source_fetched_at: '2026-11-22',
+      entries: [entry({ full_name: 'slow/healthy' })],
+    }))
+    let sent = false
+    const healthyStream = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        if (sent) { controller.close(); return }
+        sent = true
+        await new Promise(resolve => setTimeout(resolve, 100))
+        controller.enqueue(payload)
+      },
+    })
+    fetch.parked[0]!.resolve(new Response(healthyStream, { status: 200, headers: { etag: '"slow-ok"' } }))
+
+    const first = await pending
+    assert.equal(first.error, '')
+    assert.equal(first.catalog?.items[0]?.fullName, 'slow/healthy')
+    assert.equal(fetch.calls.length, 1, 'a healthy download past TTFB must not launch redundant mirrors')
+
+    // Now test a stalled body stream on A, followed by healthy headers on B:
+    // A stalls past bodyHedgeDelayMs -> B launches -> B answers headers immediately and streams
+    // slowly (> hedgeDelayMs, < bodyHedgeDelayMs) -> B gets its own body grace so C is NOT launched.
+    const stalled = source.read(true)
+    const hangingStream = new ReadableStream<Uint8Array>({
+      start() {},
+    })
+    fetch.parked[1]!.resolve(new Response(hangingStream, { status: 200 }))
+
+    const deadline = Date.now() + 1_000
+    while (fetch.calls.length < 3 && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 15))
+    }
+    assert.equal(fetch.calls.length, 3, 'a stalled body past bodyHedgeDelayMs still fails over to the next mirror')
+    assert.equal(fetch.calls[2]!.url, CN_MIRROR_CATALOG_BASE)
+    const secondPayload = Buffer.from(JSON.stringify({
+      schema_version: 2,
+      source_fetched_at: '2026-11-22',
+      entries: [entry({ full_name: 'body-hedge/winner' })],
+    }))
+    let secondSent = false
+    const secondHealthyStream = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        if (secondSent) { controller.close(); return }
+        secondSent = true
+        await new Promise(resolve => setTimeout(resolve, 100))
+        controller.enqueue(secondPayload)
+      },
+    })
+    // Respond with a direct JSON stream on the second base (not a manifest) so headers arrive immediately.
+    fetch.parked[2]!.resolve(new Response(secondHealthyStream, { status: 200 }))
+    // Note: CN_MIRROR_CATALOG_BASE defers onHeaders until tarball headers arrive; test B's per-attempt
+    // body grace explicitly when B is a direct JSON mirror (sticky CN_MIRROR -> primary -> unpkg).
+    const recovered = await stalled
+    assert.equal(recovered.error, '')
+    assert.equal(recovered.catalog?.items[0]?.fullName, 'body-hedge/winner')
+  } finally {
+    fetch.restore()
+  }
+})
+
+test('per-attempt body grace applies to the second mirror too so the third mirror is not launched early', async () => {
+  const fetch = stubFetch()
+  try {
+    const seat = stubCache()
+    // Make CN_MIRROR sticky so the race order is: CN_MIRROR -> DEFAULT (direct JSON) -> UNPKG.
+    seat.set({
+      catalog: makeCatalog([plugin()], 7),
+      marketEtag: '"m-cn"',
+      activeBase: CN_MIRROR_CATALOG_BASE,
+    })
+    const source = createCatalogSource({
+      base: DEFAULT_CATALOG_BASE,
+      marketSize: 200,
+      cache: seat.cache,
+      hedgeDelayMs: 40,
+      bodyHedgeDelayMs: 240,
+    })
+    const pending = source.read(true)
+    assert.equal(fetch.calls[0]!.url, CN_MIRROR_CATALOG_BASE)
+    // First attempt (CN_MIRROR) fails immediately -> second attempt (DEFAULT_CATALOG_BASE) launches.
+    fetch.parked[0]!.reject(new Error('cn down'))
+    await tick()
+    assert.equal(fetch.calls.length, 2)
+    assert.equal(fetch.calls[1]!.url, DEFAULT_CATALOG_BASE)
+
+    // Second attempt responds with headers immediately, then takes 110ms (> 40ms hedgeDelayMs, < 240ms bodyHedgeDelayMs).
+    const payload = Buffer.from(JSON.stringify({
+      schema_version: 2,
+      source_fetched_at: '2026-11-22',
+      entries: [entry({ full_name: 'second/healthy' })],
+    }))
+    let sent = false
+    const slowBody = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        if (sent) { controller.close(); return }
+        sent = true
+        await new Promise(resolve => setTimeout(resolve, 110))
+        controller.enqueue(payload)
+      },
+    })
+    fetch.parked[1]!.resolve(new Response(slowBody, { status: 200 }))
+    const result = await pending
+    assert.equal(result.error, '')
+    assert.equal(result.catalog?.items[0]?.fullName, 'second/healthy')
+    assert.equal(fetch.calls.length, 2, 'third mirror must not be launched while the second mirror is streaming within its body grace')
+  } finally {
+    fetch.restore()
+  }
+})
+
+test('cross-mirror stale guard blocks lagging @latest mirrors without locking out same-source rollbacks or skewed future timestamps', async () => {
+  const fetch = stubFetch()
+  try {
+    const seat = stubCache()
+    // Seed from CN_MIRROR at 2026-11-22; CN_MIRROR fails, then DEFAULT serves a lagging 2026-11-20 mirror cache.
+    seat.set({
+      catalog: { ...makeCatalog([plugin({ fullName: 'cached/newest' })], 7), fetchedAt: '2026-11-22T00:00:00Z' },
+      marketEtag: '"m-cn"',
+      activeBase: CN_MIRROR_CATALOG_BASE,
+    })
+    const source = createCatalogSource({ base: DEFAULT_CATALOG_BASE, marketSize: 200, cache: seat.cache, hedgeDelayMs: 5_000 })
+
+    const first = source.read(true)
+    assert.equal(fetch.calls[0]!.url, CN_MIRROR_CATALOG_BASE)
+    fetch.parked[0]!.reject(new Error('cn temporary error'))
+    await tick()
+    assert.equal(fetch.calls[1]!.url, DEFAULT_CATALOG_BASE)
+    // Cross-mirror 2-day lag (within 7-day window): rejected in favor of trying unpkg.
+    fetch.parked[1]!.resolve(jsonResponse(
+      { schema_version: 2, source_fetched_at: '2026-11-20T00:00:00Z', entries: [entry({ full_name: 'stale/mirror' })] },
+      '"m-stale"',
+    ))
+    await tick()
+    assert.equal(fetch.calls.length, 3, 'a lagging cross-mirror response advances to the next mirror')
+    assert.equal(fetch.calls[2]!.url, MIRROR_CATALOG_BASE)
+    fetch.parked[2]!.resolve(jsonResponse(
+      { schema_version: 2, source_fetched_at: '2026-11-23T00:00:00Z', entries: [entry({ full_name: 'fresh/mirror' })] },
+      '"m-fresh"',
+    ))
+    const upgraded = await first
+    assert.equal(upgraded.error, '')
+    assert.equal(upgraded.catalog?.items[0]?.fullName, 'fresh/mirror')
+    assert.equal(upgraded.catalog?.fetchedAt, '2026-11-23T00:00:00Z')
+
+    // Same-source upstream rollback: MIRROR_CATALOG_BASE is now sticky; if it returns an older snapshot,
+    // accept it immediately instead of locking up the cache.
+    const rollback = source.read(true)
+    assert.equal(fetch.calls[3]!.url, MIRROR_CATALOG_BASE)
+    fetch.parked[3]!.resolve(jsonResponse(
+      { schema_version: 2, source_fetched_at: '2026-11-21T00:00:00Z', entries: [entry({ full_name: 'rolled/back' })] },
+      '"m-rollback"',
+    ))
+    const rolled = await rollback
+    assert.equal(rolled.error, '')
+    assert.equal(rolled.catalog?.items[0]?.fullName, 'rolled/back', 'same-source rollback must be accepted')
+    assert.equal(fetch.calls.length, 4, 'same-source rollback does not wastefully download other mirrors')
+
+    // Future clock-skew recovery (> 7-day backward jump across mirrors):
+    // seed a clock-skewed 2027-01-01 cache on CN_MIRROR, fail CN_MIRROR, and verify a normal 2026-11-22 snapshot from DEFAULT is accepted.
+    const skewedSeat = stubCache()
+    skewedSeat.set({
+      catalog: { ...makeCatalog([plugin({ fullName: 'skewed/future' })], 7), fetchedAt: '2027-01-01T00:00:00Z' },
+      marketEtag: '"m-future"',
+      activeBase: CN_MIRROR_CATALOG_BASE,
+    })
+    const skewedSource = createCatalogSource({ base: DEFAULT_CATALOG_BASE, marketSize: 200, cache: skewedSeat.cache, hedgeDelayMs: 5_000 })
+    const recoveredFuture = skewedSource.read(true)
+    fetch.parked[4]!.reject(new Error('cn down'))
+    await tick()
+    fetch.parked[5]!.resolve(jsonResponse(
+      { schema_version: 2, source_fetched_at: '2026-11-22T00:00:00Z', entries: [entry({ full_name: 'normal/after-skew' })] },
+      '"m-normal"',
+    ))
+    const healed = await recoveredFuture
+    assert.equal(healed.error, '')
+    assert.equal(healed.catalog?.items[0]?.fullName, 'normal/after-skew', 'backward jump beyond 7-day window heals clock skew')
+  } finally {
+    fetch.restore()
+  }
+})
+
+test('extractFileFromTgzResponse respects targetPaths preference regardless of archive entry order', async () => {
+  const { gzipSync } = await import('node:zlib')
+  const legacyV3 = Buffer.from('{"schema_version":3,"legacy":true}')
+  const compactV4 = Buffer.from('{"schema_version":4,"compact":true}')
+  // Place legacy v3 BEFORE compact v4 in the tar archive.
+  const reversedTgz = gzipSync(buildTar([
+    { name: 'package/data/market-catalog.json', content: legacyV3 },
+    { name: 'package/data/market-catalog-v4.json', content: compactV4 },
+  ]))
+  const preferred = await extractFileFromTgzResponse(
+    new Response(reversedTgz, { status: 200 }),
+    ['package/data/market-catalog-v4.json', 'package/data/market-catalog.json'],
+    1024 * 1024,
+  )
+  assert.deepEqual(preferred, compactV4, 'higher-priority v4 must win even when legacy v3 appears earlier in tar')
+
+  // When only the fallback file exists, it is still returned cleanly.
+  const fallbackOnlyTgz = gzipSync(buildTar([
+    { name: 'package/data/market-catalog.json', content: legacyV3 },
+  ]))
+  const fallback = await extractFileFromTgzResponse(
+    new Response(fallbackOnlyTgz, { status: 200 }),
+    ['package/data/market-catalog-v4.json', 'package/data/market-catalog.json'],
+    1024 * 1024,
+  )
+  assert.deepEqual(fallback, legacyV3)
+})
+
+test('npmmirror allows official *.npmmirror.com tarball subdomains while still blocking foreign hosts', async () => {
+  const { gzipSync } = await import('node:zlib')
+  const fetch = stubFetch()
+  try {
+    const source = createCatalogSource({ base: CN_MIRROR_CATALOG_BASE, marketSize: 200 })
+    const tgz = gzipSync(buildTar([{
+      name: 'package/data/market-catalog-v4.json',
+      content: Buffer.from(JSON.stringify({ schema_version: 2, source_fetched_at: '2026-11-22', entries: [entry({ full_name: 'cn/subdomain' })] })),
+    }]))
+    const pending = source.read(false)
+    const subdomainTarball = 'https://cdn2.npmmirror.com/packages/awesome-dsh-plugin-feed/1.0.0/feed.tgz'
+    fetch.parked[0]!.resolve(new Response(JSON.stringify({
+      version: '1.0.0',
+      dist: { tarball: subdomainTarball, integrity: 'sha512-sub' },
+    }), { status: 200 }))
+    await tick()
+    assert.equal(fetch.calls[1]!.url, subdomainTarball)
+    fetch.parked[1]!.resolve(new Response(tgz, { status: 200 }))
+    const result = await pending
+    assert.equal(result.error, '')
+    assert.equal(result.catalog?.items[0]?.fullName, 'cn/subdomain')
+  } finally {
+    fetch.restore()
+  }
+})

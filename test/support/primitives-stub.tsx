@@ -10,8 +10,8 @@ type Props = { children?: ReactNode } & Record<string, unknown>
 const passthrough = ({ children }: Props) => <>{children}</>
 const icon = () => null
 
-export const Button = forwardRef<HTMLButtonElement, Props>(function Button({ children }, ref) {
-  return <button ref={ref} type="button">{children}</button>
+export const Button = forwardRef<HTMLButtonElement, Props>(function Button({ children, onClick, disabled, className }, ref) {
+  return <button ref={ref} type="button" className={className as string | undefined} disabled={disabled as boolean | undefined} onClick={onClick as (() => void) | undefined}>{children}</button>
 })
 export const Switch = () => null
 export const Menu = ({ anchor }: { anchor?: ReactNode }) => <>{anchor}</>
