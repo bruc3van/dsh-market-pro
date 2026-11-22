@@ -8,4 +8,5 @@ node_modules/
 output/playwright/catalog-*
 output/imagegen/
 output/xiaohongshu/
+output/promo/
 lib/**/*.map

@@ -197,6 +197,9 @@ export declare const safeMarketDomainState: z.ZodObject<{
         entryIds: z.ZodArray<z.ZodString>;
         at: z.ZodString;
     }, z.core.$strip>>>;
+    telemetryId: z.ZodDefault<z.ZodString>;
+    telemetryLastPingDay: z.ZodDefault<z.ZodString>;
+    telemetryLastPingKind: z.ZodDefault<z.ZodString>;
 }, z.core.$strip>;
 /** Durable market state inferred from {@link safeMarketDomainState}. */
 export type SafeMarketDomainState = z.infer<typeof safeMarketDomainState>;
@@ -397,6 +400,9 @@ export declare const safeMarketDomainSpec: {
                 entryIds: z.ZodArray<z.ZodString>;
                 at: z.ZodString;
             }, z.core.$strip>>>;
+            telemetryId: z.ZodDefault<z.ZodString>;
+            telemetryLastPingDay: z.ZodDefault<z.ZodString>;
+            telemetryLastPingKind: z.ZodDefault<z.ZodString>;
         }, z.core.$strip>;
         initial: {
             catalog: Readonly<{
@@ -558,6 +564,9 @@ export declare const safeMarketDomainSpec: {
                 entryIds: string[];
                 at: string;
             }[];
+            telemetryId: string;
+            telemetryLastPingDay: string;
+            telemetryLastPingKind: string;
         };
     };
     tables: {};

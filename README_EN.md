@@ -163,8 +163,11 @@ Check the skills available to your current session from the **Skills** tab in th
 
 - **Security reminder**: Catalog inclusion verifies that a project is a DSH plugin, not that it is safe. Always review a plugin's source and requested permissions before installing.
 - **About AI review**: AI review is an optional post-install check on local plugin files to help you assess risk; it cannot prevent or undo code that has already executed during installation.
+- **Anonymous telemetry**: Enabled by default, sending an anonymous daily heartbeat (random install ID, plugin & DSH version, host type, OS, locale) and public plugin / curated MCP install outcomes to [dsh-market-pro.com](https://dsh-market-pro.com) to measure adoption and improve install reliability. It never collects chats, file paths, secrets, or private plugin names. Turn it off anytime under **Settings → Anonymous Usage Telemetry** or via `DO_NOT_TRACK=1` / `DSH_MARKET_TELEMETRY=0` / `DSH_TELEMETRY_DISABLED=1`.
 
 ## Related Projects
+
+- **[DSH Market Pro Web Directory](https://dsh-market-pro.com/en/)**: Browse all 29,000+ verified DSH plugins, 33 curated MCP servers, and the Discover subscription feed online.
 
 - **[DSH Desktop Pro](https://github.com/bruc3van/dsh-desktop-pro)**: Standalone DeepSeek Harness desktop client.
 - **[awesome-dsh-plugin-pro](https://github.com/bruc3van/awesome-dsh-plugin-pro)**: Verified DSH community plugin catalog and data source for this market.

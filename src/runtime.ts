@@ -21,6 +21,7 @@ import type {
   SafeMarketSettings,
   SafeMarketSettingsUpdate,
   SetInstalledEnabledUpdate,
+  TelemetryClientEvent,
   UninstallInstalledUpdate,
 } from './contract.ts'
 
@@ -45,6 +46,7 @@ export class SafeMarketRuntime extends TypertRemoteService {
     private readonly readMcp: () => McpHostContext,
     private readonly probe: (name: string, signal: AbortSignal) => Promise<McpProbeResult>,
     private readonly adopt: (loaderId: string) => Promise<McpAdoptResult>,
+    private readonly telemetry?: (event: TelemetryClientEvent) => void,
   ) {
     super(ctx, 'dshMarketPro')
   }
@@ -161,5 +163,12 @@ export class SafeMarketRuntime extends TypertRemoteService {
   @Remote
   async adoptMcp(request: { readonly loaderId: string }): Promise<McpAdoptResult> {
     return await this.adopt(request.loaderId)
+  }
+
+  /** Forward an anonymous client telemetry signal to the Host-side reporter. */
+  @Remote
+  reportTelemetry(event: TelemetryClientEvent): { readonly ok: boolean } {
+    this.telemetry?.(event)
+    return { ok: true }
   }
 }

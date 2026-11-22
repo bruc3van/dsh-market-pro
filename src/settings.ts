@@ -17,6 +17,7 @@ export function registerSafeMarketSettings(ctx: Context, config: Config): {
     get: () => ({
       enabled: config.enabled.get(),
       aiAssistantEnabled: config.aiAssistantEnabled.get(),
+      telemetryEnabled: config.telemetryEnabled.get(),
     }),
     update: patch => ctx.settings.update(entryId, patch),
   }

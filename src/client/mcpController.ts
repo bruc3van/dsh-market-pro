@@ -81,6 +81,8 @@ export interface McpHosts {
   probe(name: string): Promise<Reply<McpProbeResult>>
   /** This market's Host adoption verb (`dshMarketPro.adoptMcp`); throws on refusal. */
   adopt?(loaderId: string): Promise<McpAdoptResult>
+  /** Optional anonymous install feedback observer for newly added MCP servers. */
+  onSaveOutcome?(outcome: { readonly draft: McpDraft; readonly original: string | undefined; readonly ok: boolean; readonly message: string }): void
 }
 
 /** Whether, and why not, one static row can be switched through the plugin manager. */
@@ -532,26 +534,32 @@ export function createMcpController(hosts: McpHosts, options: McpControllerOptio
       }
     },
     async save(draft, original) {
+      const report = (outcome: McpSaveOutcome): McpSaveOutcome => {
+        if (original === undefined) {
+          hosts.onSaveOutcome?.({ draft, original, ok: outcome.ok, message: outcome.ok ? '' : outcome.message })
+        }
+        return outcome
+      }
       // Secrets first: an entry that names a credential the store does not
       // hold would land straight in `waiting-credentials`. If a store fails,
       // nothing is written and the draft stays open.
       const secrets = pendingToStore(draft)
       if (secrets.length > 0) {
         const remote = hosts.credentials()
-        if (remote === undefined) return { ok: false, message: 'credentials-unavailable', conflict: false }
+        if (remote === undefined) return report({ ok: false, message: 'credentials-unavailable', conflict: false })
         for (const secret of secrets) {
           try {
             const reply = await remote.set(secret.ref, secret.value)
-            if (!reply.ok) return { ok: false, message: failure(reply), conflict: false }
+            if (!reply.ok) return report({ ok: false, message: failure(reply), conflict: false })
           } catch (error) {
-            return { ok: false, message: message(error), conflict: false }
+            return report({ ok: false, message: message(error), conflict: false })
           }
         }
       }
       try {
-        return await mutate(saveOps(draft, original))
+        return report(await mutate(saveOps(draft, original)))
       } catch (error) {
-        return { ok: false, message: message(error), conflict: false }
+        return report({ ok: false, message: message(error), conflict: false })
       }
     },
     async setStaticEnabled(loaderId, enabled) {

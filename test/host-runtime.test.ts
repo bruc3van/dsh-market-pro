@@ -17,7 +17,9 @@ test('built market boots, registers RPCs, and persists settings and plugin toggl
   assert.equal(getDshRuntimeVersion(), '0.2.2-rc.5')
   const home = await realpath(await mkdtemp(join(tmpdir(), 'safe-market-host-')))
   const previousHome = process.env.DSH_HOME
+  const previousTelemetry = process.env.DSH_MARKET_TELEMETRY
   process.env.DSH_HOME = home
+  process.env.DSH_MARKET_TELEMETRY = '0'
   const contexts = []
   try {
     // Application-owned directory: neither config nor DSH_HOME may redirect the manager.
@@ -72,7 +74,7 @@ test('built market boots, registers RPCs, and persists settings and plugin toggl
     }
     const first = await start()
     const market = first.get('dshMarketPro')
-    assert.deepEqual(market.getSettings(), { enabled: true, aiAssistantEnabled: true })
+    assert.deepEqual(market.getSettings(), { enabled: true, aiAssistantEnabled: true, telemetryEnabled: true })
     assert.equal((await first.skills.list()).some(skill => skill.name === 'dsh-market-pro'), true)
     assert.equal(market.describe().profile, 'test')
     assert.equal(first.settings.describe().find(row => row.ns === 'renamed-market').autoGenerate, false)
@@ -117,14 +119,15 @@ test('built market boots, registers RPCs, and persists settings and plugin toggl
     assert.equal(first.get('marketTestDemo'), undefined)
     await market.updateSettings({ field: 'enabled', value: false })
     await assert.rejects(market.getCatalog(false, new AbortController().signal), /disabled/)
-    assert.deepEqual(await market.updateSettings({ field: 'enabled', value: true }), { enabled: true, aiAssistantEnabled: true })
-    assert.deepEqual(market.getSettings(), { enabled: true, aiAssistantEnabled: true }, 'the original service must observe live edits')
-    assert.deepEqual(await market.updateSettings({ field: 'aiAssistantEnabled', value: false }), { enabled: true, aiAssistantEnabled: false })
+    assert.deepEqual(await market.updateSettings({ field: 'enabled', value: true }), { enabled: true, aiAssistantEnabled: true, telemetryEnabled: true })
+    assert.deepEqual(market.getSettings(), { enabled: true, aiAssistantEnabled: true, telemetryEnabled: true }, 'the original service must observe live edits')
+    assert.deepEqual(await market.updateSettings({ field: 'aiAssistantEnabled', value: false }), { enabled: true, aiAssistantEnabled: false, telemetryEnabled: true })
+    assert.deepEqual(await market.updateSettings({ field: 'telemetryEnabled', value: false }), { enabled: true, aiAssistantEnabled: false, telemetryEnabled: false })
     assert.equal((await first.skills.list()).some(skill => skill.name === 'dsh-market-pro'), false, 'disabling AI assistant withdraws the built-in skill immediately')
     assert.match(await readFile(profile.patchPath, 'utf8'), /enabled: true/)
     await first.fiber.dispose()
     const second = await start()
-    assert.deepEqual(second.get('dshMarketPro').getSettings(), { enabled: true, aiAssistantEnabled: false })
+    assert.deepEqual(second.get('dshMarketPro').getSettings(), { enabled: true, aiAssistantEnabled: false, telemetryEnabled: false })
     assert.equal((await second.skills.list()).some(skill => skill.name === 'dsh-market-pro'), false)
     assert.equal(second.get('marketTestDemo'), undefined, 'the user patch must keep the plugin disabled after restart')
     const enabled = await second.get('dshMarketPro').setInstalledEnabled({ packageName: 'test-user-bundle', enabled: true })
@@ -133,16 +136,19 @@ test('built market boots, registers RPCs, and persists settings and plugin toggl
     assert.equal(second.get('marketTestDemo'), true)
     await second.get('dshMarketPro').updateSettings({ field: 'enabled', value: false })
     await second.get('dshMarketPro').updateSettings({ field: 'aiAssistantEnabled', value: true })
-    assert.deepEqual(second.get('dshMarketPro').getSettings(), { enabled: false, aiAssistantEnabled: true })
+    await second.get('dshMarketPro').updateSettings({ field: 'telemetryEnabled', value: true })
+    assert.deepEqual(second.get('dshMarketPro').getSettings(), { enabled: false, aiAssistantEnabled: true, telemetryEnabled: true })
     assert.equal((await second.skills.list()).some(skill => skill.name === 'dsh-market-pro'), true)
     await second.fiber.dispose()
     const third = await start()
     assert.equal(third.get('marketTestDemo'), true, 'the plugin must stay enabled after restart')
-    assert.deepEqual(third.get('dshMarketPro').getSettings(), { enabled: false, aiAssistantEnabled: true })
+    assert.deepEqual(third.get('dshMarketPro').getSettings(), { enabled: false, aiAssistantEnabled: true, telemetryEnabled: true })
   } finally {
     for (const ctx of contexts.reverse()) await ctx.fiber.dispose()
     if (previousHome === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = previousHome
+    if (previousTelemetry === undefined) delete process.env.DSH_MARKET_TELEMETRY
+    else process.env.DSH_MARKET_TELEMETRY = previousTelemetry
     await rm(home, { recursive: true, force: true })
   }
 })

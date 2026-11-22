@@ -135,6 +135,8 @@ export declare const zh: {
     readonly 'settings.ai.try': "去对话中试试";
     readonly 'settings.catalog.title': "社区插件目录";
     readonly 'settings.catalog.desc': "联网同步社区精选与全量插件；关闭后仍可管理已安装插件、技能和 MCP。";
+    readonly 'settings.telemetry.title': "匿名使用统计";
+    readonly 'settings.telemetry.desc': "仅向 dsh-market-pro.com 发送每日匿名心跳（随机 ID 与运行环境）及公开插件/精选 MCP 安装结果，用于统计安装量与优化体验；不采集对话、路径、密钥或私有插件，关闭后立即停止。";
     readonly search: "搜索插件名称、包名、功能或分类";
     readonly all: "全部";
     readonly 'featured.chip': "精选";

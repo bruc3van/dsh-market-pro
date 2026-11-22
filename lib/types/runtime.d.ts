@@ -13,7 +13,7 @@ import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol';
 import type { CatalogSource } from './catalog.ts';
 import type { InstalledManager } from './installed.ts';
 import type { McpAdoptResult, McpHostContext, McpProbeResult } from './contract.ts';
-import type { MarketCatalogResult, MarketEnvironment, MarketInstalledResult, MarketSkillsResult, SafeMarketSettings, SafeMarketSettingsUpdate, SetInstalledEnabledUpdate, UninstallInstalledUpdate } from './contract.ts';
+import type { MarketCatalogResult, MarketEnvironment, MarketInstalledResult, MarketSkillsResult, SafeMarketSettings, SafeMarketSettingsUpdate, SetInstalledEnabledUpdate, TelemetryClientEvent, UninstallInstalledUpdate } from './contract.ts';
 /** Market service: the reduced catalog, the plugin's durable settings, and the installed-panel verbs. */
 export declare class SafeMarketRuntime extends TypertRemoteService {
     private readonly catalog;
@@ -25,6 +25,7 @@ export declare class SafeMarketRuntime extends TypertRemoteService {
     private readonly readMcp;
     private readonly probe;
     private readonly adopt;
+    private readonly telemetry?;
     /**
      * Register the service under the `dshMarketPro` key (the wire namespace).
      * @param ctx - owning cordis context.
@@ -33,7 +34,7 @@ export declare class SafeMarketRuntime extends TypertRemoteService {
      * @param writeSettings - durable settings write.
      * @param installed - the installed-plugin manager.
      */
-    constructor(ctx: Context, catalog: CatalogSource, readSettings: () => SafeMarketSettings, writeSettings: (update: SafeMarketSettingsUpdate) => Promise<SafeMarketSettings>, readSkills: (sessionId: string, signal: AbortSignal) => Promise<MarketSkillsResult>, environment: MarketEnvironment, installed: InstalledManager, readMcp: () => McpHostContext, probe: (name: string, signal: AbortSignal) => Promise<McpProbeResult>, adopt: (loaderId: string) => Promise<McpAdoptResult>);
+    constructor(ctx: Context, catalog: CatalogSource, readSettings: () => SafeMarketSettings, writeSettings: (update: SafeMarketSettingsUpdate) => Promise<SafeMarketSettings>, readSkills: (sessionId: string, signal: AbortSignal) => Promise<MarketSkillsResult>, environment: MarketEnvironment, installed: InstalledManager, readMcp: () => McpHostContext, probe: (name: string, signal: AbortSignal) => Promise<McpProbeResult>, adopt: (loaderId: string) => Promise<McpAdoptResult>, telemetry?: ((event: TelemetryClientEvent) => void) | undefined);
     /**
      * The deployment facts the browser needs to NAME the install command —
      * which profile an install would change. This plugin never runs it.
@@ -103,4 +104,8 @@ export declare class SafeMarketRuntime extends TypertRemoteService {
     adoptMcp(request: {
         readonly loaderId: string;
     }): Promise<McpAdoptResult>;
+    /** Forward an anonymous client telemetry signal to the Host-side reporter. */
+    reportTelemetry(event: TelemetryClientEvent): {
+        readonly ok: boolean;
+    };
 }

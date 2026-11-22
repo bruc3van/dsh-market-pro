@@ -75,6 +75,12 @@ export const safeMarketDomainState = z.object({
    * store written before the move still parses and its record is not lost.
    */
   pendingUninstall: z.array(pendingUninstallState).default([]),
+  /** Random per-install anonymous telemetry UUID (never tied to hardware). */
+  telemetryId: z.string().default(''),
+  /** Last UTC+8 day (`YYYY-MM-DD`) a daily heartbeat succeeded. */
+  telemetryLastPingDay: z.string().default(''),
+  /** Host kind reported by the last daily heartbeat (`desktop`/`web`/`other`). */
+  telemetryLastPingKind: z.string().default(''),
 })
 
 /** Durable market state inferred from {@link safeMarketDomainState}. */
@@ -94,6 +100,9 @@ export const initialDomainState: SafeMarketDomainState = {
   marketSize: 1,
   catalogBase: '',
   pendingUninstall: [],
+  telemetryId: '',
+  telemetryLastPingDay: '',
+  telemetryLastPingKind: '',
 }
 
 /**
@@ -131,7 +140,13 @@ export function adoptDomainState(
   stored: SafeMarketDomainState,
   isUsable: (candidate: SafeMarketDomainState) => boolean,
 ): SafeMarketDomainState {
-  const next: SafeMarketDomainState = { ...current, pendingUninstall: stored.pendingUninstall ?? current.pendingUninstall }
+  const next: SafeMarketDomainState = {
+    ...current,
+    pendingUninstall: stored.pendingUninstall ?? current.pendingUninstall,
+    telemetryId: current.telemetryId || stored.telemetryId || '',
+    telemetryLastPingDay: current.telemetryLastPingDay || stored.telemetryLastPingDay || '',
+    telemetryLastPingKind: current.telemetryLastPingKind || stored.telemetryLastPingKind || '',
+  }
   if (current.catalog !== null) return next
   if (!isUsable(stored)) return next
   return {

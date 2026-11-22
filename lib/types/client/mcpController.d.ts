@@ -90,6 +90,13 @@ export interface McpHosts {
     probe(name: string): Promise<Reply<McpProbeResult>>;
     /** This market's Host adoption verb (`dshMarketPro.adoptMcp`); throws on refusal. */
     adopt?(loaderId: string): Promise<McpAdoptResult>;
+    /** Optional anonymous install feedback observer for newly added MCP servers. */
+    onSaveOutcome?(outcome: {
+        readonly draft: McpDraft;
+        readonly original: string | undefined;
+        readonly ok: boolean;
+        readonly message: string;
+    }): void;
 }
 /** Whether, and why not, one static row can be switched through the plugin manager. */
 export type McpStaticToggle = {

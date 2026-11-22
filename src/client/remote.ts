@@ -17,6 +17,7 @@ import type {
   SafeMarketSettings,
   SafeMarketSettingsUpdate,
   SetInstalledEnabledUpdate,
+  TelemetryClientEvent,
   UninstallInstalledUpdate,
 } from '../contract.ts'
 
@@ -48,6 +49,7 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
     inspectMcp: () => Promise<RemoteResult<McpHostContext>>
     probeMcp: (name: string, signal?: AbortSignal) => Promise<RemoteResult<McpProbeResult>>
     adoptMcp: (request: { loaderId: string }) => Promise<RemoteResult<McpAdoptResult>>
+    reportTelemetry: (event: TelemetryClientEvent) => Promise<RemoteResult<{ readonly ok: boolean }>>
   }
   interface TypertRemoteMap {
     'dshMarketPro/getCatalog': (force: boolean, signal?: AbortSignal) => Promise<RemoteResult<MarketCatalogResult>>
@@ -61,6 +63,7 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
     'dshMarketPro/inspectMcp': () => Promise<RemoteResult<McpHostContext>>
     'dshMarketPro/probeMcp': (name: string, signal?: AbortSignal) => Promise<RemoteResult<McpProbeResult>>
     'dshMarketPro/adoptMcp': (request: { loaderId: string }) => Promise<RemoteResult<McpAdoptResult>>
+    'dshMarketPro/reportTelemetry': (event: TelemetryClientEvent) => Promise<RemoteResult<{ readonly ok: boolean }>>
   }
   interface TypertRemoteNamespaceMap {
     dshMarketPro: TypertRemoteNamespace$6473684d61726b657450726f

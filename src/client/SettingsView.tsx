@@ -33,6 +33,7 @@ export function SettingsView({
   const baseId = useId()
   const aiHeadingId = `${baseId}-ai`
   const catalogHeadingId = `${baseId}-catalog`
+  const telemetryHeadingId = `${baseId}-telemetry`
   const mounted = useRef(true)
 
   useEffect(() => {
@@ -110,6 +111,21 @@ export function SettingsView({
             label={t('settings.catalog.title')}
             disabled={controlsDisabled}
             onChange={next => toggle('enabled', next)}
+          />
+        </div>
+      </section>
+
+      <section className="dsh_market_settingRow" aria-labelledby={telemetryHeadingId}>
+        <div className="dsh_market_settingHead">
+          <div className="dsh_market_settingCopy">
+            <h4 id={telemetryHeadingId} className="dsh_market_settingName">{t('settings.telemetry.title')}</h4>
+            <p className="dsh_market_settingBody">{t('settings.telemetry.desc')}</p>
+          </div>
+          <Switch
+            checked={settings.telemetryEnabled}
+            label={t('settings.telemetry.title')}
+            disabled={controlsDisabled}
+            onChange={next => toggle('telemetryEnabled', next)}
           />
         </div>
       </section>

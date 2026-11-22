@@ -11,6 +11,9 @@ test('catalog access and AI assistant are enabled by default and declared as liv
   assert.equal(Config({}).aiAssistantEnabled.get(), true)
   assert.equal(Config({ aiAssistantEnabled: false }).aiAssistantEnabled.get(), false)
   assert.equal(Config.dict.aiAssistantEnabled.meta.volatile, true)
+  assert.equal(Config({}).telemetryEnabled.get(), true)
+  assert.equal(Config({ telemetryEnabled: false }).telemetryEnabled.get(), false)
+  assert.equal(Config.dict.telemetryEnabled.meta.volatile, true)
 })
 
 test('settings write to the actual profile entry and read the retained live reference', async () => {
@@ -18,36 +21,42 @@ test('settings write to the actual profile entry and read the retained live refe
   const fiber = { entry: { options: { id: 'custom-market-entry' } } }
   let enabled = false
   let aiAssistantEnabled = true
+  let telemetryEnabled = true
   let disposed = false
   let dispose = () => {}
   const config = {
     ...Config({}),
     enabled: { get: () => enabled },
     aiAssistantEnabled: { get: () => aiAssistantEnabled },
+    telemetryEnabled: { get: () => telemetryEnabled },
   }
   const ctx = {
     fiber,
     effect: (setup: () => () => void) => { dispose = setup() },
     settings: {
       configure: (...args: unknown[]) => { calls.push(args); return () => { disposed = true } },
-      update: async (ns: string, patch: { enabled?: boolean; aiAssistantEnabled?: boolean }) => {
+      update: async (ns: string, patch: { enabled?: boolean; aiAssistantEnabled?: boolean; telemetryEnabled?: boolean }) => {
         calls.push([ns, patch])
         if (patch.enabled !== undefined) enabled = patch.enabled
         if (patch.aiAssistantEnabled !== undefined) aiAssistantEnabled = patch.aiAssistantEnabled
+        if (patch.telemetryEnabled !== undefined) telemetryEnabled = patch.telemetryEnabled
       },
     },
   }
   const settings = registerSafeMarketSettings(ctx, config)
   assert.deepEqual(calls, [[{ auto: false }, fiber]])
-  assert.deepEqual(settings.get(), { enabled: false, aiAssistantEnabled: true })
+  assert.deepEqual(settings.get(), { enabled: false, aiAssistantEnabled: true, telemetryEnabled: true })
   await settings.update({ enabled: true })
   assert.deepEqual(calls[1], ['custom-market-entry', { enabled: true }])
-  assert.deepEqual(settings.get(), { enabled: true, aiAssistantEnabled: true })
+  assert.deepEqual(settings.get(), { enabled: true, aiAssistantEnabled: true, telemetryEnabled: true })
   await settings.update({ aiAssistantEnabled: false })
   assert.deepEqual(calls[2], ['custom-market-entry', { aiAssistantEnabled: false }])
-  assert.deepEqual(settings.get(), { enabled: true, aiAssistantEnabled: false })
+  assert.deepEqual(settings.get(), { enabled: true, aiAssistantEnabled: false, telemetryEnabled: true })
+  await settings.update({ telemetryEnabled: false })
+  assert.deepEqual(calls[3], ['custom-market-entry', { telemetryEnabled: false }])
+  assert.deepEqual(settings.get(), { enabled: true, aiAssistantEnabled: false, telemetryEnabled: false })
   enabled = false
-  assert.deepEqual(settings.get(), { enabled: false, aiAssistantEnabled: false })
+  assert.deepEqual(settings.get(), { enabled: false, aiAssistantEnabled: false, telemetryEnabled: false })
   dispose()
   assert.equal(disposed, true)
 })
@@ -60,5 +69,5 @@ test('settings persistence failures propagate and do not change the live permiss
   }
   const settings = registerSafeMarketSettings(ctx, Config({ enabled: false, aiAssistantEnabled: true }))
   await assert.rejects(settings.update({ enabled: true }), /write refused/)
-  assert.deepEqual(settings.get(), { enabled: false, aiAssistantEnabled: true })
+  assert.deepEqual(settings.get(), { enabled: false, aiAssistantEnabled: true, telemetryEnabled: true })
 })

@@ -40,6 +40,7 @@ import { registerMarketAiSkill } from './aiSkill.ts'
 import { registerMarketAiTool, type HostPluginManagerUpdateFace, type HostPluginMarketUpdateFace, type MarketApprovalServiceFace } from './aiTools.ts'
 import { registerMarketAiMcpTool } from './aiMcpTools.ts'
 import { adoptDomainState, initialDomainState, safeMarketDomainSpec, type SafeMarketDomainState } from './store.ts'
+import { createTelemetryReporter } from './telemetry.ts'
 import { TYPERT_MANIFEST } from './typert.ts'
 import type { SafeMarketSettingsUpdate } from './contract.ts'
 import { PACKAGE_NAME } from './shapes.ts'
@@ -116,7 +117,45 @@ export function applyMarket(ctx: Context, resolved: Config): () => void {
     if (seat.status === 'durable') seat.persist(next)
   }
 
+  const selfVersion = readSelfVersion()
+  const hostTelemetryDisabled = (ctx.get('profileContext')?.telemetryDisabledEnv ?? '').trim() !== ''
+  const isPublicPluginTarget = (candidate: string): boolean => {
+    const cached = seat.data.catalog
+    if (cached === null) return false
+    const needle = candidate.toLowerCase()
+    for (const item of cached.items) {
+      if (item.fullName.toLowerCase() === needle || item.packageName?.toLowerCase() === needle) return true
+    }
+    for (const entry of cached.featured?.entries ?? []) {
+      if (entry.item.fullName.toLowerCase() === needle || entry.item.packageName?.toLowerCase() === needle) return true
+    }
+    return false
+  }
+  const telemetry = createTelemetryReporter({
+    pluginVersion: selfVersion,
+    isEnabled: () => !hostTelemetryDisabled && readSettings().telemetryEnabled,
+    isPublicPluginTarget,
+    storage: {
+      ready: domainReady,
+      read: () => ({
+        telemetryId: seat.data.telemetryId,
+        telemetryLastPingDay: seat.data.telemetryLastPingDay,
+        telemetryLastPingKind: seat.data.telemetryLastPingKind,
+      }),
+      write: (patch) => {
+        updateSeatData({
+          ...seat.data,
+          ...(patch.telemetryId !== undefined ? { telemetryId: patch.telemetryId } : {}),
+          ...(patch.telemetryLastPingDay !== undefined ? { telemetryLastPingDay: patch.telemetryLastPingDay } : {}),
+          ...(patch.telemetryLastPingKind !== undefined ? { telemetryLastPingKind: patch.telemetryLastPingKind } : {}),
+        })
+      },
+    },
+    disposeSignal: disposeController.signal,
+  })
+
   const disposeSeat = (): void => {
+    telemetry.dispose()
     disposeController.abort()
     resolveDomainReady()
     const previous = seat
@@ -216,6 +255,7 @@ export function applyMarket(ctx: Context, resolved: Config): () => void {
       return disposeSeat
     }
     if (readSettings().enabled) catalog.warmup()
+    if (!hostTelemetryDisabled && readSettings().telemetryEnabled) telemetry.scheduleBootPing()
     // A pending-uninstall record an older build kept in the domain store:
     // seed the file seat so this boot's sweep still takes its rows back,
     // then forget the field — the file is the seat from now on. Failures here
@@ -283,11 +323,12 @@ export function applyMarket(ctx: Context, resolved: Config): () => void {
     readSettings,
     writeSettings,
     (sessionId, signal) => readSkills(ctx, sessionId, signal),
-    { profile: profile.name, version: readSelfVersion() },
+    { profile: profile.name, version: selfVersion },
     installed,
     readMcp,
     (name, signal) => probeManagedMcp(ctx, ctx.loader.entries() as Iterable<McpLoaderEntry>, name, signal),
     loaderId => adoptMcp(ctx, ctx.loader.entries() as Iterable<McpLoaderEntry>, loaderId),
+    event => telemetry.handleClientEvent(event),
   )
 
   // Strict endpoint registration: the gateway resolves the market's calls

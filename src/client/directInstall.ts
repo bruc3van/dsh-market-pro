@@ -46,7 +46,16 @@ const IDLE_DIRECT_STATE: DirectState = {
   recovering: false,
   queue: [],
 }
-export function createDirectInstaller(host: () => InstallHost | undefined) {
+export interface DirectInstallOutcome {
+  readonly spec: string
+  readonly result: 'ok' | 'failed'
+  readonly message: string
+}
+
+export function createDirectInstaller(
+  host: () => InstallHost | undefined,
+  onOutcome?: (outcome: DirectInstallOutcome) => void,
+) {
   let state: DirectState = IDLE_DIRECT_STATE
   let requestId: RequestId
   let stopped = false
@@ -67,13 +76,20 @@ export function createDirectInstaller(host: () => InstallHost | undefined) {
   const settle = async (result: Awaited<ReturnType<InstallHost['installBundle']>>) => {
     if (!result.ok) { set({ phase: 'unknown', recovering: false, message: result.error.message }); return }
     const value = result.value
+    const summary = [value.error?.code, value.error?.diagnostic, ...(value.warnings ?? []),
+      ...(value.error?.incompatible ?? []).map(p => `${p.name}@${p.version}: ${JSON.stringify(p.requirements ?? p.peers ?? {})}`),
+      value.application === 'failed' ? value.packageResult?.output : undefined,
+    ].filter(Boolean).join('\n').slice(-8000)
+    const spec = state.spec
     set({ phase: value.application === 'failed' ? 'failed' : 'done', application: value.application,
       recovering: false,
       pendingBuilds: value.pendingBuilds ?? [],
-      message: [value.error?.code, value.error?.diagnostic, ...(value.warnings ?? []),
-        ...(value.error?.incompatible ?? []).map(p => `${p.name}@${p.version}: ${JSON.stringify(p.requirements ?? p.peers ?? {})}`),
-        value.application === 'failed' ? value.packageResult?.output : undefined,
-      ].filter(Boolean).join('\n').slice(-8000) })
+      message: summary })
+    if (value.application === 'applied' || value.application === 'restart-required') {
+      onOutcome?.({ spec, result: 'ok', message: '' })
+    } else if (value.application === 'failed' && (value.pendingBuilds?.length ?? 0) === 0) {
+      onOutcome?.({ spec, result: 'failed', message: summary })
+    }
     if (!stopped && (value.application === 'applied' || value.application === 'restart-required')) {
       const next = state.queue.find(entry => entry.phase === 'idle')
       if (next) await run(next.spec)
@@ -114,7 +130,11 @@ export function createDirectInstaller(host: () => InstallHost | undefined) {
       try {
         await settle(await api.installBundle(spec, { requestId, registry: inspection.value.registry, enabled: true, ...(builds.length ? { approvedBuilds: builds } : {}) }))
       } catch (error) { set({ phase: 'unknown', recovering: false, message: String(error) }) }
-    } catch (error) { set({ phase: 'failed', recovering: false, message: error instanceof Error ? error.message : String(error) }) }
+    } catch (error) {
+      const errMsg = error instanceof Error ? error.message : String(error)
+      set({ phase: 'failed', recovering: false, message: errMsg })
+      onOutcome?.({ spec, result: 'failed', message: errMsg })
+    }
   }
   return {
     getSnapshot: () => state,

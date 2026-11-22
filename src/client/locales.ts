@@ -140,6 +140,8 @@ export const zh = {
   'settings.ai.try': '去对话中试试',
   'settings.catalog.title': '社区插件目录',
   'settings.catalog.desc': '联网同步社区精选与全量插件；关闭后仍可管理已安装插件、技能和 MCP。',
+  'settings.telemetry.title': '匿名使用统计',
+  'settings.telemetry.desc': '仅向 dsh-market-pro.com 发送每日匿名心跳（随机 ID 与运行环境）及公开插件/精选 MCP 安装结果，用于统计安装量与优化体验；不采集对话、路径、密钥或私有插件，关闭后立即停止。',
 
   'search': '搜索插件名称、包名、功能或分类',
   'all': '全部',
@@ -681,6 +683,8 @@ export const en: Record<SafeMarketLocaleKey, string> = {
   'settings.ai.try': 'Try in chat',
   'settings.catalog.title': 'Community Plugin Catalog',
   'settings.catalog.desc': 'Sync curated picks and the community catalog online. Turning it off keeps Installed, Skills, and MCP management available.',
+  'settings.telemetry.title': 'Anonymous Usage Telemetry',
+  'settings.telemetry.desc': 'Sends a daily anonymous heartbeat (random ID and basic runtime info) and public plugin/curated MCP install outcomes to dsh-market-pro.com to track installs and improve reliability. Never collects chats, paths, secrets, or private plugins; stops immediately when turned off.',
 
   'search': 'Search plugins by name, package, task, or category',
   'all': 'All',

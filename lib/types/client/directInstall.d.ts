@@ -65,7 +65,12 @@ export interface DirectState {
         message: string;
     }[];
 }
-export declare function createDirectInstaller(host: () => InstallHost | undefined): {
+export interface DirectInstallOutcome {
+    readonly spec: string;
+    readonly result: 'ok' | 'failed';
+    readonly message: string;
+}
+export declare function createDirectInstaller(host: () => InstallHost | undefined, onOutcome?: (outcome: DirectInstallOutcome) => void): {
     getSnapshot: () => DirectState;
     subscribe: (fn: () => void) => () => void;
     start(input: string | string[]): Promise<void>;

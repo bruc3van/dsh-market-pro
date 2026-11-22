@@ -186,12 +186,43 @@ export interface SafeMarketSettings {
    * read-only `dsh_market_pro` discovery tool) is active for conversations.
    */
   readonly aiAssistantEnabled: boolean
+  /**
+   * Whether anonymous usage & install feedback telemetry is enabled (opt-out).
+   */
+  readonly telemetryEnabled: boolean
 }
 
 /** One field update sent through the plugin-owned settings Remote. */
 export type SafeMarketSettingsUpdate =
   | { readonly field: 'enabled'; readonly value: boolean }
   | { readonly field: 'aiAssistantEnabled'; readonly value: boolean }
+  | { readonly field: 'telemetryEnabled'; readonly value: boolean }
+
+export type TelemetryHostKind = 'desktop' | 'web' | 'other'
+export type TelemetryOs = 'darwin' | 'win32' | 'linux' | 'other'
+export type TelemetryLocale = 'zh' | 'en' | 'other'
+export type TelemetryErrorCode = 'compat' | 'network' | 'timeout' | 'refused' | 'cancelled' | 'unknown'
+
+export type TelemetryClientEvent =
+  | {
+    readonly kind: 'client_hello'
+    readonly hostKind: TelemetryHostKind
+    readonly locale: TelemetryLocale
+  }
+  | {
+    readonly kind: 'plugin_install'
+    readonly target: string
+    readonly mode: 'direct' | 'ai'
+    readonly result: 'ok' | 'failed'
+    readonly errorCode?: TelemetryErrorCode
+  }
+  | {
+    readonly kind: 'mcp_install'
+    readonly target: string
+    readonly mode: 'featured' | 'custom'
+    readonly result: 'ok' | 'failed'
+    readonly errorCode?: TelemetryErrorCode
+  }
 
 /** Live state of one loader entry an installed bundle introduces. */
 export interface MarketInstalledEntry {
@@ -392,12 +423,39 @@ export const marketEnvironmentSchema = z.object({
 export const safeMarketSettingsSchema = z.object({
   enabled: z.boolean(),
   aiAssistantEnabled: z.boolean(),
+  telemetryEnabled: z.boolean(),
 }).readonly()
 
 /** Strict wire codec for one field update. */
 export const safeMarketSettingsUpdateSchema = z.discriminatedUnion('field', [
   z.object({ field: z.literal('enabled'), value: z.boolean() }).readonly(),
   z.object({ field: z.literal('aiAssistantEnabled'), value: z.boolean() }).readonly(),
+  z.object({ field: z.literal('telemetryEnabled'), value: z.boolean() }).readonly(),
+])
+
+const telemetryErrorCodeSchema = z.enum(['compat', 'network', 'timeout', 'refused', 'cancelled', 'unknown'])
+
+/** Strict wire codec for client-reported anonymous telemetry events. */
+export const telemetryClientEventSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('client_hello'),
+    hostKind: z.enum(['desktop', 'web', 'other']),
+    locale: z.enum(['zh', 'en', 'other']),
+  }).readonly(),
+  z.object({
+    kind: z.literal('plugin_install'),
+    target: z.string().max(200),
+    mode: z.enum(['direct', 'ai']),
+    result: z.enum(['ok', 'failed']),
+    errorCode: telemetryErrorCodeSchema.optional(),
+  }).readonly(),
+  z.object({
+    kind: z.literal('mcp_install'),
+    target: z.string().max(100),
+    mode: z.enum(['featured', 'custom']),
+    result: z.enum(['ok', 'failed']),
+    errorCode: telemetryErrorCodeSchema.optional(),
+  }).readonly(),
 ])
 
 /** Strict wire codec for an npm package name. */
@@ -807,6 +865,30 @@ export const SAFE_MARKET_INVOCATIONS: readonly InvocationDescriptor[] = [
       mode: 'strict',
       typeSymbol: 'dsh-market-pro#McpAdoptResult',
       create: () => mcpAdoptResultSchema,
+    },
+  },
+  {
+    id: 'dsh-market-pro#dshMarketPro/reportTelemetry',
+    service: 'dshMarketPro',
+    namespace: 'dshMarketPro',
+    method: 'reportTelemetry',
+    invocation: { kind: 'direct' },
+    parameters: [
+      {
+        name: 'event',
+        wire: 'event',
+        source: 'json',
+        codec: {
+          mode: 'strict',
+          typeSymbol: 'dsh-market-pro#TelemetryClientEvent',
+          create: () => telemetryClientEventSchema,
+        },
+      },
+    ],
+    result: {
+      mode: 'strict',
+      typeSymbol: 'dsh-market-pro#TelemetryAck',
+      create: () => z.object({ ok: z.boolean() }).readonly(),
     },
   },
 ]

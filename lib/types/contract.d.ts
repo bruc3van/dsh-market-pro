@@ -171,6 +171,10 @@ export interface SafeMarketSettings {
      * read-only `dsh_market_pro` discovery tool) is active for conversations.
      */
     readonly aiAssistantEnabled: boolean;
+    /**
+     * Whether anonymous usage & install feedback telemetry is enabled (opt-out).
+     */
+    readonly telemetryEnabled: boolean;
 }
 /** One field update sent through the plugin-owned settings Remote. */
 export type SafeMarketSettingsUpdate = {
@@ -179,6 +183,30 @@ export type SafeMarketSettingsUpdate = {
 } | {
     readonly field: 'aiAssistantEnabled';
     readonly value: boolean;
+} | {
+    readonly field: 'telemetryEnabled';
+    readonly value: boolean;
+};
+export type TelemetryHostKind = 'desktop' | 'web' | 'other';
+export type TelemetryOs = 'darwin' | 'win32' | 'linux' | 'other';
+export type TelemetryLocale = 'zh' | 'en' | 'other';
+export type TelemetryErrorCode = 'compat' | 'network' | 'timeout' | 'refused' | 'cancelled' | 'unknown';
+export type TelemetryClientEvent = {
+    readonly kind: 'client_hello';
+    readonly hostKind: TelemetryHostKind;
+    readonly locale: TelemetryLocale;
+} | {
+    readonly kind: 'plugin_install';
+    readonly target: string;
+    readonly mode: 'direct' | 'ai';
+    readonly result: 'ok' | 'failed';
+    readonly errorCode?: TelemetryErrorCode;
+} | {
+    readonly kind: 'mcp_install';
+    readonly target: string;
+    readonly mode: 'featured' | 'custom';
+    readonly result: 'ok' | 'failed';
+    readonly errorCode?: TelemetryErrorCode;
 };
 /** Live state of one loader entry an installed bundle introduces. */
 export interface MarketInstalledEntry {
@@ -768,6 +796,7 @@ export declare const marketEnvironmentSchema: z.ZodReadonly<z.ZodObject<{
 export declare const safeMarketSettingsSchema: z.ZodReadonly<z.ZodObject<{
     enabled: z.ZodBoolean;
     aiAssistantEnabled: z.ZodBoolean;
+    telemetryEnabled: z.ZodBoolean;
 }, z.core.$strip>>;
 /** Strict wire codec for one field update. */
 export declare const safeMarketSettingsUpdateSchema: z.ZodDiscriminatedUnion<[z.ZodReadonly<z.ZodObject<{
@@ -776,7 +805,62 @@ export declare const safeMarketSettingsUpdateSchema: z.ZodDiscriminatedUnion<[z.
 }, z.core.$strip>>, z.ZodReadonly<z.ZodObject<{
     field: z.ZodLiteral<"aiAssistantEnabled">;
     value: z.ZodBoolean;
+}, z.core.$strip>>, z.ZodReadonly<z.ZodObject<{
+    field: z.ZodLiteral<"telemetryEnabled">;
+    value: z.ZodBoolean;
 }, z.core.$strip>>], "field">;
+/** Strict wire codec for client-reported anonymous telemetry events. */
+export declare const telemetryClientEventSchema: z.ZodDiscriminatedUnion<[z.ZodReadonly<z.ZodObject<{
+    kind: z.ZodLiteral<"client_hello">;
+    hostKind: z.ZodEnum<{
+        desktop: "desktop";
+        web: "web";
+        other: "other";
+    }>;
+    locale: z.ZodEnum<{
+        other: "other";
+        zh: "zh";
+        en: "en";
+    }>;
+}, z.core.$strip>>, z.ZodReadonly<z.ZodObject<{
+    kind: z.ZodLiteral<"plugin_install">;
+    target: z.ZodString;
+    mode: z.ZodEnum<{
+        direct: "direct";
+        ai: "ai";
+    }>;
+    result: z.ZodEnum<{
+        ok: "ok";
+        failed: "failed";
+    }>;
+    errorCode: z.ZodOptional<z.ZodEnum<{
+        compat: "compat";
+        network: "network";
+        timeout: "timeout";
+        refused: "refused";
+        cancelled: "cancelled";
+        unknown: "unknown";
+    }>>;
+}, z.core.$strip>>, z.ZodReadonly<z.ZodObject<{
+    kind: z.ZodLiteral<"mcp_install">;
+    target: z.ZodString;
+    mode: z.ZodEnum<{
+        featured: "featured";
+        custom: "custom";
+    }>;
+    result: z.ZodEnum<{
+        ok: "ok";
+        failed: "failed";
+    }>;
+    errorCode: z.ZodOptional<z.ZodEnum<{
+        compat: "compat";
+        network: "network";
+        timeout: "timeout";
+        refused: "refused";
+        cancelled: "cancelled";
+        unknown: "unknown";
+    }>>;
+}, z.core.$strip>>], "kind">;
 /** Strict wire codec for an npm package name. */
 export declare const packageNameSchema: z.ZodString;
 /** Strict wire codec for one installed entry's live state. */
@@ -786,10 +870,10 @@ export declare const marketInstalledEntrySchema: z.ZodReadonly<z.ZodObject<{
     present: z.ZodBoolean;
     enabled: z.ZodBoolean;
     phase: z.ZodUnion<readonly [z.ZodEnum<{
+        failed: "failed";
         pending: "pending";
         loading: "loading";
         active: "active";
-        failed: "failed";
         disposed: "disposed";
         unloading: "unloading";
     }>, z.ZodNull]>;
@@ -812,10 +896,10 @@ export declare const marketInstalledPackageSchema: z.ZodReadonly<z.ZodObject<{
         present: z.ZodBoolean;
         enabled: z.ZodBoolean;
         phase: z.ZodUnion<readonly [z.ZodEnum<{
+            failed: "failed";
             pending: "pending";
             loading: "loading";
             active: "active";
-            failed: "failed";
             disposed: "disposed";
             unloading: "unloading";
         }>, z.ZodNull]>;
@@ -842,10 +926,10 @@ export declare const marketInstalledResultSchema: z.ZodReadonly<z.ZodObject<{
             present: z.ZodBoolean;
             enabled: z.ZodBoolean;
             phase: z.ZodUnion<readonly [z.ZodEnum<{
+                failed: "failed";
                 pending: "pending";
                 loading: "loading";
                 active: "active";
-                failed: "failed";
                 disposed: "disposed";
                 unloading: "unloading";
             }>, z.ZodNull]>;
@@ -963,10 +1047,10 @@ export declare const mcpHostContextSchema: z.ZodReadonly<z.ZodObject<{
         headerKeys: z.ZodReadonly<z.ZodArray<z.ZodString>>;
         enabled: z.ZodBoolean;
         phase: z.ZodUnion<readonly [z.ZodEnum<{
+            failed: "failed";
             pending: "pending";
             loading: "loading";
             active: "active";
-            failed: "failed";
             disposed: "disposed";
             unloading: "unloading";
         }>, z.ZodNull]>;

@@ -323,3 +323,35 @@ test('shouldRefreshInstalledAfterDirect refreshes only when profile state may ha
   assert.equal(shouldRefreshInstalledAfterDirect({ phase: 'failed', queue: [], message: 'build-approval-required' }), false)
   assert.equal(shouldRefreshInstalledAfterDirect({ phase: 'installing', queue: [], message: '' }), false)
 })
+
+test('directInstaller does not report build-approval pauses as failed outcomes', async () => {
+  const outcomes: Array<{ spec: string; result: string; message: string }> = []
+  let calls = 0
+  const host = {
+    inspect: async () => ({ ok: true as const, value: { status: 'accepted' as const, registry: null } }),
+    installBundle: async (_spec: string, options?: { approvedBuilds?: string[] }) => {
+      calls += 1
+      if (calls === 1) {
+        return {
+          ok: true as const,
+          value: {
+            application: 'failed' as const,
+            pendingBuilds: ['esbuild'],
+            error: { code: 'build-approval-required', diagnostic: 'Approve build scripts' },
+          },
+        }
+      }
+      assert.deepEqual(options?.approvedBuilds, ['esbuild'])
+      return { ok: true as const, value: { application: 'applied' as const } }
+    },
+    cancelInstall: async () => ({ ok: true as const, value: { status: 'cancelled' } }),
+    waitForInstall: async () => ({ ok: true as const, value: null }),
+  }
+  const installer = createDirectInstaller(() => host, outcome => outcomes.push(outcome))
+  await installer.start('demo-native-plugin')
+  assert.equal(installer.getSnapshot().phase, 'failed')
+  assert.deepEqual(outcomes, [])
+  await installer.approve()
+  assert.equal(installer.getSnapshot().phase, 'done')
+  assert.deepEqual(outcomes, [{ spec: 'demo-native-plugin', result: 'ok', message: '' }])
+})

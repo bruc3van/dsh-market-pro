@@ -28,7 +28,12 @@ import type {
   MarketSkillsResult,
   SafeMarketSettings,
   SafeMarketSettingsUpdate,
+  TelemetryClientEvent,
+  TelemetryHostKind,
+  TelemetryLocale,
 } from '../contract.ts'
+import { FEATURED_MCP_SERVERS, mcpIdentityKey } from '../mcpFeatured.ts'
+import { classifyInstallError } from '../telemetryError.ts'
 import { createClientCatalogCache } from './catalogCache.ts'
 import { createDirectInstaller, type InstallHost } from './directInstall.ts'
 import {
@@ -119,6 +124,7 @@ interface SafeMarketFace {
   inspectMcp(): Promise<{ ok: true; value: McpHostContext } | { ok: false; error: { code: string; message: string } }>
   probeMcp(name: string): Promise<{ ok: true; value: McpProbeResult } | { ok: false; error: { code: string; message: string } }>
   adoptMcp(request: { loaderId: string }): Promise<{ ok: true; value: McpAdoptResult } | { ok: false; error: { code: string; message: string } }>
+  reportTelemetry?(event: TelemetryClientEvent): Promise<{ ok: true; value: { ok: boolean } } | { ok: false; error: { code: string; message: string } }>
 }
 
 /** The slice of the Host's session namespace the folder action calls. */
@@ -127,7 +133,55 @@ interface SessionPathFace {
   openWorkspacePath(request: { path: string }): Promise<{ ok: true; value: { opened: true } } | { ok: false; error: { code: string; message: string } }>
 }
 
-const defaultSettings = (): SafeMarketSettings => ({ enabled: false, aiAssistantEnabled: true })
+const defaultSettings = (): SafeMarketSettings => ({ enabled: false, aiAssistantEnabled: true, telemetryEnabled: true })
+
+function detectClientHostKind(): TelemetryHostKind {
+  try {
+    const win = globalThis as unknown as {
+      dshDesktop?: unknown
+      __TAURI__?: unknown
+      __TAURI_INTERNALS__?: unknown
+      process?: { versions?: { electron?: string } }
+    }
+    const ua = typeof navigator !== 'undefined' ? navigator.userAgent : ''
+    if (
+      win.dshDesktop !== undefined
+      || win.__TAURI__ !== undefined
+      || win.__TAURI_INTERNALS__ !== undefined
+      || (typeof win.process?.versions?.electron === 'string' && win.process.versions.electron !== '')
+      || /Electron|DSHDesktop|Tauri/i.test(ua)
+    ) {
+      return 'desktop'
+    }
+    if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+      return 'web'
+    }
+  } catch {
+    /* Fall through to other. */
+  }
+  return 'other'
+}
+
+function detectClientLocale(resolveLang?: () => string): TelemetryLocale {
+  try {
+    const appLang = (resolveLang?.() ?? '').toLowerCase()
+    if (appLang.startsWith('zh')) return 'zh'
+    if (appLang.startsWith('en')) return 'en'
+    const lang = (
+      (typeof document !== 'undefined' ? document.documentElement.lang : '')
+      || (typeof navigator !== 'undefined' ? navigator.language : '')
+    ).toLowerCase()
+    if (lang.startsWith('zh')) return 'zh'
+    if (lang.startsWith('en')) return 'en'
+  } catch {
+    /* Fall through to other. */
+  }
+  return 'other'
+}
+
+const FEATURED_MCP_BY_IDENTITY = new Map(
+  FEATURED_MCP_SERVERS.map(server => [mcpIdentityKey(server), server.id] as const),
+)
 
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => { setTimeout(resolve, ms) })
@@ -140,6 +194,7 @@ function wait(ms: number): Promise<void> {
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => adoptStyles(), 'dsh-market-pro: styles')
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-market-pro: dictionaries')
+  const t = ctx.locale.bind(NS)
 
   const scope = createMarketStore({ value: defaultSettings(), settingsReady: false, profile: null as string | null, version: '' })
   let settingsGeneration = 0
@@ -220,13 +275,33 @@ export function apply(ctx: ClientContext): void {
     }
   }
 
+  const sendTelemetry = (event: TelemetryClientEvent): void => {
+    try {
+      const remote = market
+      if (remote?.reportTelemetry === undefined) return
+      void remote.reportTelemetry(event).catch(() => undefined)
+    } catch {
+      /* Fail silent: telemetry must never disrupt UI or install workflows. */
+    }
+  }
+
+  const sendClientHello = (): void => {
+    sendTelemetry({
+      kind: 'client_hello',
+      hostKind: detectClientHostKind(),
+      locale: detectClientLocale(() => t('lang')),
+    })
+  }
+
   ctx.effect(async () => {
     const dispose = await ctx.remote.$mount(SAFE_MARKET_REMOTE)
-    market = (ctx.reflect as unknown as { get(name: string): unknown }).get('remote.dshMarketPro') as SafeMarketFace | undefined
-    if (market === undefined) {
+    const mounted = (ctx.reflect as unknown as { get(name: string): unknown }).get('remote.dshMarketPro') as SafeMarketFace | undefined
+    market = mounted
+    if (mounted === undefined) {
       throw new Error('dsh-market-pro: the dshMarketPro Remote namespace did not mount')
     }
     await Promise.all([loadSettings(), loadEnvironment()])
+    if (market === mounted) sendClientHello()
     return () => {
       settingsGeneration += 1
       catalogCache.invalidate()
@@ -241,6 +316,7 @@ export function apply(ctx: ClientContext): void {
     catalogCache.invalidate()
     void loadSettings()
     void loadEnvironment()
+    sendClientHello()
   })
 
   // Invalidate both entry points when installed providers change.
@@ -409,7 +485,18 @@ export function apply(ctx: ClientContext): void {
     },
   }
 
-  const directInstaller = createDirectInstaller(() => ctx.reflect.get('remote.pluginManager') as InstallHost | undefined)
+  const directInstaller = createDirectInstaller(
+    () => ctx.reflect.get('remote.pluginManager') as InstallHost | undefined,
+    (outcome) => {
+      sendTelemetry({
+        kind: 'plugin_install',
+        target: outcome.spec.slice(0, 200),
+        mode: 'direct',
+        result: outcome.result,
+        ...(outcome.result === 'failed' ? { errorCode: classifyInstallError(outcome.message) } : {}),
+      })
+    },
+  )
   const pluginUpdater = createPluginUpdater(
     () => ctx.reflect.get('remote.pluginManager') as UpdateHost | undefined,
     () => ctx.reflect.get('remote.pluginMarket') as UpdateMarketHost | undefined,
@@ -459,6 +546,22 @@ export function apply(ctx: ClientContext): void {
       if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`)
       return result.value
     },
+    onSaveOutcome: ({ draft, ok, message }) => {
+      const identity = mcpIdentityKey({
+        transport: draft.transport,
+        url: draft.url,
+        command: draft.command,
+        args: draft.args,
+      })
+      const featuredId = identity !== '' ? FEATURED_MCP_BY_IDENTITY.get(identity) : undefined
+      sendTelemetry({
+        kind: 'mcp_install',
+        target: featuredId ?? 'custom',
+        mode: featuredId !== undefined ? 'featured' : 'custom',
+        result: ok ? 'ok' : 'failed',
+        ...(!ok ? { errorCode: classifyInstallError(message) } : {}),
+      })
+    },
   })
   ctx.on('connection/reset', () => { mcp.reset() })
   ctx.effect(() => ctx.remote.$on('plugin-manager/changed', () => { mcp.invalidate() }), 'dsh-market-pro: mcp plugin changes')
@@ -496,7 +599,6 @@ export function apply(ctx: ClientContext): void {
   registerMarketSidebar(ctx, injectMarket)
   registerMarketNavigation(ctx, injectMarket)
   registerMarketPluginTab(ctx, injectMarket)
-  const t = ctx.locale.bind(NS)
   ctx.effect(() => ctx.slots.inject('conversation.view', () => ctx.slots.register({
     name: 'conversation.view',
     id: 'dsh-market-pro-skills',

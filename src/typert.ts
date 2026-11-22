@@ -79,6 +79,11 @@ export const TYPERT_MANIFEST: TypertContribution = {
             name: 'adoptMcp',
             signature: 'adoptMcp(request: McpAdoptRequest): Promise<McpAdoptResult>',
           },
+          {
+            kind: 'method',
+            name: 'reportTelemetry',
+            signature: 'reportTelemetry(event: TelemetryClientEvent): { ok: boolean }',
+          },
         ],
         types: [],
       },

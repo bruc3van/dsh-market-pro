@@ -64,6 +64,8 @@ export interface Config {
   enabled: Volatile<boolean>
   /** Live, profile-persisted switch for the built-in AI assistant (skill and read-only search tool). */
   aiAssistantEnabled: Volatile<boolean>
+  /** Live, profile-persisted switch for anonymous usage & install feedback telemetry. */
+  telemetryEnabled: Volatile<boolean>
   /** A complete market-catalog (schema 3) or legacy market-v2 JSON URL. */
   catalogBase: string
   /** Legacy schema-2 row limit. Schema 3 always returns the complete catalog. */
@@ -85,6 +87,7 @@ export interface Config {
 export const Config = z.object({
   enabled: z.boolean().default(true).volatile(),
   aiAssistantEnabled: z.boolean().default(true).volatile(),
+  telemetryEnabled: z.boolean().default(true).volatile(),
   catalogBase: z.string().default(DEFAULT_CATALOG_BASE),
   marketSize: z.natural().min(1).default(1000),
   profile: z.string().default(''),

@@ -163,8 +163,11 @@ Agent 会通过 `dsh_mcp_pro` 完成端到端安全闭环：
 
 - **安全提醒**：目录收录仅核实项目是否为 DSH 插件，不代表安全背书。安装前请留意插件来源与权限要求。
 - **关于 AI 审查**：AI 审查是在插件安装后对本地文件进行的辅助检查，供你评估风险参考，无法阻止或撤销插件安装时已经发生的执行。
+- **匿名使用统计**：默认开启，每天向 [dsh-market-pro.com](https://dsh-market-pro.com) 发送匿名活跃心跳（随机安装 ID、插件与 DSH 版本、运行形态、操作系统与语言）以及公开插件/精选 MCP 的安装成功或失败结果，用于统计安装规模与改进兼容性。绝不采集对话、文件路径、密钥或私有插件名称；可在市场 **设置 → 匿名使用统计** 一键关闭，或设置环境变量 `DO_NOT_TRACK=1` / `DSH_MARKET_TELEMETRY=0` / `DSH_TELEMETRY_DISABLED=1`。
 
 ## 相关项目
+
+- **[DSH Market Pro 官网与全量目录](https://dsh-market-pro.com)**：在线浏览全部 29,000+ DSH 社区插件、33 个精选 MCP 与官方发现页订阅源。
 
 - **[DSH Desktop Pro](https://github.com/bruc3van/dsh-desktop-pro)**：让 Agent 安全常驻桌面的独立 DeepSeek Harness 客户端。
 - **[awesome-dsh-plugin-pro](https://github.com/bruc3van/awesome-dsh-plugin-pro)**：经过每日核实的 DSH 社区插件目录，也是本市场的数据来源。
