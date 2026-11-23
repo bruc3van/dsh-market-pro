@@ -1,5 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { MAX_AI_MCP_LIMIT } from '../src/aiMcpTools.ts'
 import { SERVER_NAME_PATTERN } from '../src/mcpShapes.ts'
 import type { McpUnmanagedServer } from '../src/contract.ts'
 import { en, zh, type SafeMarketLocaleKey } from '../src/client/locales.ts'
@@ -14,8 +15,10 @@ import {
   hasRequiredInputs,
   hasSecretInputs,
   matchesFeaturedMcp,
+  matchesFeaturedRuntime,
   mcpIdentityKey,
   pickAvailableServerName,
+  resolveFeaturedInstallOutcome,
   validateFeaturedValues,
 } from '../src/client/mcpFeatured.ts'
 
@@ -69,6 +72,9 @@ test('curated catalog invariants: valid unique ids, identity keys, transports, l
       assert.ok(input.key.trim() !== '')
       assert.ok(input.labelZh.trim() !== '')
       assert.ok(input.labelEn.trim() !== '')
+      if (input.helpUrl !== undefined) {
+        assert.match(input.helpUrl, /^https:\/\//, `invalid helpUrl on ${item.id}.${input.key}`)
+      }
     }
   }
 })
@@ -286,4 +292,154 @@ test('matchesFeaturedMcp filters by category and Chinese/English/package queries
   assert.equal(matchesFeaturedMcp(byId('12306'), '火车票', 'life'), true)
   assert.equal(matchesFeaturedMcp(byId('lark-mcp'), '飞书', 'office'), true)
   assert.equal(matchesFeaturedMcp(byId('antv-chart'), '图表', 'visual'), true)
+  assert.equal(matchesFeaturedMcp(byId('dbhub'), 'PostgreSQL', 'dev'), true)
+  assert.equal(matchesFeaturedMcp(byId('serena'), 'LSP', 'dev'), true)
+  assert.equal(matchesFeaturedMcp(byId('excel'), '透视表', 'office'), true)
+  assert.equal(matchesFeaturedMcp(byId('arxiv'), '论文', 'docs'), true)
+  assert.equal(matchesFeaturedMcp(byId('aihot'), '热点', 'search'), true)
+  assert.equal(matchesFeaturedMcp(byId('basic-memory'), 'Obsidian', 'memory'), true)
+})
+
+test('expanded curated servers keep secret credentials templated, arg flags intact, and fit within MAX_AI_MCP_LIMIT', () => {
+  assert.ok(
+    MAX_AI_MCP_LIMIT >= FEATURED_MCP_SERVERS.length,
+    `MAX_AI_MCP_LIMIT (${MAX_AI_MCP_LIMIT}) must cover all ${FEATURED_MCP_SERVERS.length} featured MCP servers`,
+  )
+
+  const dbhubDraft = draftFromFeatured(byId('dbhub'), {
+    DSN: 'postgres://readonly:super_secret_pw@db.example.com:5432/app',
+  }, { name: 'dbhub', enabled: true })
+  assert.deepEqual(validateDraft(dbhubDraft, new Set()), [])
+  assert.deepEqual(draftPlaintext(dbhubDraft), [])
+  assert.deepEqual(dbhubDraft.env, [{ key: 'DSN', value: '${credential:MCP_DBHUB_DSN}' }])
+  assert.equal(JSON.stringify(entryFromDraft(dbhubDraft)).includes('super_secret_pw'), false)
+
+  const excelDraft = draftFromFeatured(byId('excel'), { allowDir: '/Users/dev/sheets' }, {
+    name: 'excel',
+    enabled: true,
+  })
+  assert.deepEqual(validateDraft(excelDraft, new Set()), [])
+  assert.deepEqual(excelDraft.args, ['excel-mcp-server', 'stdio', '--allow-dir', '/Users/dev/sheets'])
+
+  const zoteroDefault = draftFromFeatured(byId('zotero'), {}, { name: 'zotero', enabled: true })
+  assert.deepEqual(validateDraft(zoteroDefault, new Set()), [])
+  assert.deepEqual(zoteroDefault.env, [{ key: 'ZOTERO_LOCAL', value: 'true' }])
+
+  const serenaDraft = draftFromFeatured(byId('serena'), {}, { name: 'serena', enabled: true })
+  assert.equal(entryFromDraft(serenaDraft).startupTimeoutMs, 120_000)
+
+  const scraplingDraft = draftFromFeatured(byId('scrapling'), {}, { name: 'scrapling', enabled: true })
+  assert.equal(entryFromDraft(scraplingDraft).startupTimeoutMs, 120_000)
+
+  assert.equal(FEATURED_MCP_SERVERS.length, 100)
+  assert.equal(byId('context7').inputs[0]?.helpUrl, 'https://context7.com/dashboard')
+  assert.equal(byId('gitlab').inputs[0]?.helpUrl, 'https://gitlab.com/-/user_settings/personal_access_tokens')
+  assert.equal(byId('supabase').inputs[0]?.helpUrl, 'https://supabase.com/dashboard/account/tokens')
+  assert.equal(matchesFeaturedRuntime(byId('context7'), 'no-key'), true)
+  assert.equal(matchesFeaturedRuntime(byId('github'), 'no-key'), false)
+  assert.equal(matchesFeaturedRuntime(byId('drawio'), 'http'), true)
+  assert.equal(matchesFeaturedRuntime(byId('dbhub'), 'npx'), true)
+  assert.equal(matchesFeaturedRuntime(byId('duckdb'), 'uvx'), true)
+  assert.equal(matchesFeaturedMcp(byId('duckdb'), 'Parquet', 'dev', 'uvx'), true)
+  assert.equal(matchesFeaturedMcp(byId('duckdb'), 'Parquet', 'dev', 'npx'), false)
+})
+
+test('resolveFeaturedInstallOutcome tracks connecting, connected, failed, waiting, retry guards, and safe probe fallback', () => {
+  const failedProbe = {
+    status: 'done' as const,
+    result: { ok: false, durationMs: 400, stage: 'connect', message: '401 unauthorized', closeConfirmed: true },
+  }
+  const errorProbe = {
+    status: 'error' as const,
+    message: 'already-connecting: wait for the managed MCP connection to settle',
+  }
+  const okProbe = {
+    status: 'done' as const,
+    result: { ok: true, durationMs: 220, toolNames: ['a', 'b'], truncated: false, closeConfirmed: true },
+  }
+
+  assert.equal(resolveFeaturedInstallOutcome(undefined, undefined), null)
+  assert.equal(resolveFeaturedInstallOutcome({ state: 'connecting', attempt: 1 }, undefined), null)
+  // Probe errors/failures must never mark a starting or not-yet-reported server as failed.
+  assert.equal(resolveFeaturedInstallOutcome({ state: 'connecting', attempt: 1 }, errorProbe), null)
+  assert.equal(resolveFeaturedInstallOutcome({ state: 'connecting', attempt: 1 }, failedProbe), null)
+  assert.equal(resolveFeaturedInstallOutcome({ state: 'connecting', attempt: 1 }, okProbe), null)
+  assert.equal(
+    resolveFeaturedInstallOutcome(
+      { state: 'reconnecting', attempt: 1, maxAttempts: 3, nextRetryAtMs: 5_000, lastError: 'transient' },
+      errorProbe,
+    ),
+    null,
+  )
+  assert.equal(resolveFeaturedInstallOutcome(undefined, errorProbe), null)
+  assert.equal(resolveFeaturedInstallOutcome(undefined, failedProbe), null)
+
+  assert.deepEqual(
+    resolveFeaturedInstallOutcome({ state: 'connected', toolCount: 12, connectedAt: 1000 }, undefined),
+    { kind: 'connected', toolCount: 12 },
+  )
+  assert.deepEqual(
+    resolveFeaturedInstallOutcome({ state: 'failed', reason: 'load', lastError: 'uvx not found' }, undefined),
+    { kind: 'failed', reason: 'uvx not found' },
+  )
+  assert.deepEqual(
+    resolveFeaturedInstallOutcome({ state: 'failed', reason: 'gave-up' }, undefined),
+    { kind: 'failed', reason: 'gave-up' },
+  )
+  assert.deepEqual(
+    resolveFeaturedInstallOutcome({ state: 'disabled' }, undefined),
+    { kind: 'failed', reason: 'disabled' },
+  )
+  assert.equal(
+    resolveFeaturedInstallOutcome({ state: 'disabled' }, undefined, { awaitingRetryTransition: true }),
+    null,
+  )
+  assert.deepEqual(
+    resolveFeaturedInstallOutcome({ state: 'waiting-credentials', lastError: 'missing' }, undefined),
+    { kind: 'waiting' },
+  )
+  assert.deepEqual(
+    resolveFeaturedInstallOutcome({ state: 'closed', result: { closeConfirmed: false, cleanupError: 'spawn ENOENT' } }, undefined),
+    { kind: 'failed', reason: 'spawn ENOENT' },
+  )
+  assert.equal(resolveFeaturedInstallOutcome({ state: 'closed', result: { closeConfirmed: true } }, undefined), null)
+  // Positive probe signal resolves connected when watch status is absent.
+  assert.deepEqual(
+    resolveFeaturedInstallOutcome(undefined, okProbe),
+    { kind: 'connected', toolCount: 2 },
+  )
+
+  // Retry transition guard suppresses stale pre-retry failure frames while still accepting fresh connected/waiting outcomes.
+  assert.equal(
+    resolveFeaturedInstallOutcome(
+      { state: 'failed', reason: 'load', lastError: 'stale error' },
+      undefined,
+      { awaitingRetryTransition: true },
+    ),
+    null,
+  )
+  assert.equal(
+    resolveFeaturedInstallOutcome(
+      { state: 'closed', result: { closeConfirmed: false, cleanupError: 'stale cleanup error' } },
+      undefined,
+      { awaitingRetryTransition: true },
+    ),
+    null,
+  )
+  assert.deepEqual(
+    resolveFeaturedInstallOutcome(
+      { state: 'connected', toolCount: 4, connectedAt: 2000 },
+      undefined,
+      { awaitingRetryTransition: true },
+    ),
+    { kind: 'connected', toolCount: 4 },
+  )
+  assert.deepEqual(
+    resolveFeaturedInstallOutcome(
+      { state: 'waiting-credentials', lastError: 'missing' },
+      undefined,
+      { awaitingRetryTransition: true },
+    ),
+    { kind: 'waiting' },
+  )
 })

@@ -14,13 +14,15 @@ import { MarketButton } from './MarketButton.tsx'
 import { PluginLogo } from './PluginLogo.tsx'
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement } from 'react'
 import type { McpToolGroup, McpUnmanagedServer } from '../contract.ts'
+import { isMcpStarting } from '../mcpShapes.ts'
 import type { MarketLocale } from './copy.ts'
 import type { HeaderRefreshAction } from './MarketSection.tsx'
 import { staticKey, type McpAdoptNote, type McpController, type McpProbeState, type McpSnapshot } from './mcpController.ts'
 import {
   FEATURED_MCP_CATEGORIES, FEATURED_MCP_SERVERS, draftFromFeatured, featuredRuntimeBadge, featuredTargetPreview,
-  findInstalledFeatured, hasRequiredInputs, hasSecretInputs, matchesFeaturedMcp, pickAvailableServerName, validateFeaturedValues,
-  type FeaturedMcpCategory, type FeaturedMcpMatch, type FeaturedMcpServer,
+  findInstalledFeatured, hasRequiredInputs, hasSecretInputs, matchesFeaturedMcp, matchesFeaturedRuntime,
+  pickAvailableServerName, resolveFeaturedInstallOutcome, validateFeaturedValues,
+  type FeaturedMcpCategory, type FeaturedMcpMatch, type FeaturedMcpRuntimeFilter, type FeaturedMcpServer,
 } from './mcpFeatured.ts'
 import {
   canProbe, canRestart, commandLine, commandRisks, convertToCredential, draftFromEntry, draftPlaintext, emptyDraft,
@@ -47,6 +49,12 @@ function reasonText(t: MarketLocale, raw: string): string {
     case 'name-conflict': return t('mcp.reason.nameConflict')
     case 'adopt-unavailable': return t('mcp.reason.adopt')
     case 'overridden': return t('mcp.static.overridden')
+    case 'gave-up': return t('mcp.state.gaveUp')
+    case 'reconnect-disabled': return t('mcp.state.reconnectDisabled')
+    case 'load': return t('mcp.state.load')
+    case 'unclosed-generation':
+    case 'cleanup': return t('mcp.state.locked')
+    case 'disabled': return t('mcp.state.disabled')
     default:
       // Host refusals arrive wrapped (`<code>: <message>`); name the ones this page raises.
       if (/\bsettings-unavailable\b/.test(raw)) return t('mcp.reason.settings')
@@ -112,6 +120,23 @@ type FeaturedSubmitState =
   | { readonly status: 'idle' }
   | { readonly status: 'saving' }
   | { readonly status: 'error'; readonly message: string }
+  | {
+    readonly status: 'installing'
+    readonly serverName: string
+    readonly startedAt: number
+    readonly isStdio: boolean
+    readonly timedOut?: boolean
+    readonly awaitingRetryTransition?: boolean
+  }
+  | { readonly status: 'saved-disabled'; readonly serverName: string }
+  | { readonly status: 'connected'; readonly serverName: string; readonly toolCount: number; readonly elapsedSec: number }
+  | { readonly status: 'failed'; readonly serverName: string; readonly reason: string }
+  | { readonly status: 'waiting'; readonly serverName: string }
+
+type FeaturedBannerNotice =
+  | { readonly kind: 'none' }
+  | { readonly kind: 'added'; readonly name: string }
+  | { readonly kind: 'background'; readonly name: string }
 
 type CredentialFlowState =
   | { readonly status: 'idle'; readonly error?: string }
@@ -143,9 +168,10 @@ export function McpView({ t, controller, onBrowsePlugins, onRegisterRefresh }: {
   useEffect(() => controller.attach(), [controller])
   const [subTab, setSubTab] = useState<McpSubTab>('featured')
   const [featuredCategory, setFeaturedCategory] = useState<FeaturedMcpCategory | 'all'>('all')
+  const [featuredRuntime, setFeaturedRuntime] = useState<FeaturedMcpRuntimeFilter>('all')
   const [featuredQuery, setFeaturedQuery] = useState('')
   const [modal, setModal] = useState<McpModalState>({ kind: 'closed' })
-  const [lastAdded, setLastAdded] = useState('')
+  const [banner, setBanner] = useState<FeaturedBannerNotice>({ kind: 'none' })
   const [filter, setFilter] = useState<Filter>('all')
   const [query, setQuery] = useState('')
   const mounted = useRef(true)
@@ -176,18 +202,25 @@ export function McpView({ t, controller, onBrowsePlugins, onRegisterRefresh }: {
   const loading = snapshot.mode === 'loading'
   const filterCount = (value: Filter) => snapshot.rows.filter(row => matchesFilter(row, value)).length
     + (value === 'all' ? unmanaged.length : 0)
+  const rowsByName = useMemo(() => new Map(snapshot.rows.map(row => [row.name, row])), [snapshot.rows])
   const featuredMatches = useMemo(
     () => new Map(FEATURED_MCP_SERVERS.map(item => [item.id, findInstalledFeatured(item, snapshot.rows, unmanaged)])),
     [snapshot.rows, unmanaged],
   )
-  const featuredItems = useMemo(
+  const featuredBase = useMemo(
     () => FEATURED_MCP_SERVERS.filter(item => matchesFeaturedMcp(item, featuredQuery, featuredCategory)),
     [featuredQuery, featuredCategory],
   )
+  const featuredItems = useMemo(
+    () => featuredBase.filter(item => matchesFeaturedRuntime(item, featuredRuntime)),
+    [featuredBase, featuredRuntime],
+  )
   const featuredCategoryCount = (value: FeaturedMcpCategory | 'all') =>
     value === 'all' ? FEATURED_MCP_SERVERS.length : FEATURED_MCP_SERVERS.filter(item => item.category === value).length
+  const featuredRuntimeCount = (value: FeaturedMcpRuntimeFilter) =>
+    featuredBase.filter(item => matchesFeaturedRuntime(item, value)).length
   const viewConfigured = (name: string) => {
-    setLastAdded('')
+    setBanner({ kind: 'none' })
     setSubTab('configured')
     setFilter('all')
     setQuery(name)
@@ -316,7 +349,27 @@ export function McpView({ t, controller, onBrowsePlugins, onRegisterRefresh }: {
         </div>
         <div className="dsh_market_mcpSummaryBar">
           {subTab === 'featured'
-            ? <p className="dsh_market_meta">{t('mcp.featured.summary', { count: String(FEATURED_MCP_SERVERS.length) })}</p>
+            ? (
+              <div className="dsh_market_mcpRuntimeBar" role="group" aria-label={t('mcp.featured.runtime.aria')}>
+                {([
+                  ['all', 'mcp.featured.runtime.all'],
+                  ['no-key', 'mcp.featured.runtime.noKey'],
+                  ['http', 'mcp.featured.runtime.http'],
+                  ['npx', 'mcp.featured.runtime.npx'],
+                  ['uvx', 'mcp.featured.runtime.uvx'],
+                ] as const).map(([value, key]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    className="dsh_market_mcpRuntimePill"
+                    aria-pressed={featuredRuntime === value}
+                    onClick={() => setFeaturedRuntime(value)}
+                  >
+                    {t(key)} <span>{featuredRuntimeCount(value)}</span>
+                  </button>
+                ))}
+              </div>
+              )
             : (!loading && (
               <p className="dsh_market_meta">{t('mcp.summary', {
                 servers: String(counts.servers), connected: String(counts.connected), tools: String(totalTools),
@@ -347,14 +400,18 @@ export function McpView({ t, controller, onBrowsePlugins, onRegisterRefresh }: {
         {subTab === 'featured'
           ? (
             <>
-              {lastAdded !== '' && (
+              {banner.kind !== 'none' && (
                 <div className="dsh_market_mcpNoticeRow" role="status">
-                  <p className="dsh_market_noticeBody">{t('mcp.featured.addedNotice', { name: lastAdded })}</p>
+                  <p className="dsh_market_noticeBody">
+                    {banner.kind === 'background'
+                      ? t('mcp.featured.backgroundNotice', { name: banner.name })
+                      : t('mcp.featured.addedNotice', { name: banner.name })}
+                  </p>
                   <div className="dsh_market_mcpNoticeActions">
-                    <MarketButton intent="secondary" onClick={() => viewConfigured(lastAdded)}>
+                    <MarketButton intent="secondary" onClick={() => viewConfigured(banner.name)}>
                       {t('mcp.featured.viewConfigured')}
                     </MarketButton>
-                    <button type="button" className="dsh_market_directClose" aria-label={t('mcp.featured.close')} onClick={() => setLastAdded('')}>
+                    <button type="button" className="dsh_market_directClose" aria-label={t('mcp.featured.close')} onClick={() => setBanner({ kind: 'none' })}>
                       <IconCloseOutlineRegular size={14} />
                     </button>
                   </div>
@@ -373,17 +430,22 @@ export function McpView({ t, controller, onBrowsePlugins, onRegisterRefresh }: {
                 ? <p className="dsh_market_status">{t('mcp.featured.noMatch')}</p>
                 : (
                   <ul className="dsh_market_cards dsh_market_cardsUniform">
-                    {featuredItems.map(item => (
-                      <FeaturedMcpCard
-                        key={item.id}
-                        t={t}
-                        item={item}
-                        match={featuredMatches.get(item.id) ?? null}
-                        writable={writable}
-                        onAdd={() => setModal({ kind: 'featured', item })}
-                        onViewConfigured={viewConfigured}
-                      />
-                    ))}
+                    {featuredItems.map(item => {
+                      const match = featuredMatches.get(item.id) ?? null
+                      const matchedRow = match?.source === 'managed' ? rowsByName.get(match.name) : undefined
+                      return (
+                        <FeaturedMcpCard
+                          key={item.id}
+                          t={t}
+                          item={item}
+                          match={match}
+                          liveStatus={matchedRow?.status}
+                          writable={writable}
+                          onAdd={() => setModal({ kind: 'featured', item })}
+                          onViewConfigured={viewConfigured}
+                        />
+                      )
+                    })}
                   </ul>
                   )}
             </>
@@ -433,10 +495,18 @@ export function McpView({ t, controller, onBrowsePlugins, onRegisterRefresh }: {
           item={modal.item}
           snapshot={snapshot}
           controller={controller}
+          toolsOf={toolsOf}
           onClose={() => setModal({ kind: 'closed' })}
-          onAdded={(name) => {
+          onAdded={(name, mode) => {
             setModal({ kind: 'closed' })
-            setLastAdded(name)
+            setBanner({ kind: mode === 'background' ? 'background' : 'added', name })
+          }}
+          onViewConfigured={(name) => {
+            setModal({ kind: 'closed' })
+            viewConfigured(name)
+          }}
+          onEditSaved={(row) => {
+            setModal({ kind: 'editor', row })
           }}
           onOpenAdvanced={(draft) => {
             setModal({ kind: 'editor', row: null, initialDraft: draft })
@@ -450,10 +520,11 @@ export function McpView({ t, controller, onBrowsePlugins, onRegisterRefresh }: {
   )
 }
 
-function FeaturedMcpCard({ t, item, match, writable, onAdd, onViewConfigured }: {
+function FeaturedMcpCard({ t, item, match, liveStatus, writable, onAdd, onViewConfigured }: {
   t: MarketLocale
   item: FeaturedMcpServer
   match: FeaturedMcpMatch | null
+  liveStatus?: McpStatus
   writable: boolean
   onAdd: () => void
   onViewConfigured: (name: string) => void
@@ -463,6 +534,10 @@ function FeaturedMcpCard({ t, item, match, writable, onAdd, onViewConfigured }: 
   const needsSetup = hasRequiredInputs(item)
   const needsKey = item.inputs.some(input => input.required === true && input.secret === true)
   const badgeTitle = match === null ? undefined : t('mcp.featured.addedAs', { name: match.name })
+  const liveKind = liveStatus === undefined ? undefined : statusKind(liveStatus)
+  const badgeText = match === null
+    ? ''
+    : liveStatus !== undefined ? statusLabel(t, liveStatus) : t('mcp.featured.addedBadge')
   return (
     <li className="dsh_market_card dsh_market_catalogCard dsh_market_mcpFeaturedCard">
       <div className="dsh_market_head">
@@ -472,7 +547,13 @@ function FeaturedMcpCard({ t, item, match, writable, onAdd, onViewConfigured }: 
           <span className="dsh_market_packageName" title={item.publisher}>{item.publisher}</span>
         </div>
         {match !== null && (
-          <span className="dsh_market_owned" title={badgeTitle}>{t('mcp.featured.addedBadge')}</span>
+          <span
+            className={`dsh_market_owned${liveKind !== undefined ? ' dsh_market_mcpFeaturedBadgeLive' : ''}`}
+            data-kind={liveKind}
+            title={badgeTitle}
+          >
+            {badgeText}
+          </span>
         )}
       </div>
       <div className="dsh_market_meta dsh_market_skillBadges">
@@ -512,13 +593,16 @@ function FeaturedMcpCard({ t, item, match, writable, onAdd, onViewConfigured }: 
   )
 }
 
-function FeaturedMcpModal({ t, item, snapshot, controller, onClose, onAdded, onOpenAdvanced }: {
+function FeaturedMcpModal({ t, item, snapshot, controller, toolsOf, onClose, onAdded, onViewConfigured, onEditSaved, onOpenAdvanced }: {
   t: MarketLocale
   item: FeaturedMcpServer
   snapshot: McpSnapshot
   controller: McpController
+  toolsOf: ReadonlyMap<string, McpToolGroup>
   onClose: () => void
-  onAdded: (name: string) => void
+  onAdded: (name: string, mode: 'done' | 'background') => void
+  onViewConfigured: (name: string) => void
+  onEditSaved: (row: McpRow) => void
   onOpenAdvanced: (draft: McpDraft) => void
 }): ReactElement {
   const isZh = t('lang') === 'zh'
@@ -528,10 +612,16 @@ function FeaturedMcpModal({ t, item, snapshot, controller, onClose, onAdded, onO
   ]), [snapshot.rows, snapshot.host])
   const [name, setName] = useState(() => pickAvailableServerName(item.id, taken))
   const [values, setValues] = useState<Record<string, string>>({})
+  const [revealed, setRevealed] = useState<Record<string, boolean>>({})
+  const [copied, setCopied] = useState(false)
   const [enabled, setEnabled] = useState(true)
   const [trustedLine, setTrustedLine] = useState<string | null>(null)
   const [touched, setTouched] = useState(false)
   const [submitState, setSubmitState] = useState<FeaturedSubmitState>({ status: 'idle' })
+  const [elapsedSec, setElapsedSec] = useState(0)
+  const [toolsOpen, setToolsOpen] = useState(false)
+  const fallbackProbedRef = useRef(false)
+  const retryAttemptRef = useRef(0)
   const mounted = useRef(true)
   useEffect(() => {
     mounted.current = true
@@ -541,6 +631,64 @@ function FeaturedMcpModal({ t, item, snapshot, controller, onClose, onAdded, onO
     setSubmitState(current => (current.status === 'error' ? { status: 'idle' } : current))
   }
   const saving = submitState.status === 'saving'
+  const installing = submitState.status === 'installing'
+  const inProgress = saving || installing
+  const postSave = submitState.status === 'installing'
+    || submitState.status === 'saved-disabled'
+    || submitState.status === 'connected'
+    || submitState.status === 'failed'
+    || submitState.status === 'waiting'
+  const savedName = postSave ? submitState.serverName : ''
+  const liveRow = savedName === '' ? undefined : snapshot.rows.find(row => row.name === savedName)
+  const liveProbe = savedName === '' ? undefined : snapshot.probes[savedName]
+  const liveTools = savedName === '' ? undefined : toolsOf.get(savedName)
+  const installBudgetMs = Math.max(45_000, (item.startupTimeoutMs ?? 30_000) + 15_000)
+
+  // Watch live manager status and probes while installing so the modal stays open until startup completes.
+  useEffect(() => {
+    if (submitState.status !== 'installing') return
+    if (submitState.awaitingRetryTransition && liveRow?.status !== undefined && isMcpStarting(liveRow.status.state)) {
+      setSubmitState(current => (
+        current.status === 'installing' && current.awaitingRetryTransition
+          ? { ...current, awaitingRetryTransition: false }
+          : current
+      ))
+      return
+    }
+    const outcome = resolveFeaturedInstallOutcome(liveRow?.status, liveProbe, {
+      awaitingRetryTransition: submitState.awaitingRetryTransition,
+    })
+    if (outcome === null) return
+    const seconds = Math.max(1, Math.round((Date.now() - submitState.startedAt) / 1000))
+    if (outcome.kind === 'connected') {
+      setSubmitState({ status: 'connected', serverName: submitState.serverName, toolCount: outcome.toolCount, elapsedSec: seconds })
+    } else if (outcome.kind === 'failed') {
+      setSubmitState({ status: 'failed', serverName: submitState.serverName, reason: outcome.reason })
+    } else {
+      setSubmitState({ status: 'waiting', serverName: submitState.serverName })
+    }
+  }, [submitState, liveRow?.status, liveProbe])
+
+  // Elapsed timer, silent-watch fallback probe, and soft timeout guard while installing.
+  useEffect(() => {
+    if (submitState.status !== 'installing') return
+    const update = () => {
+      const elapsedMs = Date.now() - submitState.startedAt
+      setElapsedSec(Math.floor(elapsedMs / 1000))
+      const readyForFallbackProbe = (snapshot.watchError !== '' && elapsedMs >= 4_000) || elapsedMs >= installBudgetMs
+      if (!fallbackProbedRef.current && readyForFallbackProbe && liveRow !== undefined && liveRow.status === undefined && canProbe(liveRow)) {
+        fallbackProbedRef.current = true
+        void controller.probe(submitState.serverName)
+      }
+      if (!submitState.timedOut && elapsedMs >= installBudgetMs) {
+        setSubmitState(current => (current.status === 'installing' ? { ...current, timedOut: true } : current))
+      }
+    }
+    update()
+    const timer = setInterval(update, 1_000)
+    return () => clearInterval(timer)
+  }, [submitState, liveRow, snapshot.watchError, controller, installBudgetMs])
+
   const errors = validateFeaturedValues(item, name, values, taken)
   const nameError = errors.find(error => error.field === 'name')
   const inputError = (key: string) => errors.find(error => error.field === 'input' && error.key === key)
@@ -557,7 +705,19 @@ function FeaturedMcpModal({ t, item, snapshot, controller, onClose, onAdded, onO
   const preview = item.transport === 'stdio' ? commandLine(previewDraft!.command, previewDraft!.args) : featuredTargetPreview(item)
   const needsTrust = item.transport === 'stdio'
   const trusted = !needsTrust || trustedLine === preview
-  const canSubmit = !saving && trusted
+  const canSubmit = !inProgress && trusted
+
+  const copyPreview = async () => {
+    try {
+      await navigator.clipboard.writeText(preview)
+      if (!mounted.current) return
+      setCopied(true)
+      setTimeout(() => { if (mounted.current) setCopied(false) }, 1_800)
+    } catch {
+      // Clipboard API may be unavailable in restricted contexts.
+    }
+  }
+
   const submit = async () => {
     setTouched(true)
     if (errors.length > 0 || !canSubmit) return
@@ -566,8 +726,18 @@ function FeaturedMcpModal({ t, item, snapshot, controller, onClose, onAdded, onO
     const outcome = await controller.save(draft, undefined)
     if (!mounted.current) return
     if (outcome.ok) {
-      setSubmitState({ status: 'idle' })
-      onAdded(draft.name)
+      if (!draft.enabled) {
+        setSubmitState({ status: 'saved-disabled', serverName: draft.name })
+      } else {
+        fallbackProbedRef.current = false
+        setElapsedSec(0)
+        setSubmitState({
+          status: 'installing',
+          serverName: draft.name,
+          startedAt: Date.now(),
+          isStdio: item.transport === 'stdio',
+        })
+      }
     } else {
       setSubmitState({
         status: 'error',
@@ -575,98 +745,330 @@ function FeaturedMcpModal({ t, item, snapshot, controller, onClose, onAdded, onO
       })
     }
   }
+
+  const canRetry = liveRow !== undefined && (canRestart(liveRow) || canProbe(liveRow))
+  const retryConnect = async () => {
+    if (savedName === '') return
+    const currentRow = controller.getSnapshot().rows.find(row => row.name === savedName)
+    const willRestart = currentRow !== undefined && canRestart(currentRow)
+    const willProbe = !willRestart && currentRow !== undefined && canProbe(currentRow)
+    if (!willRestart && !willProbe) return
+    fallbackProbedRef.current = false
+    setElapsedSec(0)
+    const attemptId = ++retryAttemptRef.current
+    const preRetryFailed = currentRow.status !== undefined
+      && (currentRow.status.state === 'failed'
+        || (currentRow.status.state === 'closed' && statusError(currentRow.status) !== ''))
+    setSubmitState({
+      status: 'installing',
+      serverName: savedName,
+      startedAt: Date.now(),
+      isStdio: item.transport === 'stdio',
+      ...(preRetryFailed || willRestart ? { awaitingRetryTransition: true } : {}),
+    })
+    if (willRestart) {
+      await controller.restart(savedName)
+      if (!mounted.current || retryAttemptRef.current !== attemptId) return
+      const restartError = controller.getSnapshot().errors[savedName]
+      if (restartError) {
+        setSubmitState({ status: 'failed', serverName: savedName, reason: restartError })
+      }
+    } else if (willProbe) {
+      await controller.probe(savedName)
+    }
+  }
+
+  const handleClose = () => {
+    if (inProgress) return
+    if (submitState.status === 'connected' || submitState.status === 'saved-disabled' || submitState.status === 'waiting') {
+      onAdded(submitState.serverName, 'done')
+      return
+    }
+    onClose()
+  }
+
+  const modalTitle = installing
+    ? t('mcp.featured.installingTitle', { name: item.title })
+    : t('mcp.featured.modalTitle', { name: item.title })
+
   return (
-    <Modal open headless title={t('mcp.featured.modalTitle', { name: item.title })} className="dsh_market_modal" onClose={() => { if (!saving) onClose() }}>
+    <>
+    <Modal open headless title={modalTitle} className="dsh_market_modal" onClose={handleClose}>
       <div className="dsh_market_directPanel dsh_market_mcpEditor">
         <div className="dsh_market_directHead">
           <PluginLogo src={item.icon} name={item.title} fullName={item.repo} />
           <div className="dsh_market_installHeading">
-            <h3>{t('mcp.featured.modalTitle', { name: item.title })}</h3>
+            <h3>{modalTitle}</h3>
             <small>{item.publisher} · {featuredRuntimeBadge(item)}</small>
           </div>
-          <button type="button" className="dsh_market_directClose" aria-label={t('mcp.featured.close')} disabled={saving} onClick={onClose}>
+          <button type="button" className="dsh_market_directClose" aria-label={t('mcp.featured.close')} disabled={inProgress} onClick={handleClose}>
             <IconCloseOutlineRegular size={16} />
           </button>
         </div>
         <p className="dsh_market_installSummary">{isZh ? item.descriptionZh : item.descriptionEn}</p>
-        <form className="dsh_market_mcpForm" onSubmit={(event) => { event.preventDefault(); void submit() }}>
-          {!needsTrust && (
-            <div className="dsh_market_mcpField">
-              <span>{t('mcp.featured.target')}</span>
-              <pre className="dsh_market_directMessage">{preview}</pre>
-            </div>
-          )}
-          <label className="dsh_market_mcpField">
-            <span>{t('mcp.field.name')}</span>
-            <input value={name} spellCheck={false} maxLength={32} onChange={event => { clearSubmitError(); setName(event.target.value) }} />
-            <small className="dsh_market_meta">{t('mcp.field.nameHint')}</small>
-            {(touched || name !== '') && nameError !== undefined && (
-              <span className="dsh_market_cardError">{t(`mcp.error.name.${nameError.code}`)}</span>
-            )}
-          </label>
-          {item.inputs.map((input) => {
-            const label = isZh ? input.labelZh : input.labelEn
-            const hint = isZh ? input.descriptionZh : input.descriptionEn
-            const err = inputError(input.key)
-            const showError = err !== undefined && (touched || err.code === 'malformed')
-            return (
-              <label key={input.key} className="dsh_market_mcpField">
-                <span>
-                  {label}
-                  {!input.required && <span className="dsh_market_mcpOptional"> ({t('mcp.featured.optional')})</span>}
-                </span>
-                <input
-                  type={input.secret ? 'password' : 'text'}
-                  autoComplete="off"
-                  spellCheck={false}
-                  value={values[input.key] ?? ''}
-                  placeholder={input.placeholder ?? input.key}
-                  onChange={event => { clearSubmitError(); setValues(current => ({ ...current, [input.key]: event.target.value })) }}
-                />
-                {hint && <small className="dsh_market_meta">{hint}</small>}
-                {showError && (
-                  <span className="dsh_market_cardError">
-                    {err.code === 'malformed'
-                      ? t('mcp.error.template', { where: label })
-                      : t('mcp.featured.inputRequired', { label })}
-                  </span>
+        {postSave
+          ? (
+            <>
+              <div
+                className="dsh_market_mcpInstallPanel"
+                data-tone={submitState.status === 'connected' ? 'success' : submitState.status === 'failed' ? 'error' : undefined}
+              >
+                <div className="dsh_market_mcpInstallStatusRow">
+                  {submitState.status === 'installing' && !submitState.timedOut && (
+                    <span className="dsh_market_mcpSpinner" aria-hidden="true" />
+                  )}
+                  {submitState.status === 'connected' && (
+                    <svg className="dsh_market_mcpStatusIcon" data-tone="success" viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M20 6 9 17l-5-5" />
+                    </svg>
+                  )}
+                  {submitState.status === 'failed' && (
+                    <svg className="dsh_market_mcpStatusIcon" data-tone="error" viewBox="0 0 24 24" aria-hidden="true">
+                      <circle cx="12" cy="12" r="9" /><path d="m15 9-6 6M9 9l6 6" />
+                    </svg>
+                  )}
+                  {(submitState.status === 'waiting' || submitState.status === 'saved-disabled' || (submitState.status === 'installing' && submitState.timedOut)) && (
+                    <svg className="dsh_market_mcpStatusIcon" data-tone="warn" viewBox="0 0 24 24" aria-hidden="true">
+                      <circle cx="12" cy="12" r="9" /><path d="M12 8v5M12 16h.01" />
+                    </svg>
+                  )}
+                  <div>
+                    {submitState.status === 'installing' && !submitState.timedOut && (
+                      <>
+                        <p role="status">{submitState.isStdio ? t('mcp.featured.installingStdio') : t('mcp.featured.installingHttp')}</p>
+                        <p className="dsh_market_meta">
+                          {liveRow?.status !== undefined ? `${statusLabel(t, liveRow.status)} · ` : ''}
+                          {t('mcp.featured.elapsed', { seconds: String(elapsedSec) })}
+                        </p>
+                      </>
+                    )}
+                    {submitState.status === 'installing' && submitState.timedOut && (
+                      <p role="status">{t('mcp.featured.installTimeout')}</p>
+                    )}
+                    {submitState.status === 'connected' && (
+                      <p role="status">{t('mcp.featured.installDone', { count: String(submitState.toolCount), seconds: String(submitState.elapsedSec) })}</p>
+                    )}
+                    {submitState.status === 'saved-disabled' && (
+                      <p role="status">{t('mcp.featured.installSavedDisabled', { name: submitState.serverName })}</p>
+                    )}
+                    {submitState.status === 'waiting' && (
+                      <p role="status">{t('mcp.featured.installWaiting')}</p>
+                    )}
+                    {submitState.status === 'failed' && (
+                      <p role="status" className="dsh_market_cardError">{t('mcp.featured.installFailed', { reason: reasonText(t, submitState.reason) })}</p>
+                    )}
+                  </div>
+                </div>
+                <pre className="dsh_market_directMessage">{preview}</pre>
+              </div>
+              <div className="dsh_market_installFooter dsh_market_mcpModalFooter">
+                {submitState.status === 'installing'
+                  ? (
+                    <>
+                      {submitState.timedOut && canRetry
+                        ? (
+                          <MarketButton size="md" intent="secondary" onClick={() => { void retryConnect() }}>
+                            {t('mcp.featured.retryConnect')}
+                          </MarketButton>
+                          )
+                        : <span />}
+                      <div className="dsh_market_mcpModalFooterRight">
+                        <MarketButton size="md" intent="secondary" onClick={() => onViewConfigured(submitState.serverName)}>
+                          {t('mcp.featured.viewConfigured')}
+                        </MarketButton>
+                        <MarketButton size="md" intent="primary" onClick={() => onAdded(submitState.serverName, 'background')}>
+                          {t('mcp.featured.background')}
+                        </MarketButton>
+                      </div>
+                    </>
+                    )
+                  : submitState.status === 'failed'
+                    ? (
+                      <>
+                        {liveRow !== undefined
+                          ? (
+                            <MarketButton size="md" intent="secondary" onClick={() => onEditSaved(liveRow)}>
+                              {t('mcp.featured.editSaved')}
+                            </MarketButton>
+                            )
+                          : <span />}
+                        <div className="dsh_market_mcpModalFooterRight">
+                          <MarketButton size="md" intent="secondary" onClick={onClose}>
+                            {t('mcp.featured.close')}
+                          </MarketButton>
+                          {canRetry && (
+                            <MarketButton size="md" intent="primary" onClick={() => { void retryConnect() }}>
+                              {t('mcp.featured.retryConnect')}
+                            </MarketButton>
+                          )}
+                        </div>
+                      </>
+                      )
+                    : (
+                      <>
+                        {submitState.status === 'connected' && liveTools !== undefined && liveTools.tools.length > 0
+                          ? (
+                            <MarketButton size="md" intent="secondary" onClick={() => setToolsOpen(true)}>
+                              {t('mcp.featured.viewTools', { count: String(liveTools.tools.length) })}
+                            </MarketButton>
+                            )
+                          : <span />}
+                        <div className="dsh_market_mcpModalFooterRight">
+                          <MarketButton size="md" intent="secondary" onClick={() => onViewConfigured(savedName)}>
+                            {t('mcp.featured.viewConfigured')}
+                          </MarketButton>
+                          <MarketButton size="md" intent="primary" onClick={() => onAdded(savedName, 'done')}>
+                            {t('mcp.featured.done')}
+                          </MarketButton>
+                        </div>
+                      </>
+                      )}
+              </div>
+            </>
+            )
+          : (
+            <form className="dsh_market_mcpForm" onSubmit={(event) => { event.preventDefault(); void submit() }}>
+              {!needsTrust && (
+                <div className="dsh_market_mcpField">
+                  <div className="dsh_market_mcpFieldHead">
+                    <span>{t('mcp.featured.target')}</span>
+                    <button type="button" className="dsh_market_mcpCopyBtn" onClick={() => { void copyPreview() }}>
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>
+                      {copied ? t('mcp.featured.copied') : t('mcp.featured.copyCommand')}
+                    </button>
+                  </div>
+                  <pre className="dsh_market_directMessage">{preview}</pre>
+                </div>
+              )}
+              <label className="dsh_market_mcpField">
+                <span>{t('mcp.field.name')}</span>
+                <input value={name} spellCheck={false} maxLength={32} onChange={event => { clearSubmitError(); setName(event.target.value) }} />
+                <small className="dsh_market_meta">{t('mcp.field.nameHint')}</small>
+                {(touched || name !== '') && nameError !== undefined && (
+                  <span className="dsh_market_cardError">{t(`mcp.error.name.${nameError.code}`)}</span>
                 )}
               </label>
-            )
-          })}
-          {hasSecretInputs(item) && <p className="dsh_market_meta">{t('mcp.featured.secretHint')}</p>}
-          {needsTrust && (
-            <div className="dsh_market_mcpRisk" role="note">
-              <p>{t('mcp.risk.title')}</p>
-              <pre className="dsh_market_directMessage">{preview}</pre>
-              {risks.includes('fetch') && <p className="dsh_market_cardNotice" data-warning="true">{t('mcp.risk.fetch')}</p>}
-              {risks.includes('shell') && <p className="dsh_market_cardNotice" data-warning="true">{t('mcp.risk.shell')}</p>}
+              {item.inputs.map((input) => {
+                const label = isZh ? input.labelZh : input.labelEn
+                const hint = isZh ? input.descriptionZh : input.descriptionEn
+                const err = inputError(input.key)
+                const showError = err !== undefined && (touched || err.code === 'malformed')
+                const fieldId = `dsh-mcp-featured-${item.id}-${input.key}`
+                const isRevealed = revealed[input.key] === true
+                return (
+                  <div key={input.key} className="dsh_market_mcpField">
+                    <div className="dsh_market_mcpFieldHead">
+                      <label htmlFor={fieldId}>
+                        {label}
+                        {!input.required && <span className="dsh_market_mcpOptional"> ({t('mcp.featured.optional')})</span>}
+                      </label>
+                      {input.helpUrl && (
+                        <a
+                          className="dsh_market_mcpHelpLink"
+                          href={input.helpUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title={t('mcp.featured.openHelpUrl', { label })}
+                          aria-label={t('mcp.featured.openHelpUrl', { label })}
+                        >
+                          <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" />
+                          </svg>
+                          {t('mcp.featured.getKey')}
+                        </a>
+                      )}
+                    </div>
+                    {input.secret
+                      ? (
+                        <div className="dsh_market_mcpInputWrap">
+                          <input
+                            id={fieldId}
+                            type={isRevealed ? 'text' : 'password'}
+                            autoComplete="off"
+                            spellCheck={false}
+                            value={values[input.key] ?? ''}
+                            placeholder={input.placeholder ?? input.key}
+                            onChange={event => { clearSubmitError(); setValues(current => ({ ...current, [input.key]: event.target.value })) }}
+                          />
+                          <button
+                            type="button"
+                            className="dsh_market_mcpSecretToggle"
+                            aria-label={isRevealed ? t('mcp.featured.hideSecret') : t('mcp.featured.showSecret')}
+                            title={isRevealed ? t('mcp.featured.hideSecret') : t('mcp.featured.showSecret')}
+                            onClick={() => setRevealed(current => ({ ...current, [input.key]: !current[input.key] }))}
+                          >
+                            {isRevealed
+                              ? <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a21.8 21.8 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a21.8 21.8 0 0 1-3.17 4.49M1 1l22 22" /></svg>
+                              : <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8Z" /><circle cx="12" cy="12" r="3" /></svg>}
+                          </button>
+                        </div>
+                        )
+                      : (
+                        <input
+                          id={fieldId}
+                          type="text"
+                          autoComplete="off"
+                          spellCheck={false}
+                          value={values[input.key] ?? ''}
+                          placeholder={input.placeholder ?? input.key}
+                          onChange={event => { clearSubmitError(); setValues(current => ({ ...current, [input.key]: event.target.value })) }}
+                        />
+                        )}
+                    {hint && <small className="dsh_market_meta">{hint}</small>}
+                    {showError && (
+                      <span className="dsh_market_cardError">
+                        {err.code === 'malformed'
+                          ? t('mcp.error.template', { where: label })
+                          : t('mcp.featured.inputRequired', { label })}
+                      </span>
+                    )}
+                  </div>
+                )
+              })}
+              {hasSecretInputs(item) && <p className="dsh_market_meta">{t('mcp.featured.secretHint')}</p>}
+              {needsTrust && (
+                <div className="dsh_market_mcpRisk" role="note">
+                  <div className="dsh_market_mcpFieldHead">
+                    <p>{t('mcp.risk.title')}</p>
+                    <button type="button" className="dsh_market_mcpCopyBtn" onClick={() => { void copyPreview() }}>
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>
+                      {copied ? t('mcp.featured.copied') : t('mcp.featured.copyCommand')}
+                    </button>
+                  </div>
+                  <pre className="dsh_market_directMessage">{preview}</pre>
+                  {risks.includes('fetch') && <p className="dsh_market_cardNotice" data-warning="true">{t('mcp.risk.fetch')}</p>}
+                  {risks.includes('shell') && <p className="dsh_market_cardNotice" data-warning="true">{t('mcp.risk.shell')}</p>}
+                  <label className="dsh_market_mcpCheck">
+                    <input type="checkbox" checked={trusted} onChange={event => setTrustedLine(event.target.checked ? preview : null)} />
+                    <span>{t('mcp.risk.confirm')}</span>
+                  </label>
+                </div>
+              )}
               <label className="dsh_market_mcpCheck">
-                <input type="checkbox" checked={trusted} onChange={event => setTrustedLine(event.target.checked ? preview : null)} />
-                <span>{t('mcp.risk.confirm')}</span>
+                <input type="checkbox" checked={enabled} onChange={event => { clearSubmitError(); setEnabled(event.target.checked) }} />
+                <span>{t('mcp.field.enabled')}</span>
               </label>
-            </div>
-          )}
-          <label className="dsh_market_mcpCheck">
-            <input type="checkbox" checked={enabled} onChange={event => { clearSubmitError(); setEnabled(event.target.checked) }} />
-            <span>{t('mcp.field.enabled')}</span>
-          </label>
-          {!enabled && <small className="dsh_market_meta">{t('mcp.field.enabledHint')}</small>}
-          {submitState.status === 'error' && <p className="dsh_market_cardError" role="alert">{submitState.message}</p>}
-          <div className="dsh_market_installFooter dsh_market_mcpModalFooter">
-            <MarketButton size="md" intent="secondary" disabled={saving} onClick={() => onOpenAdvanced(buildDraft())}>
-              {t('mcp.featured.advancedEdit')}
-            </MarketButton>
-            <div className="dsh_market_mcpModalFooterRight">
-              <MarketButton size="md" intent="secondary" disabled={saving} onClick={onClose}>{t('mcp.cancel')}</MarketButton>
-              <MarketButton size="md" type="submit" intent="primary" disabled={!canSubmit}>
-                {saving ? t('mcp.saving') : t('mcp.featured.add')}
-              </MarketButton>
-            </div>
-          </div>
-        </form>
+              {!enabled && <small className="dsh_market_meta">{t('mcp.field.enabledHint')}</small>}
+              {submitState.status === 'error' && <p className="dsh_market_cardError" role="alert">{submitState.message}</p>}
+              <div className="dsh_market_installFooter dsh_market_mcpModalFooter">
+                <MarketButton size="md" intent="secondary" disabled={saving} onClick={() => onOpenAdvanced(buildDraft())}>
+                  {t('mcp.featured.advancedEdit')}
+                </MarketButton>
+                <div className="dsh_market_mcpModalFooterRight">
+                  <MarketButton size="md" intent="secondary" disabled={saving} onClick={onClose}>{t('mcp.cancel')}</MarketButton>
+                  <MarketButton size="md" type="submit" intent="primary" disabled={!canSubmit}>
+                    {saving ? t('mcp.saving') : t('mcp.featured.add')}
+                  </MarketButton>
+                </div>
+              </div>
+            </form>
+            )}
       </div>
     </Modal>
+    {toolsOpen && liveTools !== undefined && (
+      <ToolsDialog t={t} name={savedName} tools={liveTools} onClose={() => setToolsOpen(false)} />
+    )}
+    </>
   )
 }
 

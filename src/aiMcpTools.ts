@@ -48,7 +48,9 @@ import {
 export const MCP_TOOL_NAME = 'dsh_mcp_pro'
 export const MAX_AI_MCP_QUERIES = 6
 export const MAX_AI_MCP_DETAILS = 6
-export const MAX_AI_MCP_LIMIT = 50
+export const DEFAULT_AI_MCP_SEARCH_LIMIT = 12
+export const DEFAULT_AI_MCP_LIST_LIMIT = 25
+export const MAX_AI_MCP_LIMIT = 100
 
 /** Wrap model-facing MCP discovery/result output in an unforgeable untrusted-data boundary. */
 export function wrapUntrustedMcpData(payload: string): string {
@@ -501,7 +503,7 @@ export function createMarketAiMcpToolDefinition(deps: MarketAiMcpToolDeps): Reco
         },
         limit: {
           type: 'integer',
-          description: `Max results 1..${MAX_AI_MCP_LIMIT} (default ${MAX_AI_MCP_LIMIT}).`,
+          description: `Max results 1..${MAX_AI_MCP_LIMIT} (default ${DEFAULT_AI_MCP_SEARCH_LIMIT} for search, ${DEFAULT_AI_MCP_LIST_LIMIT} for list).`,
         },
         featuredId: {
           type: 'string',
@@ -634,7 +636,10 @@ export function createMarketAiMcpToolDefinition(deps: MarketAiMcpToolDeps): Reco
             .map(item => ({ item, score: scoreFeaturedMcp(item, queries) }))
             .filter(entry => queries.length === 0 || entry.score > 0)
             .sort((a, b) => b.score - a.score)
-          const limit = args.limit ?? MAX_AI_MCP_LIMIT
+          const defaultLimit = args.action === 'search_featured'
+            ? DEFAULT_AI_MCP_SEARCH_LIMIT
+            : DEFAULT_AI_MCP_LIST_LIMIT
+          const limit = args.limit ?? defaultLimit
           const items = filtered.slice(0, limit).map(entry => summarizeFeatured(entry.item, inspection, args.lang))
           const categoryCounts = Object.fromEntries(
             FEATURED_MCP_CATEGORIES.map(cat => [

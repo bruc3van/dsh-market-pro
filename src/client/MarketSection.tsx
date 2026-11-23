@@ -44,6 +44,7 @@ import {
   INSTALLED_FILTER, SELF_CARD_KEY, allCatalogMatchCount, featuredRows, installedReviewCardKey, marketKey, marketRows, matches, pageOf, sortMarketRows, starCount, stateOf, type MarketSort,
 } from './rows.ts'
 import { SkillsView } from './SkillsView.tsx'
+import { featuredSkillInstallCommand, type FeaturedSkill } from '../skillsFeatured.ts'
 import { McpView } from './McpView.tsx'
 import { SettingsView } from './SettingsView.tsx'
 import type { McpController } from './mcpController.ts'
@@ -1449,6 +1450,7 @@ export function MarketSection({
   const selfUpdateVersion = isSafeVersion(rawSelfUpdate) ? rawSelfUpdate : ''
   const searchDock = useSearchDock(page)
   const [cards, setCards] = useState<Readonly<Record<string, CardState>>>({})
+  const [aiSkillFeedbackId, setAiSkillFeedbackId] = useState<string | null>(null)
   const tabsId = useId()
   // Mirror of the card states for same-tick guards (the rendered copy lags a
   // frame behind), and a live flag so a hand-off that resolves after the
@@ -1465,9 +1467,10 @@ export function MarketSection({
   }, [])
   // One review hand-off at a time: two cards clicked back to back must not
   // open two sessions and stage two drafts.
+  const aiDraftBusy = Object.values(cards).some(card => card.status === 'busy' || card.status === 'picking')
   const installBusy = updateState?.phase === 'updating'
     || updateState?.batch.phase === 'running'
-    || Object.values(cards).some(card => card.status === 'busy' || card.status === 'picking')
+    || aiDraftBusy
 
   const report = (fullName: string, next: CardState): void => {
     cardsRef.current = { ...cardsRef.current, [fullName]: next }
@@ -1551,8 +1554,23 @@ export function MarketSection({
   }
   const aiPickCard = cards[AI_PICK_CARD_KEY]
   const tryAiAssistant = (): void => {
-    const prompt = page === 'mcp' ? t('ai.pickMcpPrompt') : t('ai.pickPrompt')
+    setAiSkillFeedbackId(null)
+    const prompt = page === 'mcp'
+      ? t('ai.pickMcpPrompt')
+      : page === 'skills'
+        ? t('ai.pickSkillsPrompt')
+        : t('ai.pickPrompt')
     void runReview(AI_PICK_CARD_KEY, prompt, workspaceReadiness.getSnapshot() === 'none')
+  }
+  const askAiInstallSkill = async (item: FeaturedSkill): Promise<boolean> => {
+    setAiSkillFeedbackId(item.id)
+    const prompt = t('skills.featured.installPrompt', {
+      name: item.name,
+      source: item.source,
+      path: item.path === '' ? t('skills.featured.pathRoot') : item.path,
+      command: featuredSkillInstallCommand(item),
+    })
+    return await runReview(AI_PICK_CARD_KEY, prompt, workspaceReadiness.getSnapshot() === 'none')
   }
 
   return (
@@ -1666,7 +1684,7 @@ export function MarketSection({
             <path d="M12 3 14.3 9.7 21 12 14.3 14.3 12 21 9.7 14.3 3 12 9.7 9.7Z" />
           </svg>}
         >
-          {page === 'mcp' ? t('ai.pickMcp') : t('ai.pick')}
+          {page === 'mcp' ? t('ai.pickMcp') : page === 'skills' ? t('ai.pickSkills') : t('ai.pick')}
         </MarketButton>
       )}
       </div>
@@ -1721,8 +1739,19 @@ export function MarketSection({
           role="tabpanel"
           aria-labelledby={`${tabsId}-tab-skills`}
         >
-          <SkillsView t={t} listSkills={listSkills} skillsSession={skillsSession}
-            canOpenFolder={canOpenFolder} openFolder={openFolder} onRegisterRefresh={onRegisterSkillsRefresh} />
+          <SkillsView
+            t={t}
+            listSkills={listSkills}
+            skillsSession={skillsSession}
+            canOpenFolder={canOpenFolder}
+            openFolder={openFolder}
+            onRegisterRefresh={onRegisterSkillsRefresh}
+            onAskAiInstall={askAiInstallSkill}
+            aiInstallBusy={aiDraftBusy}
+            aiInstallFeedback={aiSkillFeedbackId !== null && (aiPickCard?.status === 'error' || aiPickCard?.status === 'needs-workspace')
+              ? { skillId: aiSkillFeedbackId, status: aiPickCard.status, message: aiPickCard.message }
+              : null}
+          />
         </div>
       )}
       {page === 'mcp' && mcp && (

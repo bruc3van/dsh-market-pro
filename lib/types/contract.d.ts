@@ -167,8 +167,9 @@ export interface SafeMarketSettings {
      */
     readonly enabled: boolean;
     /**
-     * Whether the built-in AI assistant (the `dsh-market-pro` skill and the
-     * read-only `dsh_market_pro` discovery tool) is active for conversations.
+     * Whether the built-in AI assistant (the unified `market-pro` skill and
+     * the `dsh_market_pro`, `dsh_mcp_pro`, and `dsh_skills_pro` tools) is active
+     * for conversations.
      */
     readonly aiAssistantEnabled: boolean;
     /**

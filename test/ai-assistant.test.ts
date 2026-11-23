@@ -1,7 +1,7 @@
 /**
  * End-to-end tests for agent-native discovery:
  * - pure catalog search, ranking, detail, and environment summaries
- * - built-in `dsh-market-pro` skill registration against the real SkillRegistry
+ * - built-in `market-pro` skill registration against the real SkillRegistry
  * - read-only `dsh_market_pro` tool registration and execution against a real Cordis context
  */
 import { test } from 'node:test'
@@ -551,7 +551,7 @@ test('aiSearch matches git subdirectory plugins via repositoryDirectory and igno
   }
 })
 
-test('built-in dsh-market-pro skill registers into real SkillRegistry, allows user override, and toggles live', async () => {
+test('built-in market-pro skill registers into real SkillRegistry, allows user override, and toggles live', async () => {
   const ctx = new Context()
   try {
     const skillsFiber = ctx.plugin(SkillRegistry)
@@ -565,18 +565,23 @@ test('built-in dsh-market-pro skill registers into real SkillRegistry, allows us
     await setImmediate()
 
     const initial = await ctx.skills.list()
-    const bundled = initial.find(skill => skill.name === MARKET_SKILL_NAME)
-    assert.ok(bundled, 'dsh-market-pro skill must be listed when enabled')
-    assert.equal(bundled.provider, MARKET_SKILL_PROVIDER)
+    assert.equal(MARKET_SKILL_NAME, 'market-pro')
+    const providerSkills = initial.filter(skill => skill.provider === MARKET_SKILL_PROVIDER)
+    assert.deepEqual(providerSkills.map(skill => skill.name), ['market-pro'], 'only the unified market-pro skill should be bundled')
+    const bundled = providerSkills[0]!
     assert.equal(bundled.source, 'bundled')
     assert.deepEqual(bundled.invocation, { modelInvocable: true, userInvocable: true })
 
     const loaded = await ctx.skills.get(MARKET_SKILL_NAME)
     assert.ok(loaded)
     assert.match(loaded.content, /dsh_market_pro/)
+    assert.match(loaded.content, /dsh_mcp_pro/)
+    assert.match(loaded.content, /dsh_skills_pro/)
     assert.match(loaded.content, /plugin_manager/)
     assert.match(loaded.content, /Active DSH profile: `web`/)
     assert.match(loaded.content, /untrusted_market_data/)
+    assert.match(loaded.content, /untrusted_mcp_data/)
+    assert.match(loaded.content, /untrusted_skill_data/)
 
     // A lower-rank provider (e.g. user/project skill) cleanly overrides the bundled rank (600).
     const disposeOverride = ctx.skills.registerProvider(() => ({

@@ -47,7 +47,7 @@ export type { MarketCatalog, MarketCatalogResult, MarketCategory, MarketEnvironm
 export interface Config {
     /** Live, profile-persisted permission to fetch the community catalog. */
     enabled: Volatile<boolean>;
-    /** Live, profile-persisted switch for the built-in AI assistant (skill and read-only search tool). */
+    /** Live, profile-persisted switch for the built-in AI assistant (unified `/market-pro` skill and `dsh_market_pro`/`dsh_mcp_pro`/`dsh_skills_pro` tools). */
     aiAssistantEnabled: Volatile<boolean>;
     /** Live, profile-persisted switch for anonymous usage & install feedback telemetry. */
     telemetryEnabled: Volatile<boolean>;

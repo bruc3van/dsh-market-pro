@@ -1,6 +1,7 @@
 import { type ReactElement } from 'react';
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots';
 import type { MarketSkillsResult } from '../contract.ts';
+import { type FeaturedSkill } from '../skillsFeatured.ts';
 import { type SkillsSessionSource } from './skillsSubscription.ts';
 import type { MarketLocale } from './copy.ts';
 import type { HeaderRefreshAction } from './MarketSection.tsx';
@@ -13,9 +14,17 @@ interface SkillsActions {
     openFolder: (path: string) => Promise<void>;
 }
 export declare function ProjectSkillsView(props: SkillsActions & PropsLocale<'settings.dshMarketPro'>): ReactElement;
-export declare function SkillsView({ t, listSkills, skillsSession, canOpenFolder, openFolder, project, onRegisterRefresh }: SkillsActions & {
+export interface SkillAiInstallFeedback {
+    readonly skillId: string;
+    readonly status: 'error' | 'needs-workspace';
+    readonly message: string;
+}
+export declare function SkillsView({ t, listSkills, skillsSession, canOpenFolder, openFolder, project, onRegisterRefresh, onAskAiInstall, aiInstallBusy, aiInstallFeedback, }: SkillsActions & {
     t: MarketLocale;
     project?: boolean;
     onRegisterRefresh?: (action: HeaderRefreshAction | null) => void;
+    onAskAiInstall?: (item: FeaturedSkill) => Promise<boolean>;
+    aiInstallBusy?: boolean;
+    aiInstallFeedback?: SkillAiInstallFeedback | null;
 }): ReactElement;
 export {};

@@ -7,9 +7,10 @@
  * @module dsh-market-pro/client/mcpFeatured
  */
 import type { McpUnmanagedServer } from '../contract.ts';
-import { FEATURED_MCP_CATEGORIES, FEATURED_MCP_SERVERS, featuredRuntimeBadge, featuredTargetPreview, findFeaturedMcpById, hasRequiredInputs, hasSecretInputs, matchesFeaturedMcp, mcpIdentityKey, pickAvailableServerName, type FeaturedMcpCategory, type FeaturedMcpInput, type FeaturedMcpServer } from '../mcpFeatured.ts';
-import { type McpDraft, type McpRow } from './mcpModel.ts';
-export { FEATURED_MCP_CATEGORIES, FEATURED_MCP_SERVERS, featuredRuntimeBadge, featuredTargetPreview, findFeaturedMcpById, hasRequiredInputs, hasSecretInputs, matchesFeaturedMcp, mcpIdentityKey, pickAvailableServerName, type FeaturedMcpCategory, type FeaturedMcpInput, type FeaturedMcpServer, };
+import { FEATURED_MCP_CATEGORIES, FEATURED_MCP_SERVERS, featuredRuntimeBadge, featuredTargetPreview, findFeaturedMcpById, hasRequiredInputs, hasSecretInputs, matchesFeaturedMcp, matchesFeaturedRuntime, mcpIdentityKey, pickAvailableServerName, type FeaturedMcpCategory, type FeaturedMcpInput, type FeaturedMcpRuntimeFilter, type FeaturedMcpServer } from '../mcpFeatured.ts';
+import { type McpDraft, type McpRow, type McpStatus } from './mcpModel.ts';
+import type { McpProbeState } from './mcpController.ts';
+export { FEATURED_MCP_CATEGORIES, FEATURED_MCP_SERVERS, featuredRuntimeBadge, featuredTargetPreview, findFeaturedMcpById, hasRequiredInputs, hasSecretInputs, matchesFeaturedMcp, matchesFeaturedRuntime, mcpIdentityKey, pickAvailableServerName, type FeaturedMcpCategory, type FeaturedMcpInput, type FeaturedMcpRuntimeFilter, type FeaturedMcpServer, };
 /** Where an existing configured server matches a curated catalog item. */
 export interface FeaturedMcpMatch {
     readonly name: string;
@@ -40,3 +41,32 @@ export declare function draftFromFeatured(item: FeaturedMcpServer, values: Reado
     readonly enabled: boolean;
     readonly takenRefs?: ReadonlySet<string>;
 }): McpDraft;
+/** Terminal outcome detected while waiting for a newly added featured MCP server to connect. */
+export type FeaturedInstallOutcome = {
+    readonly kind: 'connected';
+    readonly toolCount: number;
+} | {
+    readonly kind: 'failed';
+    readonly reason: string;
+} | {
+    readonly kind: 'waiting';
+};
+export interface ResolveFeaturedInstallOptions {
+    /**
+     * True right after retrying from a terminal failure, while waiting for the
+     * manager to report a fresh non-failed transition (e.g. `connecting`,
+     * `connected`, or `waiting-*`). Prevents stale pre-retry failure frames from
+     * immediately snapping the modal back to `failed`.
+     */
+    readonly awaitingRetryTransition?: boolean;
+}
+/**
+ * Inspect live manager status + optional probe state for a newly saved server.
+ * Returns `null` while the server is still downloading, launching, or handshaking.
+ *
+ * Probe success (`done` with `ok: true`) is accepted as a positive signal when
+ * the watch stream is silent, while probe errors/failures are ignored so a
+ * fallback probe hitting `already-connecting`, `not-found`, or a handshake
+ * timeout during first-run `npx`/`uvx` downloads never fails the modal.
+ */
+export declare function resolveFeaturedInstallOutcome(status: McpStatus | undefined, probe: McpProbeState | undefined, options?: ResolveFeaturedInstallOptions): FeaturedInstallOutcome | null;

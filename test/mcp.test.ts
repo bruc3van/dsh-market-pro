@@ -558,3 +558,28 @@ test('forwarded settings and credential events re-read only while a page is atta
   assert.ok(calls.filter(call => call.method === 'credentials.describe').length > credentialReads)
   detach()
 })
+
+test('restart and save clear stale probe results for the targeted server', async () => {
+  const { hosts } = fakeHosts({
+    frames: [[{ name: 'tuned', configured: true, status: { state: 'failed', reason: 'load', lastError: 'boom' } }]],
+  })
+  const controller = createMcpController(hosts, { debounceMs: 1 })
+  const detach = controller.attach()
+  await settle()
+
+  await controller.probe('tuned')
+  assert.equal(controller.getSnapshot().probes.tuned?.status, 'done')
+
+  await controller.restart('tuned')
+  assert.equal(controller.getSnapshot().probes.tuned, undefined, 'restart clears stale probe state')
+
+  await controller.probe('tuned')
+  assert.equal(controller.getSnapshot().probes.tuned?.status, 'done')
+
+  const row = controller.getSnapshot().rows.find(r => r.name === 'tuned')!
+  const draft = draftFromEntry('tuned', row.entry!)
+  const outcome = await controller.save({ ...draft, enabled: true }, 'tuned')
+  assert.equal(outcome.ok, true)
+  assert.equal(controller.getSnapshot().probes.tuned, undefined, 'save clears stale probe state')
+  detach()
+})

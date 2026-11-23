@@ -16,17 +16,20 @@ import {
   hasRequiredInputs,
   hasSecretInputs,
   matchesFeaturedMcp,
+  matchesFeaturedRuntime,
   mcpIdentityKey,
   pickAvailableServerName,
   type FeaturedMcpCategory,
   type FeaturedMcpInput,
+  type FeaturedMcpRuntimeFilter,
   type FeaturedMcpServer,
 } from '../mcpFeatured.ts'
-import { SERVER_NAME_PATTERN, isExactCredentialTemplate, malformedTemplate } from '../mcpShapes.ts'
+import { SERVER_NAME_PATTERN, isExactCredentialTemplate, isMcpStarting, malformedTemplate } from '../mcpShapes.ts'
 import {
-  credentialTemplate, emptyDraft, suggestRef,
-  type McpDraft, type McpPair, type McpPendingSecret, type McpRow,
+  credentialTemplate, emptyDraft, statusError, suggestRef,
+  type McpDraft, type McpPair, type McpPendingSecret, type McpRow, type McpStatus,
 } from './mcpModel.ts'
+import type { McpProbeState } from './mcpController.ts'
 
 export {
   FEATURED_MCP_CATEGORIES,
@@ -37,10 +40,12 @@ export {
   hasRequiredInputs,
   hasSecretInputs,
   matchesFeaturedMcp,
+  matchesFeaturedRuntime,
   mcpIdentityKey,
   pickAvailableServerName,
   type FeaturedMcpCategory,
   type FeaturedMcpInput,
+  type FeaturedMcpRuntimeFilter,
   type FeaturedMcpServer,
 }
 
@@ -180,4 +185,66 @@ export function draftFromFeatured(
     startupTimeoutMs: item.startupTimeoutMs === undefined ? '' : String(item.startupTimeoutMs),
     pending,
   }
+}
+
+/** Terminal outcome detected while waiting for a newly added featured MCP server to connect. */
+export type FeaturedInstallOutcome =
+  | { readonly kind: 'connected'; readonly toolCount: number }
+  | { readonly kind: 'failed'; readonly reason: string }
+  | { readonly kind: 'waiting' }
+
+export interface ResolveFeaturedInstallOptions {
+  /**
+   * True right after retrying from a terminal failure, while waiting for the
+   * manager to report a fresh non-failed transition (e.g. `connecting`,
+   * `connected`, or `waiting-*`). Prevents stale pre-retry failure frames from
+   * immediately snapping the modal back to `failed`.
+   */
+  readonly awaitingRetryTransition?: boolean
+}
+
+/**
+ * Inspect live manager status + optional probe state for a newly saved server.
+ * Returns `null` while the server is still downloading, launching, or handshaking.
+ *
+ * Probe success (`done` with `ok: true`) is accepted as a positive signal when
+ * the watch stream is silent, while probe errors/failures are ignored so a
+ * fallback probe hitting `already-connecting`, `not-found`, or a handshake
+ * timeout during first-run `npx`/`uvx` downloads never fails the modal.
+ */
+export function resolveFeaturedInstallOutcome(
+  status: McpStatus | undefined,
+  probe: McpProbeState | undefined,
+  options: ResolveFeaturedInstallOptions = {},
+): FeaturedInstallOutcome | null {
+  if (status !== undefined) {
+    if (status.state === 'connected') {
+      return { kind: 'connected', toolCount: status.toolCount }
+    }
+    if (status.state === 'waiting-credentials' || status.state === 'waiting-authorization') {
+      return { kind: 'waiting' }
+    }
+    if (isMcpStarting(status.state)) {
+      return null
+    }
+    if (status.state === 'failed') {
+      if (options.awaitingRetryTransition) return null
+      return { kind: 'failed', reason: statusError(status) || status.reason }
+    }
+    if (status.state === 'disabled') {
+      if (options.awaitingRetryTransition) return null
+      return { kind: 'failed', reason: 'disabled' }
+    }
+    if (status.state === 'closed') {
+      const err = statusError(status)
+      if (err !== '') {
+        if (options.awaitingRetryTransition) return null
+        return { kind: 'failed', reason: err }
+      }
+    }
+  }
+  if (probe?.status === 'done' && probe.result.ok) {
+    return { kind: 'connected', toolCount: probe.result.toolNames.length }
+  }
+  return null
 }

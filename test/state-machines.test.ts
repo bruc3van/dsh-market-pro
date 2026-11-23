@@ -8,7 +8,7 @@ import { INITIAL_SEARCH_DOCK_STATE, stepSearchDock } from '../src/client/useSear
 import { classifyPendingSweep } from '../src/installed.ts'
 import { createMarketAiToolDefinition, type HostPluginManagerUpdateFace } from '../src/aiTools.ts'
 import { createMarketAiMcpToolDefinition, type MarketAiMcpToolDeps } from '../src/aiMcpTools.ts'
-import { buildMarketSkillContent, buildMcpSkillContent } from '../src/aiSkill.ts'
+import { buildMarketSkillContent } from '../src/aiSkill.ts'
 import type { MarketCatalog } from '../src/contract.ts'
 import type { ManagedMcpInspection } from '../src/mcp.ts'
 
@@ -351,15 +351,15 @@ test('dsh_mcp_pro emits explicit outcome and nextStep across install and toggle 
   assert.match(enabled.nextStep, /list_configured/)
 })
 
-test('built-in skills contain no stray blank-line runs and document explicit state branching', () => {
+test('built-in unified market-pro skill contains no stray blank-line runs and documents explicit state branching', () => {
   const marketSkill = buildMarketSkillContent('web')
-  const mcpSkill = buildMcpSkillContent('web')
   assert.equal(marketSkill.includes('\n\n\n'), false)
   assert.match(marketSkill, /outcome/)
   assert.match(marketSkill, /updates-available/)
-  assert.match(mcpSkill, /already-configured-toggle-needed/)
-  assert.match(mcpSkill, /set_enabled/)
-  assert.match(mcpSkill, /`enabled` \/ `disabled`/)
+  assert.match(marketSkill, /already-configured-toggle-needed/)
+  assert.match(marketSkill, /set_enabled/)
+  assert.match(marketSkill, /`enabled` \/ `disabled`/)
+  assert.match(marketSkill, /dsh_skills_pro/)
 })
 
 test('classifyPendingSweep explicitly distinguishes completed, legacy, held, and orphaned uninstall records', () => {

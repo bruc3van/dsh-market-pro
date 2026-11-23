@@ -517,6 +517,7 @@ export function createMcpController(hosts: McpHosts, options: McpControllerOptio
       return outcomeError(outcome)
     }),
     restart: name => verb(name, 'restart', async () => {
+      if (Object.hasOwn(state.probes, name)) patchRecord('probes', name, undefined)
       const manager = hosts.manager()
       if (manager === undefined) return 'manager-unavailable'
       const reply = await manager.restart(name)
@@ -557,7 +558,14 @@ export function createMcpController(hosts: McpHosts, options: McpControllerOptio
         }
       }
       try {
-        return report(await mutate(saveOps(draft, original)))
+        const outcome = await mutate(saveOps(draft, original))
+        if (outcome.ok) {
+          if (Object.hasOwn(state.probes, draft.name)) patchRecord('probes', draft.name, undefined)
+          if (original !== undefined && original !== draft.name && Object.hasOwn(state.probes, original)) {
+            patchRecord('probes', original, undefined)
+          }
+        }
+        return report(outcome)
       } catch (error) {
         return report({ ok: false, message: message(error), conflict: false })
       }

@@ -25,6 +25,8 @@ export interface FeaturedMcpInput {
     readonly required?: boolean;
     /** Header value template around the user's input, e.g. `Bearer {}`. Defaults to `{}`. */
     readonly format?: string;
+    /** Optional direct URL where the user can obtain this key, token, or setup value. */
+    readonly helpUrl?: string;
 }
 /** One curated MCP server entry shipped with the plugin. */
 export interface FeaturedMcpServer {
@@ -66,8 +68,12 @@ export declare function mcpIdentityKey(target: {
 }): string;
 /** Pick an available server name within DSH's 1–32 char grammar (`id`, `id-2`, …). */
 export declare function pickAvailableServerName(baseId: string, taken: ReadonlySet<string>): string;
+/** Quick runtime/auth facet for narrowing the curated MCP directory. */
+export type FeaturedMcpRuntimeFilter = 'all' | 'no-key' | 'http' | 'npx' | 'uvx';
+/** Whether a curated server matches a quick runtime/auth filter. */
+export declare function matchesFeaturedRuntime(item: FeaturedMcpServer, filter: FeaturedMcpRuntimeFilter): boolean;
 /** Whether a curated server matches the active category filter and search text. */
-export declare function matchesFeaturedMcp(item: FeaturedMcpServer, query: string, category: FeaturedMcpCategory | 'all'): boolean;
+export declare function matchesFeaturedMcp(item: FeaturedMcpServer, query: string, category: FeaturedMcpCategory | 'all', runtime?: FeaturedMcpRuntimeFilter): boolean;
 /** Short runtime label shown on curated MCP cards (`HTTP`, `npx`, `uvx`, …). */
 export declare function featuredRuntimeBadge(item: FeaturedMcpServer): string;
 /** Preview target line shown in the curated detail dialog (command line or URL). */

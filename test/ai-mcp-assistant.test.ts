@@ -1,6 +1,6 @@
 /**
  * End-to-end tests for agent-native MCP discovery & approval-gated installation:
- * - built-in `dsh-mcp-pro` skill registration against the real SkillRegistry
+ * - unified built-in `market-pro` skill MCP guidance against the real SkillRegistry
  * - `dsh_mcp_pro` read-only discovery, bilingual/CJK search, configured inventory, and anti-injection wrapping
  * - fail-closed native approval gating, plaintext-secret rejection, credential template binding, and revision-checked Settings writes
  */
@@ -10,12 +10,15 @@ import { setImmediate } from 'node:timers/promises'
 import { Context } from '@deepseek-ai/cordis'
 import SkillRegistry from '@deepseek-ai/dsh-skill'
 import {
+  MARKET_SKILL_NAME,
   MARKET_SKILL_PROVIDER,
   MARKET_SKILL_RANK,
-  MCP_SKILL_NAME,
   registerMarketAiSkill,
 } from '../src/aiSkill.ts'
 import {
+  DEFAULT_AI_MCP_LIST_LIMIT,
+  DEFAULT_AI_MCP_SEARCH_LIMIT,
+  MAX_AI_MCP_LIMIT,
   MCP_TOOL_NAME,
   createMarketAiMcpToolDefinition,
   registerMarketAiMcpTool,
@@ -141,7 +144,7 @@ function makeFakeHost(over: Partial<FakeHostState> = {}) {
   return { ctx, entries, state, approver }
 }
 
-test('built-in dsh-mcp-pro skill registers into real SkillRegistry, allows override, and toggles live', async () => {
+test('unified built-in market-pro skill covers MCP guidance, allows override, and toggles live', async () => {
   const ctx = new Context()
   try {
     const skillsFiber = ctx.plugin(SkillRegistry)
@@ -155,13 +158,14 @@ test('built-in dsh-mcp-pro skill registers into real SkillRegistry, allows overr
     await setImmediate()
 
     const list = await ctx.skills.list()
-    const mcpSkill = list.find(skill => skill.name === MCP_SKILL_NAME)
-    assert.ok(mcpSkill, 'dsh-mcp-pro skill must be listed when enabled')
-    assert.equal(mcpSkill.provider, MARKET_SKILL_PROVIDER)
-    assert.equal(mcpSkill.source, 'bundled')
-    assert.deepEqual(mcpSkill.invocation, { modelInvocable: true, userInvocable: true })
+    const marketSkill = list.find(skill => skill.name === MARKET_SKILL_NAME)
+    assert.ok(marketSkill, 'market-pro skill must be listed when enabled')
+    assert.equal(list.some(skill => skill.name === 'dsh-mcp-pro'), false, 'legacy dsh-mcp-pro skill must not be registered')
+    assert.equal(marketSkill.provider, MARKET_SKILL_PROVIDER)
+    assert.equal(marketSkill.source, 'bundled')
+    assert.deepEqual(marketSkill.invocation, { modelInvocable: true, userInvocable: true })
 
-    const loaded = await ctx.skills.get(MCP_SKILL_NAME)
+    const loaded = await ctx.skills.get(MARKET_SKILL_NAME)
     assert.ok(loaded)
     assert.match(loaded.content, /dsh_mcp_pro/)
     assert.match(loaded.content, /untrusted_mcp_data/)
@@ -173,7 +177,7 @@ test('built-in dsh-mcp-pro skill registers into real SkillRegistry, allows overr
       name: 'user-mcp-override',
       async list() {
         return [{
-          name: MCP_SKILL_NAME,
+          name: MARKET_SKILL_NAME,
           description: 'Custom MCP skill',
           invocation: { modelInvocable: true, userInvocable: true },
           source: 'user-dsh',
@@ -184,7 +188,7 @@ test('built-in dsh-mcp-pro skill registers into real SkillRegistry, allows overr
       },
       async get() {
         return {
-          name: MCP_SKILL_NAME,
+          name: MARKET_SKILL_NAME,
           description: 'Custom MCP skill',
           invocation: { modelInvocable: true, userInvocable: true },
           source: 'user-dsh',
@@ -193,15 +197,15 @@ test('built-in dsh-mcp-pro skill registers into real SkillRegistry, allows overr
         }
       },
     }))
-    assert.equal((await ctx.skills.get(MCP_SKILL_NAME))?.provider, 'user-mcp-override')
+    assert.equal((await ctx.skills.get(MARKET_SKILL_NAME))?.provider, 'user-mcp-override')
     disposeOverride()
-    assert.equal((await ctx.skills.get(MCP_SKILL_NAME))?.provider, MARKET_SKILL_PROVIDER)
+    assert.equal((await ctx.skills.get(MARKET_SKILL_NAME))?.provider, MARKET_SKILL_PROVIDER)
 
-    // Turning off aiAssistantEnabled withdraws dsh-mcp-pro immediately.
+    // Turning off aiAssistantEnabled withdraws market-pro immediately.
     settings = { enabled: true, aiAssistantEnabled: false }
     handle.sync()
-    assert.equal((await ctx.skills.list()).some(skill => skill.name === MCP_SKILL_NAME), false)
-    assert.equal(await ctx.skills.get(MCP_SKILL_NAME), undefined)
+    assert.equal((await ctx.skills.list()).some(skill => skill.name === MARKET_SKILL_NAME), false)
+    assert.equal(await ctx.skills.get(MARKET_SKILL_NAME), undefined)
   } finally {
     await ctx.fiber.dispose()
   }
@@ -237,9 +241,12 @@ test('dsh_mcp_pro read actions discover curated MCPs, mask secrets, support CJK/
   // Works even when online plugin catalog (`settings.enabled`) is off because curated MCPs are built-in.
   const listed = JSON.parse(await tool.execute({ action: 'list_featured', lang: 'zh' })) as {
     totalCurated: number
+    matched: number
     items: { id: string; configured?: { name: string; source: string } }[]
   }
-  assert.ok(listed.totalCurated >= 15)
+  assert.equal(listed.totalCurated, 100)
+  assert.equal(listed.matched, 100)
+  assert.equal(listed.items.length, DEFAULT_AI_MCP_LIST_LIMIT, 'omitting limit on list_featured defaults to a bounded page')
   assert.deepEqual(listed.items.find(item => item.id === 'playwright')?.configured, {
     name: 'playwright',
     source: 'managed',
@@ -251,6 +258,21 @@ test('dsh_mcp_pro read actions discover curated MCPs, mask secrets, support CJK/
     source: 'static',
     enabled: true,
   })
+
+  // Explicit limit up to MAX_AI_MCP_LIMIT can still fetch the full curated catalog.
+  const fullListed = JSON.parse(await tool.execute({ action: 'list_featured', limit: MAX_AI_MCP_LIMIT, lang: 'en' })) as {
+    items: { id: string }[]
+  }
+  assert.equal(fullListed.items.length, 100)
+
+  // Omitting limit on search_featured defaults to DEFAULT_AI_MCP_SEARCH_LIMIT.
+  const broadSearch = JSON.parse(await tool.execute({
+    action: 'search_featured',
+    query: 'mcp',
+    lang: 'en',
+  })) as { matched: number; items: { id: string }[] }
+  assert.ok(broadSearch.matched > DEFAULT_AI_MCP_SEARCH_LIMIT)
+  assert.equal(broadSearch.items.length, DEFAULT_AI_MCP_SEARCH_LIMIT)
 
   // Bilingual/CJK search + excludeConfigured filters out already-configured playwright.
   const searched = JSON.parse(await tool.execute({
@@ -734,21 +756,26 @@ test('dsh_mcp_pro hardening: blocks mixed-template smuggling, checks approval vi
   const plan = buildManagedMcpInstallPlan({ kind: 'featured', featuredId: 'exa' }, new Set())
   await assert.rejects(() => installManagedMcp(noNsCtx, entries, plan), /namespace-missing/)
 
-  // 7. registerMarketAiSkill fallback rolls back first disposer if second registration throws.
-  let firstDisposed = false
-  let calls = 0
+  // 7. registerMarketAiSkill fallback tolerates registration errors and disposes cleanly on toggle-off.
+  let disposed = false
+  let shouldThrow = true
+  let liveSettings: SafeMarketSettings = { enabled: true, aiAssistantEnabled: true }
   const fallbackCtx = new Context()
   try {
     ;(fallbackCtx as unknown as { skills: unknown }).skills = {
       register() {
-        calls += 1
-        if (calls === 1) return () => { firstDisposed = true }
-        throw new Error('boom on second')
+        if (shouldThrow) throw new Error('boom on register')
+        return () => { disposed = true }
       },
     }
-    registerMarketAiSkill(fallbackCtx, { profile: 'web', readSettings: () => settings })
+    const handle = registerMarketAiSkill(fallbackCtx, { profile: 'web', readSettings: () => liveSettings })
     await setImmediate()
-    assert.equal(firstDisposed, true)
+    assert.equal(disposed, false)
+    shouldThrow = false
+    handle.sync()
+    liveSettings = { enabled: true, aiAssistantEnabled: false }
+    handle.sync()
+    assert.equal(disposed, true)
   } finally {
     await fallbackCtx.fiber.dispose()
   }

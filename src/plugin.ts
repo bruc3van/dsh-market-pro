@@ -39,6 +39,7 @@ import { adoptMcp, inspectMcpContext, probeManagedMcp, type McpLoaderEntry } fro
 import { registerMarketAiSkill } from './aiSkill.ts'
 import { registerMarketAiTool, type HostPluginManagerUpdateFace, type HostPluginMarketUpdateFace, type MarketApprovalServiceFace } from './aiTools.ts'
 import { registerMarketAiMcpTool } from './aiMcpTools.ts'
+import { registerMarketAiSkillsTool } from './aiSkillsTools.ts'
 import { adoptDomainState, initialDomainState, safeMarketDomainSpec, type SafeMarketDomainState } from './store.ts'
 import { createTelemetryReporter } from './telemetry.ts'
 import { TYPERT_MANIFEST } from './typert.ts'
@@ -307,10 +308,15 @@ export function applyMarket(ctx: Context, resolved: Config): () => void {
     readSettings,
     entries: () => ctx.loader.entries() as Iterable<McpLoaderEntry>,
   })
+  const aiSkillsTool = registerMarketAiSkillsTool(ctx, {
+    profile: profile.name,
+    readSettings,
+  })
   syncAiAssistant = () => {
     aiSkill.sync()
     aiTool.sync()
     aiMcpTool.sync()
+    aiSkillsTool.sync()
   }
   ctx.on('loader/volatile-update', () => {
     syncAiAssistant?.()
