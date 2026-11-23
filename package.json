@@ -1,7 +1,7 @@
 {
   "name": "dsh-market-pro",
   "description": "DSH 插件市场Pro：面向 Agent 的 AI 原生插件市场，内置统一 /market-pro 技能与插件/技能/MCP 三大工具，一站式管理插件、精选技能、MCP 服务器、一键批量更新与安全审查。",
-  "version": "1.13.1",
+  "version": "1.14.0",
   "license": "MIT",
   "icon": "./assets/logo.svg",
   "type": "module",
