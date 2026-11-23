@@ -1484,7 +1484,7 @@ export function MarketSection({
     }
   }
 
-  const runReview = async (cardKey: string, prompt: string, viaNewWorkspace: boolean, preferDefault = false): Promise<boolean> => {
+  const runReview = async (cardKey: string, prompt: string, viaNewWorkspace: boolean, preferDefault = true): Promise<boolean> => {
     if (Object.values(cardsRef.current).some(card => card.status === 'busy' || card.status === 'picking')) return false
     report(cardKey, { status: viaNewWorkspace ? 'picking' : 'busy' })
     try {
@@ -1547,12 +1547,12 @@ export function MarketSection({
     const profile = snapshot.profile
     if (profile === null || !item.fullName) return
     void runReview(SELF_CARD_KEY, buildInstallPrompt(t, { profile, repo: item.fullName, name: item.name }),
-      workspaceReadiness.getSnapshot() === 'none', true).then(ok => { if (ok) closeInstallPanel() })
+      workspaceReadiness.getSnapshot() === 'none').then(ok => { if (ok) closeInstallPanel() })
   }
   const aiPickCard = cards[AI_PICK_CARD_KEY]
   const tryAiAssistant = (): void => {
     const prompt = page === 'mcp' ? t('ai.pickMcpPrompt') : t('ai.pickPrompt')
-    void runReview(AI_PICK_CARD_KEY, prompt, workspaceReadiness.getSnapshot() === 'none', true)
+    void runReview(AI_PICK_CARD_KEY, prompt, workspaceReadiness.getSnapshot() === 'none')
   }
 
   return (

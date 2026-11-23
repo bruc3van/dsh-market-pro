@@ -1,5 +1,8 @@
 allowBuilds:
   esbuild: true
+overrides:
+  fast-uri: '>=3.1.9'
+  undici: '>=8.12.2'
 minimumReleaseAgeExclude:
   - '@deepseek-ai/dsh-agent-default-model@0.1.7-rc.2 || 0.2.1-alpha.5 || 0.2.2-rc.5'
   - '@deepseek-ai/dsh-agent-presets@0.1.7-rc.2'

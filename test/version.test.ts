@@ -19,6 +19,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const pkg = JSON.parse(await readFile(resolve(root, 'package.json'), 'utf8')) as {
   name: string
   version: string
+  dsh: { client: { inject: string[] } }
   peerDependencies: Record<string, string>
   devDependencies: Record<string, string>
 }
@@ -49,6 +50,9 @@ test('DSH dependencies keep the declared runtime and development baseline', () =
     }
   }
   assert.ok('@deepseek-ai/dsh-client-ui-primitives' in pkg.peerDependencies)
+  for (const injected of pkg.dsh.client.inject) {
+    assert.ok(injected in pkg.peerDependencies, `dsh.client.inject entry ${injected} must be declared in peerDependencies`)
+  }
 })
 
 test('package metadata and bundle entry agree on the plugin identity and version', async () => {
