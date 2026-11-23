@@ -24,9 +24,11 @@ export interface SessionListState {
 
 /** Workspace Controller face consumed by the market. */
 export type MarketWorkspaces = Pick<IWorkspaces, 'list' | 'create'>
+  & Partial<Pick<IWorkspaces, 'initializeDefault'>>
 
 /** Cross-Controller navigation supplied by the DSH Web profile. */
 export type MarketUiWorkspace = Pick<UiWorkspace, 'openWorkspace' | 'pickDirectory'>
+  & Partial<Pick<UiWorkspace, 'listDirectory' | 'createDirectory'>>
 
 /** The main conversation owns a mainView reference; other references do not select it. */
 export function currentSessionOf(sessions: SessionListState): SessionSummary['id'] | undefined {

@@ -50,6 +50,7 @@ export function wrapUntrustedMarketData(payload: string): string {
 }
 
 const MAX_AI_UPDATE_TARGETS = 50
+const MAX_AI_QUERY_INPUTS = MAX_AI_QUERIES * 2
 
 const pinnedUpdateSchema = z.object({
   packageName: z.string().trim().min(1).max(240),
@@ -59,7 +60,7 @@ const pinnedUpdateSchema = z.object({
 const toolArgsSchema = z.object({
   action: z.enum(['overview', 'featured', 'search', 'detail', 'environment', 'check_updates', 'update_plugins']),
   query: z.string().max(300).optional(),
-  queries: z.array(z.string().max(120)).max(MAX_AI_QUERIES).optional(),
+  queries: z.array(z.string().max(120)).max(MAX_AI_QUERY_INPUTS).optional(),
   category: z.string().max(80).optional(),
   scope: z.enum(['all', 'featured']).optional(),
   target: z.string().max(240).optional(),

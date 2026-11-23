@@ -18,9 +18,9 @@ export interface SessionListState {
     readonly byId: Readonly<Record<string, Pick<SessionSummary, 'id' | 'updatedAt' | 'retainedBy'>>>;
 }
 /** Workspace Controller face consumed by the market. */
-export type MarketWorkspaces = Pick<IWorkspaces, 'list' | 'create'>;
+export type MarketWorkspaces = Pick<IWorkspaces, 'list' | 'create'> & Partial<Pick<IWorkspaces, 'initializeDefault'>>;
 /** Cross-Controller navigation supplied by the DSH Web profile. */
-export type MarketUiWorkspace = Pick<UiWorkspace, 'openWorkspace' | 'pickDirectory'>;
+export type MarketUiWorkspace = Pick<UiWorkspace, 'openWorkspace' | 'pickDirectory'> & Partial<Pick<UiWorkspace, 'listDirectory' | 'createDirectory'>>;
 /** The main conversation owns a mainView reference; other references do not select it. */
 export declare function currentSessionOf(sessions: SessionListState): SessionSummary['id'] | undefined;
 /** Whether the active DSH generation has received both Workspace and Session baselines. */

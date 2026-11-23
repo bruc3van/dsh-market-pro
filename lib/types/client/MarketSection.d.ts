@@ -1,4 +1,5 @@
 import type { DirectInstaller } from './directInstall.ts';
+import type { DirectoryBrowserController } from './directoryBrowser.ts';
 import type { PluginUpdater } from './pluginUpdates.ts';
 import type { SkillsSessionSource } from './skillsSubscription.ts';
 /**
@@ -103,9 +104,14 @@ export interface MarketSectionInjected {
      * The same hand-off for someone who has no workspace yet: pick a directory
      * through the Host's own picker, register it, then stage the prompt in it.
      */
-    installIntoNewWorkspace: (prompt: string) => Promise<InstallOutcome>;
+    installIntoNewWorkspace: (prompt: string, options?: {
+        readonly preferDefault?: boolean;
+        readonly ownerId?: string;
+    }) => Promise<InstallOutcome>;
     /** Pick a directory and register it as a Workspace, installing nothing. */
-    chooseWorkspace: () => Promise<ChooseWorkspaceOutcome>;
+    chooseWorkspace: (ownerId?: string) => Promise<ChooseWorkspaceOutcome>;
+    /** In-app directory browser controller used when the Host serves `"browse"` (e.g. DSH-go). */
+    directoryBrowser?: DirectoryBrowserController;
     /** Live answer to "is there a workspace for review?". */
     workspaceReadiness: {
         getSnapshot: () => WorkspaceReadiness;
@@ -133,4 +139,4 @@ export interface HeaderRefreshAction {
     readonly onClick: () => void;
 }
 /** The Marketplace section. */
-export declare function MarketSection({ useScope, updateSettings, loadCatalog, peekCatalog, listSkills, skillsSession, canOpenFolder, openFolder, install, installIntoNewWorkspace, chooseWorkspace, workspaceReadiness, listInstalled, subscribeInstalledChanges, setInstalledEnabled, uninstallInstalled, directInstaller, pluginUpdater, mcp, close, t, }: MarketSectionProps): ReactElement;
+export declare function MarketSection({ useScope, updateSettings, loadCatalog, peekCatalog, listSkills, skillsSession, canOpenFolder, openFolder, install, installIntoNewWorkspace, chooseWorkspace, directoryBrowser, workspaceReadiness, listInstalled, subscribeInstalledChanges, setInstalledEnabled, uninstallInstalled, directInstaller, pluginUpdater, mcp, close, t, }: MarketSectionProps): ReactElement;

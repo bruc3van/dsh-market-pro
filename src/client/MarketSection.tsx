@@ -4,6 +4,8 @@ import type { DirectInstaller } from './directInstall.ts'
 import { loadingProgressOf } from './catalogCache.ts'
 import { MarketSelector } from './InstallModeSelector.tsx'
 import { DirectInstallPanel } from './DirectInstallPanel.tsx'
+import type { DirectoryBrowserController } from './directoryBrowser.ts'
+import { DirectoryBrowserPanel } from './DirectoryBrowserPanel.tsx'
 import type { PluginUpdater } from './pluginUpdates.ts'
 import { PluginUpdatePanel } from './PluginUpdatePanel.tsx'
 import { BatchUpdatePanel } from './BatchUpdatePanel.tsx'
@@ -111,9 +113,14 @@ export interface MarketSectionInjected {
    * The same hand-off for someone who has no workspace yet: pick a directory
    * through the Host's own picker, register it, then stage the prompt in it.
    */
-  installIntoNewWorkspace: (prompt: string) => Promise<InstallOutcome>
+  installIntoNewWorkspace: (
+    prompt: string,
+    options?: { readonly preferDefault?: boolean; readonly ownerId?: string },
+  ) => Promise<InstallOutcome>
   /** Pick a directory and register it as a Workspace, installing nothing. */
-  chooseWorkspace: () => Promise<ChooseWorkspaceOutcome>
+  chooseWorkspace: (ownerId?: string) => Promise<ChooseWorkspaceOutcome>
+  /** In-app directory browser controller used when the Host serves `"browse"` (e.g. DSH-go). */
+  directoryBrowser?: DirectoryBrowserController
   /** Live answer to "is there a workspace for review?". */
   workspaceReadiness: {
     getSnapshot: () => WorkspaceReadiness
@@ -1380,7 +1387,7 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
 
 /** The Marketplace section. */
 export function MarketSection({
-  useScope, updateSettings, loadCatalog, peekCatalog, listSkills, skillsSession, canOpenFolder, openFolder, install, installIntoNewWorkspace, chooseWorkspace, workspaceReadiness,
+  useScope, updateSettings, loadCatalog, peekCatalog, listSkills, skillsSession, canOpenFolder, openFolder, install, installIntoNewWorkspace, chooseWorkspace, directoryBrowser, workspaceReadiness,
   listInstalled, subscribeInstalledChanges, setInstalledEnabled, uninstallInstalled, directInstaller, pluginUpdater, mcp, close, t,
 }: MarketSectionProps): ReactElement {
   const snapshot = useScope(value => value)
@@ -1477,12 +1484,13 @@ export function MarketSection({
     }
   }
 
-  const runReview = async (cardKey: string, prompt: string, viaNewWorkspace: boolean): Promise<boolean> => {
+  const runReview = async (cardKey: string, prompt: string, viaNewWorkspace: boolean, preferDefault = false): Promise<boolean> => {
     if (Object.values(cardsRef.current).some(card => card.status === 'busy' || card.status === 'picking')) return false
     report(cardKey, { status: viaNewWorkspace ? 'picking' : 'busy' })
-    const handOff = viaNewWorkspace ? installIntoNewWorkspace : install
     try {
-      const outcome = await handOff(prompt)
+      const outcome = viaNewWorkspace
+        ? await installIntoNewWorkspace(prompt, { ...(preferDefault ? { preferDefault: true } : {}), ownerId: tabsId })
+        : await install(prompt)
       if (outcome.ok) {
         report(cardKey, { status: 'staged' })
         close()
@@ -1539,12 +1547,12 @@ export function MarketSection({
     const profile = snapshot.profile
     if (profile === null || !item.fullName) return
     void runReview(SELF_CARD_KEY, buildInstallPrompt(t, { profile, repo: item.fullName, name: item.name }),
-      workspaceReadiness.getSnapshot() === 'none').then(ok => { if (ok) closeInstallPanel() })
+      workspaceReadiness.getSnapshot() === 'none', true).then(ok => { if (ok) closeInstallPanel() })
   }
   const aiPickCard = cards[AI_PICK_CARD_KEY]
   const tryAiAssistant = (): void => {
     const prompt = page === 'mcp' ? t('ai.pickMcpPrompt') : t('ai.pickPrompt')
-    void runReview(AI_PICK_CARD_KEY, prompt, workspaceReadiness.getSnapshot() === 'none')
+    void runReview(AI_PICK_CARD_KEY, prompt, workspaceReadiness.getSnapshot() === 'none', true)
   }
 
   return (
@@ -1627,6 +1635,7 @@ export function MarketSection({
         onClose={() => setOverlay(current => (current.kind === 'update' ? { kind: 'none' } : current))} />}
       {pluginUpdater && updateState && <BatchUpdatePanel open={batchUpdateOpen} state={updateState} updater={pluginUpdater} t={t}
         onClose={() => setOverlay(current => (current.kind === 'batch-update' ? { kind: 'none' } : current))} />}
+      {directoryBrowser && <DirectoryBrowserPanel controller={directoryBrowser} ownerId={tabsId} t={t} />}
       <div className="dsh_market_tabToolbar">
       <div className="dsh_market_tabs" role="tablist" aria-label={t('tabs.aria')}>
         {pages.map((entry, index) => (
@@ -1696,7 +1705,7 @@ export function MarketSection({
           subscribeInstalledChanges={subscribeInstalledChanges}
           setInstalledEnabled={setInstalledEnabled}
           uninstallInstalled={uninstallInstalled}
-          chooseWorkspace={chooseWorkspace}
+          chooseWorkspace={() => chooseWorkspace(tabsId)}
           workspaceReadiness={workspaceReadiness}
           cards={cards}
           installBusy={installBusy}

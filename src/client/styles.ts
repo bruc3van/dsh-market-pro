@@ -287,7 +287,6 @@ export const cssText = `
      inline inset that grows with the window up to 48px. */
   padding: 28px clamp(24px, 4vw, 48px) 16px;
 }
-@media (max-width: 767px) { .dsh_market_main { padding-inline: 20px; } }
 .dsh_market_main > .dsh_market_section { margin: 0 auto; }
 .dsh_market_pluginTab {
   width: 100%;
@@ -586,8 +585,10 @@ export const cssText = `
 }
 .dsh_market_heading {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   gap: 8px;
+  min-width: 0;
   margin: 0;
   font-size: 20px;
   line-height: 28px;
@@ -612,6 +613,10 @@ export const cssText = `
 .dsh_market_filterActions {
   display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap;
   flex: 1 1 220px; gap: 8px; min-width: 0; margin-left: auto;
+}
+.dsh_market_search.dsh_market_filterSearch {
+  flex: 1 1 180px;
+  min-width: min(100%, 160px);
 }
 .dsh_market_search.dsh_market_filterSearch,
 .dsh_market_search.dsh_market_skillSearch,
@@ -1292,13 +1297,6 @@ button.dsh_market_dangerButton { color: var(--dsw-alias-state-error-primary); }
 @media (hover: hover) {
   button.dsh_market_dangerButton:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover-danger); }
 }
-@container (max-width: 440px) {
-  .dsh_market_cards { grid-template-columns: minmax(0, 1fr); }
-  .dsh_market_search.dsh_market_skillSearch { flex-basis: 100%; }
-  .dsh_market_empty { padding: 28px 16px 24px; }
-  .dsh_market_emptyActions { width: 100%; }
-  .dsh_market_emptyActions > button { flex: 1 1 auto; }
-}
 
 /* The MCP page: the installed cards' shape, plus a monospace target line,
    a status voice per bucket, and the editor sheet's stacked fields. */
@@ -1463,13 +1461,243 @@ button.dsh_market_dangerButton { color: var(--dsw-alias-state-error-primary); }
 .dsh_market_settingRow:last-child { border-bottom: none; }
 .dsh_market_settingHead { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .dsh_market_settingCopy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; padding-right: 48px; }
-@media (max-width: 767px) { .dsh_market_settingCopy { padding-right: 16px; } }
 .dsh_market_settingName { margin: 0; font-size: 14px; font-weight: 400; line-height: 22px; color: var(--dsw-alias-label-primary); }
 .dsh_market_settingBody { margin: 0; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-tertiary); }
 .dsh_market_settingWarn { margin: 0; font-size: 12px; line-height: 18px; color: var(--dsw-alias-state-warn-primary); }
 .dsh_market_settingActions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .dsh_market_aiPick { margin-bottom: 5px; }
 .dsh_market_aiPick svg { fill: currentColor; }
+
+/* Remote directory browser modal (DSH-go / Web browse capability). */
+.dsh_market_dirToolbar {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+  padding-bottom: 10px;
+  border-bottom: 0.5px solid var(--dsw-alias-border-l2);
+}
+.dsh_market_dirCrumbs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  overflow-x: auto;
+  white-space: nowrap;
+  padding-bottom: 2px;
+}
+.dsh_market_dirCrumbWrap { display: inline-flex; align-items: center; gap: 2px; flex: none; }
+.dsh_market_dirSep { color: var(--dsw-alias-label-tertiary); font-size: 12px; padding: 0 2px; }
+.dsh_market_dirCrumb {
+  flex: none;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: var(--dsw-radius-xs);
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  cursor: pointer;
+}
+.dsh_market_dirCrumb[data-current="true"] {
+  color: var(--dsw-alias-label-primary);
+  font-weight: 500;
+  cursor: default;
+}
+@media (hover: hover) {
+  .dsh_market_dirCrumb:hover:not(:disabled) {
+    background: var(--dsw-alias-interactive-bg-hover);
+    color: var(--dsw-alias-label-primary);
+  }
+}
+.dsh_market_dirCrumb:focus-visible,
+.dsh_market_dirRow:focus-visible {
+  outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  outline-offset: 1px;
+}
+.dsh_market_dirMetaRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.dsh_market_dirHiddenToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+}
+.dsh_market_dirHiddenToggle input { margin: 0; accent-color: var(--dsw-alias-label-primary); }
+.dsh_market_dirQuickActions { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
+.dsh_market_dirCreateForm {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.dsh_market_dirCreateForm .dsh_market_search { flex: 1 1 160px; height: 32px; }
+.dsh_market_dirBody { margin-top: 8px; min-height: 0; max-height: 320px; }
+.dsh_market_dirList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.dsh_market_dirRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 36px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--dsw-radius-md);
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 13px;
+  line-height: 20px;
+  text-align: left;
+  cursor: pointer;
+}
+@media (hover: hover) {
+  .dsh_market_dirRow:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); }
+}
+.dsh_market_dirRow:active:not(:disabled) { background: var(--dsw-alias-interactive-bg-active); }
+.dsh_market_dirRow:disabled { opacity: .4; cursor: not-allowed; }
+.dsh_market_dirIcon,
+.dsh_market_dirChevron {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  color: var(--dsw-alias-label-secondary);
+}
+.dsh_market_dirChevron { margin-left: auto; color: var(--dsw-alias-label-tertiary); }
+.dsh_market_dirName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dsh_market_directPanel.dsh_market_dirDialog .dsh_market_cardError {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-state-error-primary);
+  overflow-wrap: anywhere;
+}
+.dsh_market_directPanel.dsh_market_dirDialog .dsh_market_dirHint {
+  margin: 24px 4px;
+  text-align: center;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-tertiary);
+}
+.dsh_market_dirErrorActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+/* Responsive layout for narrow containers (mobile screens, split panes, sidebars):
+   stack search above equal-width selectors, remove desktop scrollbar gutter insets so
+   cards align flush with toolbars, and switch to natural-height single-column cards. */
+@container (max-width: 560px) {
+  .dsh_market_headingRow { gap: 6px 10px; }
+  .dsh_market_heading { font-size: 18px; line-height: 26px; gap: 6px; }
+  .dsh_market_subtitle { font-size: 12px; line-height: 18px; }
+  .dsh_market_tabToolbar { gap: 6px 10px; align-items: center; }
+  .dsh_market_tabs { gap: 2px 14px; min-height: 34px; }
+  .dsh_market_tab { padding: 6px 2px 8px; }
+  .dsh_market_aiPick { margin-bottom: 4px; }
+  .dsh_market_controls { gap: 8px; }
+  .dsh_market_notice { padding: 10px 12px; gap: 8px; }
+  .dsh_market_filterBar { gap: 8px; }
+  .dsh_market_scope { width: 100%; box-sizing: border-box; }
+  .dsh_market_scopeButton { flex: 1 1 auto; justify-content: center; min-width: 0; padding: 0 8px; gap: 4px; }
+  .dsh_market_filterActions { flex: 1 0 100%; width: 100%; margin-left: 0; justify-content: flex-start; }
+  .dsh_market_search.dsh_market_filterSearch,
+  .dsh_market_search.dsh_market_skillSearch,
+  .dsh_market_projectSkills .dsh_market_search.dsh_market_skillSearch { flex: 1 0 100%; width: 100%; min-width: 0; margin-left: 0; }
+  .dsh_market_category,
+  .dsh_market_sort { flex: 1 1 0; min-width: 0; }
+  .dsh_market_category .dsh_market_modeTrigger,
+  .dsh_market_sort .dsh_market_modeTrigger { width: 100%; min-width: 0; max-width: none; padding: 0 12px; }
+  .dsh_market_batchUpdateButton { flex: 1 1 auto; }
+  .dsh_market_scroll { scrollbar-gutter: auto; padding-right: 0; }
+  .dsh_market_results { scrollbar-gutter: auto; padding-right: 0; padding-bottom: 48px; gap: 10px; }
+  .dsh_market_pagination { margin-right: 0; gap: 6px 12px; }
+  .dsh_market_backToTop { right: 12px; }
+  .dsh_market_cards { grid-template-columns: minmax(0, 1fr); }
+  .dsh_market_cardsUniform { grid-auto-rows: auto; align-items: start; }
+  .dsh_market_card { padding: 12px; }
+  .dsh_market_catalogCard { padding: 14px; gap: 10px; }
+  .dsh_market_card.dsh_market_mcpCard { height: auto; min-height: 0; overflow: visible; }
+  .dsh_market_mcpBody { overflow: visible; }
+  .dsh_market_foot { gap: 6px 8px; }
+  .dsh_market_empty { padding: 28px 16px 24px; }
+  .dsh_market_emptyActions { width: 100%; }
+  .dsh_market_emptyActions > button { flex: 1 1 auto; }
+}
+@container (max-width: 440px) {
+  .dsh_market_mcpPair { flex-wrap: wrap; }
+  .dsh_market_mcpPair input { flex: 1 1 120px; }
+  .dsh_market_mcpModalFooter { flex-direction: column-reverse; align-items: stretch; }
+  .dsh_market_mcpModalFooterRight { width: 100%; justify-content: flex-end; }
+}
+@media (max-width: 767px) {
+  .dsh_market_main { padding: 14px 16px 12px; }
+  .dsh_market_section { gap: 10px; }
+  .dsh_market_sidebar { padding: 12px; }
+  .dsh_market_projectSkills { padding: 14px 16px 20px; }
+  .dsh_market_settingCopy { padding-right: 16px; }
+  .dsh_market_scroll,
+  .dsh_market_results { scrollbar-gutter: auto; padding-right: 0; }
+  .dsh_market_pagination { margin-right: 0; }
+}
+@media (max-width: 560px) {
+  .dsh_market_directPanel { padding: 18px 16px 18px; }
+  .dsh_market_directPanel.dsh_market_mcpToolsDialog { padding: 0; }
+  .dsh_market_directPanel.dsh_market_updateDialog { max-height: min(640px, 88vh); max-height: min(640px, 88dvh); }
+  .dsh_market_directHead { gap: 10px; }
+  .dsh_market_directHead > .dsh_market_logo { width: 40px; height: 40px; }
+  .dsh_market_installStatus,
+  .dsh_market_installUnavailable { margin-top: 14px; padding: 12px 14px; }
+  .dsh_market_installFooter,
+  .dsh_market_updateActions { margin-top: 16px; }
+  .dsh_market_mcpToolsDialog .dsh_market_directHead { padding: 16px 16px 10px; }
+  .dsh_market_mcpToolsDialog .dsh_market_mcpToolsFilter { margin: 0 16px 10px; }
+  .dsh_market_mcpToolList { padding: 4px 8px 12px; }
+}
+@media (pointer: coarse) {
+  .dsh_market_search.dsh_market_filterSearch,
+  .dsh_market_search.dsh_market_skillSearch,
+  .dsh_market_category .dsh_market_modeTrigger,
+  .dsh_market_sort .dsh_market_modeTrigger,
+  .dsh_market_dirCreateForm .dsh_market_search { height: 38px; }
+  .dsh_market_dirRow { min-height: 42px; }
+  .dsh_market_scopeButton { height: 32px; }
+  .dsh_market_pageButton { width: 36px; height: 36px; }
+  .dsh_market_directClose { width: 32px; height: 32px; }
+  .dsh_market_iconButton { width: 36px; height: 36px; }
+  .dsh_market_scroll,
+  .dsh_market_results { scrollbar-gutter: auto; padding-right: 0; }
+  .dsh_market_pagination { margin-right: 0; }
+}
 `
 
 /**

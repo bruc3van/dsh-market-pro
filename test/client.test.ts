@@ -134,6 +134,28 @@ test('every class the stylesheet defines is namespaced to this plugin', () => {
   assert.equal(STYLE_ID, 'dsh-market-pro-style')
 })
 
+test('narrow containers stack search above full-width selectors and drop desktop gutter insets', () => {
+  const narrow = cssText.match(/@container \(max-width:\s*560px\)\s*\{([\s\S]*?)\n\}/)
+  assert.ok(narrow, 'expected a @container (max-width: 560px) responsive block')
+  const block = narrow[1]!
+  assert.match(block, /\.dsh_market_search\.dsh_market_filterSearch[\s\S]*?flex:\s*1 0 100%/)
+  assert.match(block, /\.dsh_market_projectSkills\s+\.dsh_market_search\.dsh_market_skillSearch[\s\S]*?flex:\s*1 0 100%/)
+  assert.match(block, /\.dsh_market_category\s+\.dsh_market_modeTrigger[\s\S]*?width:\s*100%/)
+  assert.match(block, /\.dsh_market_results\s*\{[^}]*scrollbar-gutter:\s*auto;\s*padding-right:\s*0/)
+  assert.match(block, /\.dsh_market_pagination\s*\{[^}]*margin-right:\s*0/)
+  assert.match(block, /\.dsh_market_cards\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/)
+  assert.match(block, /\.dsh_market_cardsUniform\s*\{[^}]*grid-auto-rows:\s*auto/)
+  assert.match(block, /\.dsh_market_card\.dsh_market_mcpCard\s*\{[^}]*height:\s*auto/)
+  assert.match(cssText, /\.dsh_market_dirBody\s*\{[^}]*min-height:\s*0/)
+  assert.match(cssText, /\.dsh_market_directPanel\.dsh_market_dirDialog\s+\.dsh_market_cardError\s*\{[^}]*color:\s*var\(--dsw-alias-state-error-primary\)/)
+  // Ensure the narrow MCP card override comes after the desktop 208px height rule.
+  assert.ok(
+    cssText.lastIndexOf('.dsh_market_card.dsh_market_mcpCard { height: auto;')
+      > cssText.indexOf('.dsh_market_card.dsh_market_mcpCard { height: 208px;'),
+    'single-column auto height must override the desktop fixed 208px MCP card height',
+  )
+})
+
 test('one overlapping client module cannot remove another module copy\'s stylesheet', async () => {
   type FakeTag = { id: string; textContent: string; setAttribute: (name: string, value: string) => void; remove: () => void }
   const tags = new Map<string, FakeTag>()

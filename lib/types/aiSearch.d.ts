@@ -132,7 +132,7 @@ export interface AiEnvironmentResult {
 }
 export declare const DEFAULT_AI_LIMIT = 8;
 export declare const MAX_AI_LIMIT = 25;
-export declare const MAX_AI_QUERIES = 3;
+export declare const MAX_AI_QUERIES = 6;
 export declare const MAX_AI_DETAIL_TARGETS = 5;
 /** Zero-width, BiDi override, and Unicode tag-block characters used in invisible prompt injection. */
 export declare const INVISIBLE_INJECTION_PATTERN: RegExp;

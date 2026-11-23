@@ -141,7 +141,7 @@ const ISO_DAY_PATTERN = /^(\d{4})-(\d{2})-(\d{2})(?:$|[T ])/
 
 export const DEFAULT_AI_LIMIT = 8
 export const MAX_AI_LIMIT = 25
-export const MAX_AI_QUERIES = 3
+export const MAX_AI_QUERIES = 6
 export const MAX_AI_DETAIL_TARGETS = 5
 
 /** Zero-width, BiDi override, and Unicode tag-block characters used in invisible prompt injection. */

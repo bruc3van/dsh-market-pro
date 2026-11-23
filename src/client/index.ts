@@ -36,6 +36,7 @@ import { FEATURED_MCP_SERVERS, mcpIdentityKey } from '../mcpFeatured.ts'
 import { classifyInstallError } from '../telemetryError.ts'
 import { createClientCatalogCache } from './catalogCache.ts'
 import { createDirectInstaller, type InstallHost } from './directInstall.ts'
+import { createDirectoryBrowser } from './directoryBrowser.ts'
 import {
   createMcpController, type McpCredentialsFace, type McpManagerFace, type McpPluginsFace, type McpSettingsFace,
 } from './mcpController.ts'
@@ -202,6 +203,8 @@ export function apply(ctx: ClientContext): void {
   const workspaces = ctx.get('workspaces') as MarketWorkspaces
   const sessions = ctx.get('sessions') as ISessions
   const navigation = ctx.get('uiWorkspace') as MarketUiWorkspace
+  const directoryBrowser = createDirectoryBrowser(navigation)
+  ctx.effect(() => () => { directoryBrowser.reset() }, 'dsh-market-pro: directory browser')
 
   const reportError = (operation: string, error: unknown): void => {
     console.error(`[dsh-market-pro] ${operation} failed:`, error)
@@ -313,6 +316,7 @@ export function apply(ctx: ClientContext): void {
   // Reconnect may have rebuilt the host: the durable switch and the
   // deployment facts are re-read rather than assumed to have survived.
   ctx.on('connection/reset', () => {
+    directoryBrowser.reset()
     catalogCache.invalidate()
     void loadSettings()
     void loadEnvironment()
@@ -400,32 +404,32 @@ export function apply(ctx: ClientContext): void {
     return stageReviewPrompt(sessions, navigation, ctx.get('conversation') as IConversation, workspaceId, prompt)
   }
 
+  const waitForWorkspace = async (workspaceId: WorkspaceTarget): Promise<void> => {
+    // `openWorkspace` resolves against the list mirror, which the create /
+    // initializeDefault response reaches one projection later.
+    const deadline = Date.now() + WORKSPACE_WAIT_MS
+    while (Date.now() < deadline
+      && !workspaces.list.getSnapshot().items.some(item => item.workspaceId === workspaceId)) {
+      await wait(WORKSPACE_POLL_MS)
+    }
+  }
+
   /**
-   * Register a directory as a Workspace, through the Host's own picker.
-   *
-   * The directory is the one thing here that cannot be inferred: it is where
-   * the agent will work, so the choice stays with the person making it. What
-   * this removes is the errand — the old answer sent them to the sidebar and
-   * asked them to come back and start over.
+   * Register a directory as a Workspace, through the Host's native picker or
+   * the in-app directory browser when the Host serves `"browse"` (e.g. DSH-go).
    */
-  const chooseWorkspaceId = async (): Promise<
+  const chooseWorkspaceId = async (ownerId?: string): Promise<
     | { ok: true; id: WorkspaceTarget; path: string }
     | { ok: false; reason: 'cancelled' }
     | { ok: false; reason: 'failed'; message: string }
   > => {
     try {
-      const path = await navigation.pickDirectory()
+      const path = await directoryBrowser.pick(ownerId)
       // A cancelled picker is an answer, not a failure: the user changed
       // their mind, and the card says so instead of showing an error.
       if (path === null) return { ok: false, reason: 'cancelled' }
       const created = await workspaces.create({ path })
-      // `openWorkspace` resolves against the list mirror, which the create
-      // response reaches one projection later.
-      const deadline = Date.now() + WORKSPACE_WAIT_MS
-      while (Date.now() < deadline
-        && !workspaces.list.getSnapshot().items.some(item => item.workspaceId === created.workspaceId)) {
-        await wait(WORKSPACE_POLL_MS)
-      }
+      await waitForWorkspace(created.workspaceId)
       return { ok: true, id: created.workspaceId, path }
     } catch (error) {
       return { ok: false, reason: 'failed', message: error instanceof Error ? error.message : String(error) }
@@ -452,15 +456,30 @@ export function apply(ctx: ClientContext): void {
   }
 
   /** The review hand-off for a deployment with no workspace yet. */
-  const installIntoNewWorkspace = async (prompt: string): Promise<InstallOutcome> => {
-    const chosen = await chooseWorkspaceId()
+  const installIntoNewWorkspace = async (
+    prompt: string,
+    options?: { readonly preferDefault?: boolean; readonly ownerId?: string },
+  ): Promise<InstallOutcome> => {
+    if (options?.preferDefault && typeof workspaces.initializeDefault === 'function') {
+      let prepared: Awaited<ReturnType<NonNullable<MarketWorkspaces['initializeDefault']>>>
+      try {
+        prepared = await workspaces.initializeDefault()
+      } catch {
+        prepared = undefined
+      }
+      if (prepared !== undefined) {
+        await waitForWorkspace(prepared.workspaceId)
+        return await stageIn(prepared.workspaceId, prompt)
+      }
+    }
+    const chosen = await chooseWorkspaceId(options?.ownerId)
     if (!chosen.ok) return chosen
     return await stageIn(chosen.id, prompt)
   }
 
   /** Pick and register a workspace on its own, for the page's standing notice. */
-  const chooseWorkspace = async (): Promise<ChooseWorkspaceOutcome> => {
-    const chosen = await chooseWorkspaceId()
+  const chooseWorkspace = async (ownerId?: string): Promise<ChooseWorkspaceOutcome> => {
+    const chosen = await chooseWorkspaceId(ownerId)
     return chosen.ok ? { ok: true, path: chosen.path } : chosen
   }
 
@@ -588,6 +607,7 @@ export function apply(ctx: ClientContext): void {
     install,
     installIntoNewWorkspace,
     chooseWorkspace,
+    directoryBrowser,
     workspaceReadiness,
     listInstalled,
     subscribeInstalledChanges,

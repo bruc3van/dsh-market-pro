@@ -1003,14 +1003,39 @@ test('aiSearch handles CJK-Latin mixed queries, detail hasExtraDetails omission,
   ])
   assert.deepEqual(aliasBatch.entries.map(e => e.fullName), ['bruc3van/bruce-drawio', 'acme/feishu-bot'])
 
-  // Tool schema rejects combined target + targets exceeding MAX_AI_DETAIL_TARGETS.
+  // Tool schema accepts 4-6 bilingual queries and gracefully caps 7-12 inputs.
   const tool = createMarketAiToolDefinition({
     profile: 'web',
     readSettings: () => ({ enabled: true, aiAssistantEnabled: true }),
     readCatalog: async () => ({ catalog, stale: false, error: '' }),
     listInstalled: async () => installedResultFixture,
     readMcp: () => mcpFixture,
-  }) as { execute: (args: unknown) => Promise<string> }
+  }) as {
+    execute: (args: unknown) => Promise<string>
+  }
+  const fourQueriesRaw = await tool.execute({
+    action: 'search',
+    queries: ['docx', '公文', 'word export', 'official document'],
+    lang: 'zh',
+    installableOnly: true,
+    excludeInstalled: true,
+    limit: 10,
+  })
+  assert.match(fourQueriesRaw, /"total":0/)
+  const eightQueriesRaw = await tool.execute({
+    action: 'search',
+    queries: ['q1', 'q2', 'q3', 'q4', 'q5', 'feishu', 'drawio', 'q8'],
+    lang: 'zh',
+  })
+  assert.match(eightQueriesRaw, /acme\/feishu-bot/)
+  assert.doesNotMatch(eightQueriesRaw, /bruc3van\/bruce-drawio/)
+  await assert.rejects(
+    () => tool.execute({
+      action: 'search',
+      queries: ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13'],
+    }),
+    /queries:.*<=12/,
+  )
   await assert.rejects(
     () => tool.execute({ action: 'detail', target: 'a', targets: ['b', 'c', 'd', 'e', 'f'] }),
     /At most 5 unique targets/,

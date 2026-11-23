@@ -10,6 +10,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { SafeMarketSettings } from './contract.ts'
 import { MARKET_TOOL_NAME } from './aiTools.ts'
+import { MAX_AI_QUERIES } from './aiSearch.ts'
 import { MAX_AI_MCP_QUERIES, MCP_TOOL_NAME } from './aiMcpTools.ts'
 
 export const MARKET_SKILL_NAME = 'dsh-market-pro'
@@ -65,7 +66,7 @@ export function buildMarketSkillContent(profile: string): string {
     '',
     '## High-Precision Search & Capability Deduplication',
     '',
-    '- **Use short atomic keywords and `queries[]` for bilingual synonyms**: NEVER mix Chinese and English synonyms in one AND `query` string (that drops English-only repos). Instead pass `queries: ["feishu", "lark", "飞书"]` or `queries: ["drawio", "diagram", "架构图"]` (max 3) to merge & deduplicate in one call.',
+    `- **Use short atomic keywords and \`queries[]\` for bilingual synonyms**: NEVER mix Chinese and English synonyms in one AND \`query\` string (that drops English-only repos). Instead pass \`queries: ["feishu", "lark", "飞书"]\` or \`queries: ["drawio", "diagram", "架构图"]\` (up to ${MAX_AI_QUERIES}) to merge & deduplicate in one call.`,
     '- **Never guess `category`**: Omit `category` unless you obtained the exact key from `overview`. If a response sets `invalidCategory: true`, retry using `availableCategories`.',
     '- **Layered funnel**: Prefer `featured` or `installableOnly: true` first. Only broaden to `scope: "all"` without `installableOnly` when fewer than 2 directly installable candidates match.',
     '- **Plugin vs MCP vs Skill deduplication**: Check `installedPackages` AND `mcp.toolGroups` (plus active session skills). If an existing plugin or MCP already covers the user\'s need (e.g., `playwright` MCP for browser automation), tell the user and recommend complementary tools instead of duplicates.',
