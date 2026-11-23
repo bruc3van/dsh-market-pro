@@ -8,7 +8,7 @@
  * a machine that runs several. All state and I/O live in ./mcpController.ts;
  * the rules this view renders from live in ./mcpModel.ts.
  */
-import { IconCloseOutlineRegular, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconCloseOutlineRegular, Modal, StateDot, TextShimmer } from '@deepseek-ai/dsh-client-ui-primitives'
 import { MarketSelector } from './InstallModeSelector.tsx'
 import { MarketButton } from './MarketButton.tsx'
 import { PluginLogo } from './PluginLogo.tsx'
@@ -105,11 +105,21 @@ function matchesFilter(row: McpRow, filter: Filter): boolean {
   }
 }
 
-/** The page's single active modal: either curated quick-add or the full editor. */
+/** The page's single active modal: curated quick-add, full editor, or connection probe. */
 type McpModalState =
   | { readonly kind: 'closed' }
   | { readonly kind: 'featured'; readonly item: FeaturedMcpServer }
   | { readonly kind: 'editor'; readonly row: McpRow | null; readonly initialDraft?: McpDraft }
+  | { readonly kind: 'probe'; readonly name: string }
+
+/** MCP-owned actions hoisted into the shared tab toolbar alongside the AI assistant button. */
+export interface McpToolbarActions {
+  readonly canOpenDocument: boolean
+  readonly openingDocument: boolean
+  readonly onOpenDocument: () => void
+  readonly canAdd: boolean
+  readonly onAdd: () => void
+}
 
 type DocumentOpenState =
   | { readonly status: 'idle' }
@@ -158,11 +168,12 @@ type EditorStatus =
   | { readonly status: 'confirm-discard'; readonly previous: EditorIdleSubmitState }
 
 /** The MCP page. */
-export function McpView({ t, controller, onBrowsePlugins, onRegisterRefresh }: {
+export function McpView({ t, controller, onBrowsePlugins, onRegisterRefresh, onRegisterToolbarActions }: {
   t: MarketLocale
   controller: McpController
   onBrowsePlugins?: () => void
   onRegisterRefresh?: (action: HeaderRefreshAction | null) => void
+  onRegisterToolbarActions?: (actions: McpToolbarActions | null) => void
 }): ReactElement {
   const snapshot = useSyncExternalStore(controller.subscribe, controller.getSnapshot)
   useEffect(() => controller.attach(), [controller])
@@ -245,6 +256,34 @@ export function McpView({ t, controller, onBrowsePlugins, onRegisterRefresh }: {
     setDocumentState(failure === '' ? { status: 'idle' } : { status: 'error', message: failure })
   }
 
+  const openDocumentRef = useRef(openDocument)
+  openDocumentRef.current = openDocument
+  const openAddModalRef = useRef(() => setModal({ kind: 'editor', row: null }))
+  const openingDocument = documentState.status === 'opening'
+  useEffect(() => {
+    if (!onRegisterToolbarActions) return
+    onRegisterToolbarActions({
+      canOpenDocument,
+      openingDocument,
+      onOpenDocument: () => { void openDocumentRef.current() },
+      canAdd: writable,
+      onAdd: () => openAddModalRef.current(),
+    })
+  }, [onRegisterToolbarActions, canOpenDocument, openingDocument, writable])
+  useEffect(() => () => { onRegisterToolbarActions?.(null) }, [onRegisterToolbarActions])
+
+  const openProbe = (name: string) => {
+    setModal({ kind: 'probe', name })
+    void controller.probe(name)
+  }
+
+  const showInlineToolbarActions = !onRegisterToolbarActions && (canOpenDocument || writable)
+  const hasFeaturedFilterNotice = subTab === 'featured'
+    && (featuredQuery.trim() !== '' || featuredCategory !== 'all' || featuredRuntime !== 'all')
+    && featuredItems.length > 0
+  const showConfiguredSummary = subTab === 'configured' && !loading
+  const showSummaryBar = hasFeaturedFilterNotice || showConfiguredSummary || showInlineToolbarActions
+
   const refreshRef = useRef(refresh)
   refreshRef.current = refresh
   const refreshBusy = loading || refreshing
@@ -312,13 +351,30 @@ export function McpView({ t, controller, onBrowsePlugins, onRegisterRefresh }: {
                   label={t('mcp.featured.category.aria')}
                   className="dsh_market_category"
                   options={[
-                    { value: 'all', label: t('filter.allCategories'), count: FEATURED_MCP_SERVERS.length },
+                    { value: 'all', label: t('filter.allCategories'), count: FEATURED_MCP_SERVERS.filter(item => matchesFeaturedRuntime(item, featuredRuntime)).length },
                     ...FEATURED_MCP_CATEGORIES.map(value => ({
                       value,
                       label: t(`mcp.featured.category.${value}`),
                       count: featuredCategoryCount(value),
                     })),
                   ]}
+                />
+                <MarketSelector
+                  value={featuredRuntime}
+                  onChange={setFeaturedRuntime}
+                  label={t('mcp.featured.runtime.aria')}
+                  className="dsh_market_sort"
+                  options={([
+                    ['all', 'mcp.featured.runtime.allLabel'],
+                    ['no-key', 'mcp.featured.runtime.noKey'],
+                    ['http', 'mcp.featured.runtime.http'],
+                    ['npx', 'mcp.featured.runtime.npx'],
+                    ['uvx', 'mcp.featured.runtime.uvx'],
+                  ] as const).map(([value, key]) => ({
+                    value,
+                    label: t(key),
+                    count: featuredRuntimeCount(value),
+                  }))}
                 />
               </div>
               )
@@ -347,51 +403,47 @@ export function McpView({ t, controller, onBrowsePlugins, onRegisterRefresh }: {
               </div>
               ))}
         </div>
-        <div className="dsh_market_mcpSummaryBar">
-          {subTab === 'featured'
-            ? (
-              <div className="dsh_market_mcpRuntimeBar" role="group" aria-label={t('mcp.featured.runtime.aria')}>
-                {([
-                  ['all', 'mcp.featured.runtime.all'],
-                  ['no-key', 'mcp.featured.runtime.noKey'],
-                  ['http', 'mcp.featured.runtime.http'],
-                  ['npx', 'mcp.featured.runtime.npx'],
-                  ['uvx', 'mcp.featured.runtime.uvx'],
-                ] as const).map(([value, key]) => (
-                  <button
-                    key={value}
-                    type="button"
-                    className="dsh_market_mcpRuntimePill"
-                    aria-pressed={featuredRuntime === value}
-                    onClick={() => setFeaturedRuntime(value)}
-                  >
-                    {t(key)} <span>{featuredRuntimeCount(value)}</span>
-                  </button>
-                ))}
-              </div>
-              )
-            : (!loading && (
+        {showSummaryBar && (
+          <div className="dsh_market_mcpSummaryBar">
+            {hasFeaturedFilterNotice && (
+              <p className="dsh_market_status" aria-live="polite">
+                {t('filter.results', { shown: String(featuredItems.length) })}
+                <button
+                  type="button"
+                  className="dsh_market_clearFilters"
+                  onClick={() => {
+                    setFeaturedQuery('')
+                    setFeaturedCategory('all')
+                    setFeaturedRuntime('all')
+                  }}
+                >
+                  {t('filter.clear')}
+                </button>
+              </p>
+            )}
+            {showConfiguredSummary && (
               <p className="dsh_market_meta">{t('mcp.summary', {
                 servers: String(counts.servers), connected: String(counts.connected), tools: String(totalTools),
               })}</p>
-              ))}
-          {(canOpenDocument || writable) && (
-            <div className="dsh_market_headingActions">
-              {canOpenDocument && (
-                <button className="dsh_market_headerAction" type="button" title={t('mcp.openDocument.hint')} disabled={documentState.status === 'opening'}
-                  onClick={() => { void openDocument() }}>
-                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" /></svg>
-                  {t('mcp.openDocument')}
-                </button>
-              )}
-              {writable && (
-                <MarketButton intent="primary" className="dsh_market_mcpAdd" onClick={() => setModal({ kind: 'editor', row: null })}>
-                  {t('mcp.add')}
-                </MarketButton>
-              )}
-            </div>
-          )}
-        </div>
+            )}
+            {showInlineToolbarActions && (
+              <div className="dsh_market_headingActions">
+                {canOpenDocument && (
+                  <button className="dsh_market_headerAction" type="button" title={t('mcp.openDocument.hint')} disabled={documentState.status === 'opening'}
+                    onClick={() => { void openDocument() }}>
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" /></svg>
+                    {t('mcp.openDocument')}
+                  </button>
+                )}
+                {writable && (
+                  <MarketButton intent="primary" className="dsh_market_mcpAdd" onClick={() => setModal({ kind: 'editor', row: null })}>
+                    {t('mcp.add')}
+                  </MarketButton>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </div>
       <div className="dsh_market_results" aria-busy={subTab === 'configured' && loading}>
         {documentState.status === 'error' && (
@@ -448,6 +500,9 @@ export function McpView({ t, controller, onBrowsePlugins, onRegisterRefresh }: {
                     })}
                   </ul>
                   )}
+              <p className="dsh_market_note">
+                {t('mcp.featured.sourceNote', { total: String(FEATURED_MCP_SERVERS.length) })}
+              </p>
             </>
             )
           : (
@@ -470,7 +525,8 @@ export function McpView({ t, controller, onBrowsePlugins, onRegisterRefresh }: {
                 <ul className="dsh_market_cards">
                   {rows.map(row => (
                     <McpCard key={row.name} t={t} row={row} snapshot={snapshot} controller={controller} writable={writable}
-                      tools={toolsOf.get(row.name)} onEdit={() => setModal({ kind: 'editor', row })} />
+                      tools={toolsOf.get(row.name)} onEdit={() => setModal({ kind: 'editor', row })}
+                      onProbe={() => openProbe(row.name)} />
                   ))}
                 </ul>
               )}
@@ -515,6 +571,20 @@ export function McpView({ t, controller, onBrowsePlugins, onRegisterRefresh }: {
       )}
       {modal.kind === 'editor' && (
         <McpEditor t={t} row={modal.row} initialDraft={modal.initialDraft} snapshot={snapshot} controller={controller} onClose={() => setModal({ kind: 'closed' })} />
+      )}
+      {modal.kind === 'probe' && (
+        <ProbeDialog
+          t={t}
+          name={modal.name}
+          row={rowsByName.get(modal.name)}
+          probe={snapshot.probes[modal.name]}
+          busy={snapshot.busy[modal.name]}
+          writable={writable}
+          legacy={snapshot.mode === 'legacy'}
+          onRetry={() => { void controller.probe(modal.name) }}
+          onEdit={(row) => setModal({ kind: 'editor', row })}
+          onClose={() => setModal({ kind: 'closed' })}
+        />
       )}
     </div>
   )
@@ -615,7 +685,6 @@ function FeaturedMcpModal({ t, item, snapshot, controller, toolsOf, onClose, onA
   const [revealed, setRevealed] = useState<Record<string, boolean>>({})
   const [copied, setCopied] = useState(false)
   const [enabled, setEnabled] = useState(true)
-  const [trustedLine, setTrustedLine] = useState<string | null>(null)
   const [touched, setTouched] = useState(false)
   const [submitState, setSubmitState] = useState<FeaturedSubmitState>({ status: 'idle' })
   const [elapsedSec, setElapsedSec] = useState(0)
@@ -701,11 +770,8 @@ function FeaturedMcpModal({ t, item, snapshot, controller, toolsOf, onClose, onA
     ]),
   })
   const previewDraft = item.transport === 'stdio' ? buildDraft() : null
-  const risks = item.transport === 'stdio' ? commandRisks(previewDraft!.command, previewDraft!.args) : []
   const preview = item.transport === 'stdio' ? commandLine(previewDraft!.command, previewDraft!.args) : featuredTargetPreview(item)
-  const needsTrust = item.transport === 'stdio'
-  const trusted = !needsTrust || trustedLine === preview
-  const canSubmit = !inProgress && trusted
+  const canSubmit = !inProgress
 
   const copyPreview = async () => {
     try {
@@ -815,27 +881,25 @@ function FeaturedMcpModal({ t, item, snapshot, controller, toolsOf, onClose, onA
               >
                 <div className="dsh_market_mcpInstallStatusRow">
                   {submitState.status === 'installing' && !submitState.timedOut && (
-                    <span className="dsh_market_mcpSpinner" aria-hidden="true" />
+                    <StateDot state="ongoing" className="dsh_market_stateDot" />
                   )}
                   {submitState.status === 'connected' && (
-                    <svg className="dsh_market_mcpStatusIcon" data-tone="success" viewBox="0 0 24 24" aria-hidden="true">
-                      <path d="M20 6 9 17l-5-5" />
-                    </svg>
+                    <StateDot state="done" appearance="step" size={16} className="dsh_market_stateDot" />
                   )}
                   {submitState.status === 'failed' && (
-                    <svg className="dsh_market_mcpStatusIcon" data-tone="error" viewBox="0 0 24 24" aria-hidden="true">
-                      <circle cx="12" cy="12" r="9" /><path d="m15 9-6 6M9 9l6 6" />
-                    </svg>
+                    <StateDot state="error" size={14} className="dsh_market_stateDot" />
                   )}
                   {(submitState.status === 'waiting' || submitState.status === 'saved-disabled' || (submitState.status === 'installing' && submitState.timedOut)) && (
-                    <svg className="dsh_market_mcpStatusIcon" data-tone="warn" viewBox="0 0 24 24" aria-hidden="true">
-                      <circle cx="12" cy="12" r="9" /><path d="M12 8v5M12 16h.01" />
-                    </svg>
+                    <StateDot state="warning" size={14} className="dsh_market_stateDot" />
                   )}
                   <div>
                     {submitState.status === 'installing' && !submitState.timedOut && (
                       <>
-                        <p role="status">{submitState.isStdio ? t('mcp.featured.installingStdio') : t('mcp.featured.installingHttp')}</p>
+                        <p role="status">
+                          <TextShimmer active>
+                            {submitState.isStdio ? t('mcp.featured.installingStdio') : t('mcp.featured.installingHttp')}
+                          </TextShimmer>
+                        </p>
                         <p className="dsh_market_meta">
                           {liveRow?.status !== undefined ? `${statusLabel(t, liveRow.status)} · ` : ''}
                           {t('mcp.featured.elapsed', { seconds: String(elapsedSec) })}
@@ -928,18 +992,16 @@ function FeaturedMcpModal({ t, item, snapshot, controller, toolsOf, onClose, onA
             )
           : (
             <form className="dsh_market_mcpForm" onSubmit={(event) => { event.preventDefault(); void submit() }}>
-              {!needsTrust && (
-                <div className="dsh_market_mcpField">
-                  <div className="dsh_market_mcpFieldHead">
-                    <span>{t('mcp.featured.target')}</span>
-                    <button type="button" className="dsh_market_mcpCopyBtn" onClick={() => { void copyPreview() }}>
-                      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>
-                      {copied ? t('mcp.featured.copied') : t('mcp.featured.copyCommand')}
-                    </button>
-                  </div>
-                  <pre className="dsh_market_directMessage">{preview}</pre>
+              <div className="dsh_market_mcpField">
+                <div className="dsh_market_mcpFieldHead">
+                  <span>{t('mcp.featured.target')}</span>
+                  <button type="button" className="dsh_market_mcpCopyBtn" onClick={() => { void copyPreview() }}>
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>
+                    {copied ? t('mcp.featured.copied') : t('mcp.featured.copyCommand')}
+                  </button>
                 </div>
-              )}
+                <pre className="dsh_market_directMessage">{preview}</pre>
+              </div>
               <label className="dsh_market_mcpField">
                 <span>{t('mcp.field.name')}</span>
                 <input value={name} spellCheck={false} maxLength={32} onChange={event => { clearSubmitError(); setName(event.target.value) }} />
@@ -1026,24 +1088,6 @@ function FeaturedMcpModal({ t, item, snapshot, controller, toolsOf, onClose, onA
                 )
               })}
               {hasSecretInputs(item) && <p className="dsh_market_meta">{t('mcp.featured.secretHint')}</p>}
-              {needsTrust && (
-                <div className="dsh_market_mcpRisk" role="note">
-                  <div className="dsh_market_mcpFieldHead">
-                    <p>{t('mcp.risk.title')}</p>
-                    <button type="button" className="dsh_market_mcpCopyBtn" onClick={() => { void copyPreview() }}>
-                      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>
-                      {copied ? t('mcp.featured.copied') : t('mcp.featured.copyCommand')}
-                    </button>
-                  </div>
-                  <pre className="dsh_market_directMessage">{preview}</pre>
-                  {risks.includes('fetch') && <p className="dsh_market_cardNotice" data-warning="true">{t('mcp.risk.fetch')}</p>}
-                  {risks.includes('shell') && <p className="dsh_market_cardNotice" data-warning="true">{t('mcp.risk.shell')}</p>}
-                  <label className="dsh_market_mcpCheck">
-                    <input type="checkbox" checked={trusted} onChange={event => setTrustedLine(event.target.checked ? preview : null)} />
-                    <span>{t('mcp.risk.confirm')}</span>
-                  </label>
-                </div>
-              )}
               <label className="dsh_market_mcpCheck">
                 <input type="checkbox" checked={enabled} onChange={event => { clearSubmitError(); setEnabled(event.target.checked) }} />
                 <span>{t('mcp.field.enabled')}</span>
@@ -1158,30 +1202,144 @@ function ToolsDialog({ t, name, tools, onClose }: {
   )
 }
 
-function ProbeResult({ t, probe }: { t: MarketLocale; probe: McpProbeState | undefined }): ReactElement | null {
-  if (probe === undefined || probe.status === 'running') return null
-  if (probe.status === 'error') return <p className="dsh_market_cardError">{t('mcp.probe.error', { reason: probe.message })}</p>
-  const { result } = probe
+function ProbeDialog({ t, name, row, probe, busy, writable, legacy, onRetry, onEdit, onClose }: {
+  t: MarketLocale
+  name: string
+  row: McpRow | undefined
+  probe: McpProbeState | undefined
+  busy: string | undefined
+  writable: boolean
+  legacy: boolean
+  onRetry: () => void
+  onEdit: (row: McpRow) => void
+  onClose: () => void
+}): ReactElement {
+  const running = probe === undefined || probe.status === 'running'
+  const [elapsedSec, setElapsedSec] = useState(0)
+  useEffect(() => {
+    if (!running) return
+    const startedAt = Date.now()
+    setElapsedSec(0)
+    const timer = setInterval(() => {
+      setElapsedSec(Math.floor((Date.now() - startedAt) / 1_000))
+    }, 1_000)
+    return () => clearInterval(timer)
+  }, [running, name])
+
+  const target = row?.entry ? targetOf(row.entry) : ''
+  const transport = row?.entry ? transportLabel(t, transportOf(row.entry)) : ''
+  const subtitleParts = [
+    row ? t(`mcp.source.${row.source}`) : '',
+    transport,
+  ].filter(part => part !== '')
+  const succeeded = probe?.status === 'done' && probe.result.ok
+  const failed = probe?.status === 'error' || (probe?.status === 'done' && !probe.result.ok)
+  const retryAllowed = row !== undefined && canProbe(row) && !running && busy === undefined && !legacy
+  const editable = writable && row !== undefined && isConfigured(row)
+  const modalTitle = t('mcp.probe.modalTitle', { name })
+
   return (
-    <div className="dsh_market_mcpProbe" role="status">
-      {result.ok
-        ? (
-          <>
-            <p>{t('mcp.probe.ok', { duration: String(Math.round(result.durationMs)), count: String(result.toolNames.length) })}</p>
-            {result.serverInfo && <p className="dsh_market_meta">{t('mcp.probe.server', { name: result.serverInfo.name, version: result.serverInfo.version })}</p>}
-            {result.toolNames.length > 0 && <p className="dsh_market_mcpCode">{result.toolNames.join(', ')}</p>}
-            {result.truncated && <p className="dsh_market_meta">{t('mcp.probe.truncated', { count: String(result.toolNames.length) })}</p>}
-          </>
-          )
-        : (
-          <p className="dsh_market_cardError">{t('mcp.probe.failed', {
-            stage: t(`mcp.probe.stage.${result.stage}`), duration: String(Math.round(result.durationMs)), reason: result.message,
-          })}</p>
+    <Modal open headless title={modalTitle} className="dsh_market_modal" onClose={onClose}>
+      <div className="dsh_market_directPanel dsh_market_mcpEditor">
+        <div className="dsh_market_directHead">
+          <div className="dsh_market_installHeading">
+            <h3>{modalTitle}</h3>
+            {subtitleParts.length > 0 && <small>{subtitleParts.join(' · ')}</small>}
+          </div>
+          <button type="button" className="dsh_market_directClose" aria-label={t('mcp.featured.close')} onClick={onClose}>
+            <IconCloseOutlineRegular size={16} />
+          </button>
+        </div>
+
+        <div
+          className="dsh_market_mcpInstallPanel"
+          data-tone={succeeded ? 'success' : failed ? 'error' : undefined}
+        >
+          <div className="dsh_market_mcpInstallStatusRow">
+            {running && <StateDot state="ongoing" className="dsh_market_stateDot" />}
+            {succeeded && <StateDot state="done" appearance="step" size={16} className="dsh_market_stateDot" />}
+            {failed && <StateDot state="error" size={14} className="dsh_market_stateDot" />}
+            <div>
+              {running && (
+                <>
+                  <p role="status">
+                    <TextShimmer active>{t('mcp.probe.runningHint')}</TextShimmer>
+                  </p>
+                  <p className="dsh_market_meta">{t('mcp.featured.elapsed', { seconds: String(elapsedSec) })}</p>
+                </>
+              )}
+              {probe?.status === 'error' && (
+                <p role="alert" className="dsh_market_cardError">{t('mcp.probe.error', { reason: probe.message })}</p>
+              )}
+              {probe?.status === 'done' && probe.result.ok && (
+                <>
+                  <p role="status">
+                    {t('mcp.probe.ok', {
+                      duration: String(Math.round(probe.result.durationMs)),
+                      count: String(probe.result.toolNames.length),
+                    })}
+                  </p>
+                  {probe.result.serverInfo && (
+                    <p className="dsh_market_meta">
+                      {t('mcp.probe.server', { name: probe.result.serverInfo.name, version: probe.result.serverInfo.version })}
+                    </p>
+                  )}
+                  {probe.result.toolNames.length === 0 && (
+                    <p className="dsh_market_meta">{t('mcp.probe.noTools')}</p>
+                  )}
+                </>
+              )}
+              {probe?.status === 'done' && !probe.result.ok && (
+                <p role="alert" className="dsh_market_cardError">
+                  {t('mcp.probe.failed', {
+                    stage: t(`mcp.probe.stage.${probe.result.stage}`),
+                    duration: String(Math.round(probe.result.durationMs)),
+                    reason: probe.result.message,
+                  })}
+                </p>
+              )}
+              {probe?.status === 'done' && (!probe.result.closeConfirmed || probe.result.cleanupError !== undefined) && (
+                <p className="dsh_market_cardNotice" data-warning="true">
+                  {t('mcp.probe.cleanup', { reason: probe.result.cleanupError ?? '—' })}
+                </p>
+              )}
+            </div>
+          </div>
+          {target !== '' && <pre className="dsh_market_directMessage">{target}</pre>}
+          {probe?.status === 'done' && probe.result.ok && probe.result.toolNames.length > 0 && (
+            <div className="dsh_market_mcpProbeTools">
+              <span className="dsh_market_meta">
+                {t('mcp.probe.toolsLabel', { count: String(probe.result.toolNames.length) })}
+              </span>
+              <pre className="dsh_market_directMessage">{probe.result.toolNames.join(', ')}</pre>
+              {probe.result.truncated && (
+                <span className="dsh_market_meta">
+                  {t('mcp.probe.truncated', { count: String(probe.result.toolNames.length) })}
+                </span>
+              )}
+            </div>
           )}
-      {(!result.closeConfirmed || result.cleanupError !== undefined) && (
-        <p className="dsh_market_cardNotice">{t('mcp.probe.cleanup', { reason: result.cleanupError ?? '—' })}</p>
-      )}
-    </div>
+        </div>
+
+        <div className="dsh_market_installFooter dsh_market_mcpModalFooter">
+          {failed && editable
+            ? (
+              <MarketButton size="md" intent="secondary" onClick={() => onEdit(row)}>
+                {t('mcp.featured.editSaved')}
+              </MarketButton>
+              )
+            : <span />}
+          <div className="dsh_market_mcpModalFooterRight">
+            <MarketButton size="md" intent="secondary" disabled={!retryAllowed} onClick={onRetry}>
+              {running ? t('mcp.probing') : t('mcp.probe.retry')}
+            </MarketButton>
+            <MarketButton size="md" intent="primary" onClick={onClose}>
+              {t('mcp.featured.close')}
+            </MarketButton>
+          </div>
+        </div>
+      </div>
+    </Modal>
   )
 }
 
@@ -1316,9 +1474,9 @@ function Credentials({ t, row, snapshot, controller }: {
   )
 }
 
-function McpCard({ t, row, snapshot, controller, writable, tools, onEdit }: {
+function McpCard({ t, row, snapshot, controller, writable, tools, onEdit, onProbe }: {
   t: MarketLocale; row: McpRow; snapshot: McpSnapshot; controller: McpController; writable: boolean
-  tools: McpToolGroup | undefined; onEdit: () => void
+  tools: McpToolGroup | undefined; onEdit: () => void; onProbe: () => void
 }): ReactElement {
   const [confirming, setConfirming] = useState(false)
   const busy = snapshot.busy[row.name]
@@ -1356,7 +1514,6 @@ function McpCard({ t, row, snapshot, controller, writable, tools, onEdit }: {
         {row.plaintext.length > 0 && <p className="dsh_market_cardNotice" data-warning="true">{t('mcp.plaintext', { fields: row.plaintext.join(', ') })}</p>}
         <AdoptNote t={t} note={snapshot.adopted[row.name]} />
         <Credentials t={t} row={row} snapshot={snapshot} controller={controller} />
-        <ProbeResult t={t} probe={probe} />
         {actionError !== undefined && (
           <p className="dsh_market_cardError" role="alert">
             {/conflict/i.test(actionError) ? t('mcp.conflict') : t('mcp.actionFailed', { reason: reasonText(t, actionError) })}
@@ -1383,7 +1540,7 @@ function McpCard({ t, row, snapshot, controller, writable, tools, onEdit }: {
             <>
               {canProbe(row) && (
                 <MarketButton intent="secondary" disabled={probe?.status === 'running' || busy !== undefined || snapshot.mode === 'legacy'}
-                  onClick={() => { void controller.probe(row.name) }}>
+                  onClick={onProbe}>
                   {probe?.status === 'running' ? t('mcp.probing') : t('mcp.probe')}
                 </MarketButton>
               )}

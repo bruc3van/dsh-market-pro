@@ -140,6 +140,40 @@ export interface MarketSkillsResult {
     readonly complete: boolean;
     readonly error: string;
 }
+/** Target location for installing one curated Agent Skill. */
+export type FeaturedSkillInstallScope = 'user-dsh' | 'user-agents' | 'project-dsh';
+/** Wire request for Host-side direct installation of one curated Agent Skill. */
+export interface InstallFeaturedSkillRequest {
+    readonly id: string;
+    readonly scope: FeaturedSkillInstallScope;
+    readonly projectDir?: string;
+    readonly overwrite?: boolean;
+}
+/** Structured outcome of installing one curated Agent Skill on the Host. */
+export interface InstallFeaturedSkillResult {
+    readonly ok: boolean;
+    readonly id: string;
+    readonly name: string;
+    readonly scope: FeaturedSkillInstallScope;
+    readonly targetPath: string;
+    readonly fileCount: number;
+    readonly hasScripts: boolean;
+    readonly code?: 'not-found' | 'already-exists' | 'invalid-project-dir' | 'download-failed' | 'invalid-skill' | 'write-failed' | 'cancelled';
+    readonly error: string;
+}
+/** Request to delete one locally installed Agent Skill directory from disk. */
+export interface DeleteInstalledSkillRequest {
+    readonly name: string;
+    readonly sourcePath: string;
+}
+/** Outcome of deleting one locally installed Agent Skill directory on the Host. */
+export interface DeleteInstalledSkillResult {
+    readonly ok: boolean;
+    readonly name: string;
+    readonly targetPath: string;
+    readonly code?: 'not-found' | 'not-deletable' | 'delete-failed';
+    readonly error: string;
+}
 /**
  * What the browser needs to name the install command. The profile is a
  * deployment fact (the Host is the only side that knows which profile it
@@ -835,11 +869,11 @@ export declare const telemetryClientEventSchema: z.ZodDiscriminatedUnion<[z.ZodR
         failed: "failed";
     }>;
     errorCode: z.ZodOptional<z.ZodEnum<{
+        cancelled: "cancelled";
         compat: "compat";
         network: "network";
         timeout: "timeout";
         refused: "refused";
-        cancelled: "cancelled";
         unknown: "unknown";
     }>>;
 }, z.core.$strip>>, z.ZodReadonly<z.ZodObject<{
@@ -854,11 +888,11 @@ export declare const telemetryClientEventSchema: z.ZodDiscriminatedUnion<[z.ZodR
         failed: "failed";
     }>;
     errorCode: z.ZodOptional<z.ZodEnum<{
+        cancelled: "cancelled";
         compat: "compat";
         network: "network";
         timeout: "timeout";
         refused: "refused";
-        cancelled: "cancelled";
         unknown: "unknown";
     }>>;
 }, z.core.$strip>>], "kind">;
@@ -1095,5 +1129,58 @@ export declare const mcpProbeResultSchema: z.ZodDiscriminatedUnion<[z.ZodReadonl
     ok: z.ZodLiteral<false>;
 }, z.core.$strip>>], "ok">;
 export type McpProbeResult = z.infer<typeof mcpProbeResultSchema>;
+export declare const featuredSkillInstallScopeSchema: z.ZodEnum<{
+    "user-dsh": "user-dsh";
+    "user-agents": "user-agents";
+    "project-dsh": "project-dsh";
+}>;
+export declare const installFeaturedSkillRequestSchema: z.ZodReadonly<z.ZodObject<{
+    id: z.ZodString;
+    scope: z.ZodEnum<{
+        "user-dsh": "user-dsh";
+        "user-agents": "user-agents";
+        "project-dsh": "project-dsh";
+    }>;
+    projectDir: z.ZodOptional<z.ZodString>;
+    overwrite: z.ZodOptional<z.ZodBoolean>;
+}, z.core.$strip>>;
+export declare const installFeaturedSkillResultSchema: z.ZodReadonly<z.ZodObject<{
+    ok: z.ZodBoolean;
+    id: z.ZodString;
+    name: z.ZodString;
+    scope: z.ZodEnum<{
+        "user-dsh": "user-dsh";
+        "user-agents": "user-agents";
+        "project-dsh": "project-dsh";
+    }>;
+    targetPath: z.ZodString;
+    fileCount: z.ZodNumber;
+    hasScripts: z.ZodBoolean;
+    code: z.ZodOptional<z.ZodEnum<{
+        "not-found": "not-found";
+        "already-exists": "already-exists";
+        "invalid-project-dir": "invalid-project-dir";
+        "download-failed": "download-failed";
+        "invalid-skill": "invalid-skill";
+        "write-failed": "write-failed";
+        cancelled: "cancelled";
+    }>>;
+    error: z.ZodString;
+}, z.core.$strip>>;
+export declare const deleteInstalledSkillRequestSchema: z.ZodReadonly<z.ZodObject<{
+    name: z.ZodString;
+    sourcePath: z.ZodString;
+}, z.core.$strip>>;
+export declare const deleteInstalledSkillResultSchema: z.ZodReadonly<z.ZodObject<{
+    ok: z.ZodBoolean;
+    name: z.ZodString;
+    targetPath: z.ZodString;
+    code: z.ZodOptional<z.ZodEnum<{
+        "not-found": "not-found";
+        "not-deletable": "not-deletable";
+        "delete-failed": "delete-failed";
+    }>>;
+    error: z.ZodString;
+}, z.core.$strip>>;
 /** The dshMarketPro Remote namespace's strict invocation descriptors. */
 export declare const SAFE_MARKET_INVOCATIONS: readonly InvocationDescriptor[];

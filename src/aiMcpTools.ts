@@ -40,6 +40,7 @@ import {
   hasRequiredInputs,
   hasSecretInputs,
   mcpIdentityKey,
+  normalizeFeaturedMcpCategory,
   pickAvailableServerName,
   type FeaturedMcpCategory,
   type FeaturedMcpServer,
@@ -70,7 +71,7 @@ const mcpToolArgsSchema = z.object({
   action: z.enum(MCP_ACTIONS),
   query: z.string().max(240).optional(),
   queries: z.array(z.string().max(120)).max(MAX_AI_MCP_QUERIES).optional(),
-  category: z.enum(['docs', 'search', 'browser', 'dev', 'office', 'visual', 'life', 'memory']).optional(),
+  category: z.string().max(40).optional(),
   id: z.string().max(64).optional(),
   ids: z.array(z.string().max(64)).max(MAX_AI_MCP_DETAILS).optional(),
   excludeConfigured: z.boolean().optional(),
@@ -480,8 +481,8 @@ export function createMarketAiMcpToolDefinition(deps: MarketAiMcpToolDeps): Reco
         },
         category: {
           type: 'string',
-          enum: ['docs', 'search', 'browser', 'dev', 'office', 'visual', 'life', 'memory'],
-          description: 'Optional curated MCP category filter.',
+          enum: [...FEATURED_MCP_CATEGORIES],
+          description: 'Optional curated MCP category filter (aligned with plugin functional categories).',
         },
         id: {
           type: 'string',
@@ -625,7 +626,15 @@ export function createMarketAiMcpToolDefinition(deps: MarketAiMcpToolDeps): Reco
         }
         case 'list_featured':
         case 'search_featured': {
-          const category = args.category as FeaturedMcpCategory | undefined
+          let category: FeaturedMcpCategory | undefined
+          if (args.category !== undefined && args.category.trim() !== '') {
+            category = normalizeFeaturedMcpCategory(args.category)
+            if (category === undefined) {
+              throw new Error(
+                `Invalid arguments for ${MCP_TOOL_NAME}: category: unknown "${args.category}". Valid: ${FEATURED_MCP_CATEGORIES.join(', ')}`,
+              )
+            }
+          }
           const queries = [
             ...(args.query?.trim() ? [args.query.trim()] : []),
             ...(args.queries ?? []).map(q => q.trim()).filter(Boolean),

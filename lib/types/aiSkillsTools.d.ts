@@ -2,18 +2,24 @@
  * Agent-native `dsh_skills_pro` tool registered into the Host tool registry
  * when `ctx.tools` is available and `settings.aiAssistantEnabled` is on.
  *
- * Strictly read-only and concurrency-safe:
+ * Read actions (concurrency-safe):
  * - `list_installed`: inspect the current session's resolvable Agent Skills
  * - `list_featured`: browse the 100 curated All Time skills from skills.sh
  * - `search_featured`: bilingual + CJK bigram search over the 100 curated skills
  * - `detail`: batch-inspect 1..6 curated skills with verified repo, subpath,
- *   official status, All Time installs, GitHub/skills.sh links, and CLI command
+ *   official status, All Time installs, links, and DSH target directories
+ *
+ * Approval-gated write action (zero CLI dependency, non-interactive):
+ * - `install_featured`: fail-closed native approval via `ctx.approval`, then
+ *   streams the verified GitHub tarball subpath directly into `~/.dsh/skills`,
+ *   `~/.agents/skills`, or `<projectDir>/.dsh/skills` without invoking `npx`.
  *
  * All model-facing output is wrapped in `<untrusted_skill_data>` with invisible
  * Unicode stripping and angle-bracket neutralization.
  */
 import type { Context } from '@deepseek-ai/cordis';
-import type { SafeMarketSettings } from './contract.ts';
+import type { MarketApprovalServiceFace } from './aiTools.ts';
+import type { InstallFeaturedSkillRequest, InstallFeaturedSkillResult, SafeMarketSettings } from './contract.ts';
 import { type InstalledSkillLike } from './skillsFeatured.ts';
 export declare const SKILLS_TOOL_NAME = "dsh_skills_pro";
 export declare const MAX_AI_SKILL_QUERIES = 6;
@@ -44,8 +50,11 @@ export interface MarketAiSkillsToolDeps {
     readonly profile: string;
     readonly readSettings: () => SafeMarketSettings;
     readonly readInstalledSkills: (agent: unknown, signal?: AbortSignal) => Promise<LiveSkillsSnapshot>;
+    readonly getApprover?: () => MarketApprovalServiceFace | undefined;
+    readonly installSkill?: (request: InstallFeaturedSkillRequest, signal: AbortSignal) => Promise<InstallFeaturedSkillResult>;
+    readonly homeDir?: string;
 }
-/** Build the registry-ready `dsh_skills_pro` read-only tool definition. */
+/** Build the registry-ready `dsh_skills_pro` tool definition. */
 export declare function createMarketAiSkillsToolDefinition(deps: MarketAiSkillsToolDeps): Record<string, unknown>;
 /**
  * Read the calling live agent's scoped skill inventory without falling back to

@@ -7,10 +7,12 @@
  * catalog and matching logic without runtime scraping.
  * @module dsh-market-pro/skillsFeatured
  */
-/** High-level discovery category for curated Agent Skills. */
-export type FeaturedSkillCategory = 'ai' | 'workflow' | 'frontend' | 'browser' | 'docs' | 'data' | 'cloud' | 'media';
+/** High-level discovery category for curated Agent Skills (aligned with Plugins). */
+export type FeaturedSkillCategory = 'agents-workflows' | 'developer-tools' | 'ui-experience' | 'web-browser' | 'knowledge-research' | 'integrations-sharing' | 'media-vision';
 /** Ordered category list for filter controls and overview summaries. */
 export declare const FEATURED_SKILL_CATEGORIES: readonly FeaturedSkillCategory[];
+/** Normalize a skill category string (supporting unified keys and legacy aliases). */
+export declare function normalizeFeaturedSkillCategory(raw: string): FeaturedSkillCategory | undefined;
 /** One curated Agent Skill entry shipped with the plugin (sourced from skills.sh All Time). */
 export interface FeaturedSkill {
     /** Stable identifier (`owner/repo/skillId`). */
@@ -39,6 +41,8 @@ export type FeaturedSkillOriginFilter = 'all' | 'official';
 export declare const FEATURED_SKILLS: readonly FeaturedSkill[];
 /** Build the GitHub URL pointing directly to this skill directory (or repo root). */
 export declare function featuredSkillGithubUrl(item: Pick<FeaturedSkill, 'source' | 'path'>): string;
+/** Return the direct numeric GitHub avatar URL for a curated skill's publisher, if known. */
+export declare function featuredSkillIconUrl(item: Pick<FeaturedSkill, 'source'>): string | undefined;
 /** Build the skills.sh detail page URL for a curated skill. */
 export declare function featuredSkillSkillsShUrl(item: Pick<FeaturedSkill, 'source' | 'skillId'>): string;
 /** Build the standard `npx skills add` CLI command for installing this skill. */
@@ -60,3 +64,9 @@ export interface InstalledSkillLike {
 }
 /** Match a curated skill against the session's currently available skills. */
 export declare function findInstalledFeaturedSkill<T extends InstalledSkillLike>(item: Pick<FeaturedSkill, 'skillId' | 'name'>, installed: readonly T[]): T | null;
+/**
+ * Pure check whether an installed skill directory path sits strictly inside a
+ * user/project `.dsh/skills/` or `.agents/skills/` root and is safe to offer
+ * for deletion (never bundled, never `node_modules`, never the skills root).
+ */
+export declare function isDeletableSkillPath(sourcePath: string | undefined): boolean;

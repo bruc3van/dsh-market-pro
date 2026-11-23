@@ -6,6 +6,7 @@ import {
   FEATURED_SKILLS,
   FEATURED_SKILL_CATEGORIES,
   featuredSkillGithubUrl,
+  featuredSkillIconUrl,
   featuredSkillInstallCommand,
   featuredSkillSkillsShUrl,
   findFeaturedSkillById,
@@ -33,6 +34,11 @@ test('curated skills catalog invariants: exactly 100 verified All Time entries, 
   let officialCount = 0
 
   for (const item of FEATURED_SKILLS) {
+    assert.match(
+      featuredSkillIconUrl(item) ?? '',
+      /^https:\/\/avatars\.githubusercontent\.com\/u\/\d+\?s=96&v=4$/,
+      `missing numeric GitHub avatar URL for ${item.id}`,
+    )
     assert.equal(ids.has(item.id), false, `duplicate id ${item.id}`)
     ids.add(item.id)
     assert.equal(item.id, `${item.source}/${item.skillId}`, `id mismatch for ${item.id}`)
@@ -90,14 +96,14 @@ test('featured skill URL, command, and installs formatting helpers', () => {
 test('matchesFeaturedSkill filters by category, official badge, and bilingual search terms', () => {
   const larkDoc = findFeaturedSkillById('lark-doc')
   assert.ok(larkDoc)
-  assert.equal(matchesFeaturedSkill(larkDoc, '飞书 云文档', 'docs', 'all'), true)
-  assert.equal(matchesFeaturedSkill(larkDoc, 'lark', 'docs', 'official'), false)
-  assert.equal(matchesFeaturedSkill(larkDoc, '飞书', 'frontend', 'all'), false)
+  assert.equal(matchesFeaturedSkill(larkDoc, '飞书 云文档', 'integrations-sharing', 'all'), true)
+  assert.equal(matchesFeaturedSkill(larkDoc, 'lark', 'integrations-sharing', 'official'), false)
+  assert.equal(matchesFeaturedSkill(larkDoc, '飞书', 'ui-experience', 'all'), false)
 
   const reactSkill = findFeaturedSkillById('vercel-react-best-practices')
   assert.ok(reactSkill)
   assert.equal(reactSkill.official, true)
-  assert.equal(matchesFeaturedSkill(reactSkill, 'vercel nextjs', 'frontend', 'official'), true)
+  assert.equal(matchesFeaturedSkill(reactSkill, 'vercel nextjs', 'ui-experience', 'official'), true)
   assert.equal(matchesFeaturedSkill(reactSkill, 'nonexistent-xyz', 'all', 'all'), false)
   assert.equal(matchesFeaturedSkillOrigin(reactSkill, 'all'), true)
   assert.equal(matchesFeaturedSkillOrigin(reactSkill, 'official'), true)

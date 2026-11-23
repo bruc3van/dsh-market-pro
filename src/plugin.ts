@@ -35,6 +35,7 @@ import { createInstalledManager } from './installed.ts'
 import { SafeMarketRuntime } from './runtime.ts'
 import { registerSafeMarketSettings } from './settings.ts'
 import { readSkills } from './skills.ts'
+import { deleteInstalledSkillOnHost, installFeaturedSkillOnHost } from './skillInstall.ts'
 import { adoptMcp, inspectMcpContext, probeManagedMcp, type McpLoaderEntry } from './mcp.ts'
 import { registerMarketAiSkill } from './aiSkill.ts'
 import { registerMarketAiTool, type HostPluginManagerUpdateFace, type HostPluginMarketUpdateFace, type MarketApprovalServiceFace } from './aiTools.ts'
@@ -335,6 +336,8 @@ export function applyMarket(ctx: Context, resolved: Config): () => void {
     (name, signal) => probeManagedMcp(ctx, ctx.loader.entries() as Iterable<McpLoaderEntry>, name, signal),
     loaderId => adoptMcp(ctx, ctx.loader.entries() as Iterable<McpLoaderEntry>, loaderId),
     event => telemetry.handleClientEvent(event),
+    (request, signal) => installFeaturedSkillOnHost(request, signal),
+    request => deleteInstalledSkillOnHost(request),
   )
 
   // Strict endpoint registration: the gateway resolves the market's calls

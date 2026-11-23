@@ -29,6 +29,11 @@ import {
 import type { InjectFace, PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
 import type {
+  DeleteInstalledSkillRequest,
+  DeleteInstalledSkillResult,
+  FeaturedSkillInstallScope,
+  InstallFeaturedSkillRequest,
+  InstallFeaturedSkillResult,
   MarketCatalog,
   MarketInstalledPackage,
   MarketInstalledResult,
@@ -44,11 +49,10 @@ import {
   INSTALLED_FILTER, SELF_CARD_KEY, allCatalogMatchCount, featuredRows, installedReviewCardKey, marketKey, marketRows, matches, pageOf, sortMarketRows, starCount, stateOf, type MarketSort,
 } from './rows.ts'
 import { SkillsView } from './SkillsView.tsx'
-import { featuredSkillInstallCommand, type FeaturedSkill } from '../skillsFeatured.ts'
-import { McpView } from './McpView.tsx'
+import type { FeaturedSkill } from '../skillsFeatured.ts'
+import { McpView, type McpToolbarActions } from './McpView.tsx'
 import { SettingsView } from './SettingsView.tsx'
 import type { McpController } from './mcpController.ts'
-import { MarketMoreActions } from './MarketMoreActions.tsx'
 import { BackToTop, scrollResultsContainerToTop } from './BackToTop.tsx'
 import { PluginLogo } from './PluginLogo.tsx'
 import { buildInstallPrompt, buildReviewPrompt, type ReviewTarget } from './reviewPrompt.ts'
@@ -104,6 +108,10 @@ export interface MarketSectionInjected {
   /** Read the skills this deployment resolves. */
   listSkills: () => Promise<MarketSkillsResult>
   skillsSession: SkillsSessionSource
+  /** Directly install one allowlisted curated Agent Skill on the Host. */
+  installFeaturedSkill?: (request: InstallFeaturedSkillRequest, signal?: AbortSignal) => Promise<InstallFeaturedSkillResult>
+  /** Safely delete one locally installed user/project Agent Skill directory on the Host. */
+  deleteInstalledSkill?: (request: DeleteInstalledSkillRequest) => Promise<DeleteInstalledSkillResult>
   /** Whether the Host can open a folder on its desktop at all. */
   canOpenFolder: () => Promise<boolean>
   /** Open one skill's directory in the Host's file manager. */
@@ -686,7 +694,6 @@ function InstalledCards({ t, installed, needle, installedFilter, updatableCount,
   }, [catalog, shown.length, needle, english])
   return (
     <>
-      <p className="dsh_market_installedBody">{t('installed.body')}</p>
       {feedback.status === 'notice' && <p className="dsh_market_installedNotice">{feedback.message}</p>}
       {feedback.status === 'error' && <p className="dsh_market_status" data-error="true">{feedback.message}</p>}
       {state.status === 'loading' && (
@@ -1218,19 +1225,12 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
               )
             : (
               <>
-                {(refreshing || shown.length > 0) && (
+                {(refreshing || (hasFilters && shown.length > 0)) && (
                   <p className="dsh_market_status" aria-busy={refreshing ? 'true' : undefined} aria-live="polite">
                     {refreshing
                       ? t('refreshing')
-                      : hasFilters
-                        ? t('filter.results', { shown: String(shown.length) })
-                        : featuredSelected && catalog.featured !== undefined
-                          ? t('featured.summary', { count: String(catalog.featured.count) })
-                          : t('summary', {
-                            total: String(catalog.items.length),
-                            categories: String(catalog.categories.filter(entry => entry.key !== FEATURED_CATEGORY && entry.key !== SUBSCRIPTION_CATEGORY).length),
-                          })}
-                    {hasFilters && shown.length > 0 && <button type="button" className="dsh_market_clearFilters"
+                      : t('filter.results', { shown: String(shown.length) })}
+                    {!refreshing && hasFilters && shown.length > 0 && <button type="button" className="dsh_market_clearFilters"
                       onClick={clearFilters}>{t('filter.clear')}</button>}
                   </p>
                 )}
@@ -1388,7 +1388,7 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
 
 /** The Marketplace section. */
 export function MarketSection({
-  useScope, updateSettings, loadCatalog, peekCatalog, listSkills, skillsSession, canOpenFolder, openFolder, install, installIntoNewWorkspace, chooseWorkspace, directoryBrowser, workspaceReadiness,
+  useScope, updateSettings, loadCatalog, peekCatalog, listSkills, skillsSession, installFeaturedSkill, deleteInstalledSkill, canOpenFolder, openFolder, install, installIntoNewWorkspace, chooseWorkspace, directoryBrowser, workspaceReadiness,
   listInstalled, subscribeInstalledChanges, setInstalledEnabled, uninstallInstalled, directInstaller, pluginUpdater, mcp, close, t,
 }: MarketSectionProps): ReactElement {
   const snapshot = useScope(value => value)
@@ -1445,6 +1445,23 @@ export function MarketSection({
   const onRegisterPluginsRefresh = useCallback((action: HeaderRefreshAction | null) => registerRefresh('plugins', action), [registerRefresh])
   const onRegisterSkillsRefresh = useCallback((action: HeaderRefreshAction | null) => registerRefresh('skills', action), [registerRefresh])
   const onRegisterMcpRefresh = useCallback((action: HeaderRefreshAction | null) => registerRefresh('mcp', action), [registerRefresh])
+  const [mcpToolbar, setMcpToolbar] = useState<Pick<McpToolbarActions, 'canOpenDocument' | 'openingDocument' | 'canAdd'> | null>(null)
+  const mcpToolbarHandlers = useRef<{ onOpenDocument?: () => void; onAdd?: () => void }>({})
+  const onRegisterMcpToolbar = useCallback((actions: McpToolbarActions | null) => {
+    if (actions === null) {
+      mcpToolbarHandlers.current = {}
+      setMcpToolbar(null)
+      return
+    }
+    mcpToolbarHandlers.current = { onOpenDocument: actions.onOpenDocument, onAdd: actions.onAdd }
+    setMcpToolbar(prev => (
+      prev && prev.canOpenDocument === actions.canOpenDocument
+        && prev.openingDocument === actions.openingDocument
+        && prev.canAdd === actions.canAdd
+        ? prev
+        : { canOpenDocument: actions.canOpenDocument, openingDocument: actions.openingDocument, canAdd: actions.canAdd }
+    ))
+  }, [])
   const activeRefresh = page === 'settings' ? undefined : refreshByPage[page]
   const rawSelfUpdate = updateState?.available[PACKAGE_NAME] ?? ''
   const selfUpdateVersion = isSafeVersion(rawSelfUpdate) ? rawSelfUpdate : ''
@@ -1562,13 +1579,23 @@ export function MarketSection({
         : t('ai.pickPrompt')
     void runReview(AI_PICK_CARD_KEY, prompt, workspaceReadiness.getSnapshot() === 'none')
   }
-  const askAiInstallSkill = async (item: FeaturedSkill): Promise<boolean> => {
+  const askAiInstallSkill = async (
+    item: FeaturedSkill,
+    target?: { readonly scope: FeaturedSkillInstallScope; readonly projectDir?: string },
+  ): Promise<boolean> => {
     setAiSkillFeedbackId(item.id)
+    const targetPath = target?.scope === 'user-agents'
+      ? `~/.agents/skills/${item.name}`
+      : target?.scope === 'project-dsh'
+        ? `${target.projectDir?.trim() ? target.projectDir.trim().replace(/[\\/]+$/, '') : '<project>'}/.dsh/skills/${item.name}`
+        : `~/.dsh/skills/${item.name}`
     const prompt = t('skills.featured.installPrompt', {
+      id: item.id,
       name: item.name,
       source: item.source,
       path: item.path === '' ? t('skills.featured.pathRoot') : item.path,
-      command: featuredSkillInstallCommand(item),
+      scope: target?.scope ?? 'user-dsh',
+      target: targetPath,
     })
     return await runReview(AI_PICK_CARD_KEY, prompt, workspaceReadiness.getSnapshot() === 'none')
   }
@@ -1613,24 +1640,28 @@ export function MarketSection({
               {activeRefresh.label}
             </button>
           )}
-          <MarketMoreActions label={t('header.more')} links={[
-            {
-              id: 'repository',
-              label: t('header.repository'),
-              href: 'https://github.com/bruc3van/dsh-market-pro',
-              icon: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M9 19c-4.3 1.3-4.3-2.2-6-2.7M15 22v-3.8a3.3 3.3 0 0 0-.9-2.5c3-.3 6.2-1.5 6.2-6.9a5.4 5.4 0 0 0-1.5-3.8 5 5 0 0 0-.1-3.8s-1.2-.4-3.9 1.4a13.4 13.4 0 0 0-7 0C5.1.8 3.9 1.2 3.9 1.2A5 5 0 0 0 3.8 5a5.4 5.4 0 0 0-1.5 3.8c0 5.4 3.2 6.6 6.2 6.9a3.3 3.3 0 0 0-.9 2.5V22" />
-              </svg>,
-            },
-            {
-              id: 'contact',
-              label: t('header.contact'),
-              href: 'https://x.com/bruc3van',
-              icon: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
-                <path d="M4 3h4l12 18h-4L4 3ZM20 3l-7 8M4 21l7-8" />
-              </svg>,
-            },
-          ]} />
+          <a
+            className="dsh_market_headerAction"
+            href="https://github.com/bruc3van/dsh-market-pro"
+            target="_blank"
+            rel="noreferrer"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M9 19c-4.3 1.3-4.3-2.2-6-2.7M15 22v-3.8a3.3 3.3 0 0 0-.9-2.5c3-.3 6.2-1.5 6.2-6.9a5.4 5.4 0 0 0-1.5-3.8 5 5 0 0 0-.1-3.8s-1.2-.4-3.9 1.4a13.4 13.4 0 0 0-7 0C5.1.8 3.9 1.2 3.9 1.2A5 5 0 0 0 3.8 5a5.4 5.4 0 0 0-1.5 3.8c0 5.4 3.2 6.6 6.2 6.9a3.3 3.3 0 0 0-.9 2.5V22" />
+            </svg>
+            {t('header.repository')}
+          </a>
+          <a
+            className="dsh_market_headerAction"
+            href="https://x.com/bruc3van"
+            target="_blank"
+            rel="noreferrer"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 3h4l12 18h-4L4 3ZM20 3l-7 8M4 21l7-8" />
+            </svg>
+            {t('header.contact')}
+          </a>
         </div>
       </div>
       <p className="dsh_market_subtitle">{t('intro.slogan')}</p>
@@ -1653,7 +1684,6 @@ export function MarketSection({
         onClose={() => setOverlay(current => (current.kind === 'update' ? { kind: 'none' } : current))} />}
       {pluginUpdater && updateState && <BatchUpdatePanel open={batchUpdateOpen} state={updateState} updater={pluginUpdater} t={t}
         onClose={() => setOverlay(current => (current.kind === 'batch-update' ? { kind: 'none' } : current))} />}
-      {directoryBrowser && <DirectoryBrowserPanel controller={directoryBrowser} ownerId={tabsId} t={t} />}
       <div className="dsh_market_tabToolbar">
       <div className="dsh_market_tabs" role="tablist" aria-label={t('tabs.aria')}>
         {pages.map((entry, index) => (
@@ -1674,18 +1704,44 @@ export function MarketSection({
           </button>
         ))}
       </div>
-      {snapshot.settingsReady && snapshot.value.aiAssistantEnabled && (
-        <MarketButton
-          intent="secondary"
-          className="dsh_market_aiPick"
-          disabled={installBusy}
-          onClick={tryAiAssistant}
-          icon={<svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M12 3 14.3 9.7 21 12 14.3 14.3 12 21 9.7 14.3 3 12 9.7 9.7Z" />
-          </svg>}
-        >
-          {page === 'mcp' ? t('ai.pickMcp') : page === 'skills' ? t('ai.pickSkills') : t('ai.pick')}
-        </MarketButton>
+      {((page === 'mcp' && mcpToolbar && (mcpToolbar.canOpenDocument || mcpToolbar.canAdd))
+        || (snapshot.settingsReady && snapshot.value.aiAssistantEnabled)) && (
+        <div className="dsh_market_tabToolbarActions">
+          {page === 'mcp' && mcpToolbar?.canOpenDocument && (
+            <MarketButton
+              intent="secondary"
+              title={t('mcp.openDocument.hint')}
+              disabled={mcpToolbar.openingDocument}
+              onClick={() => mcpToolbarHandlers.current.onOpenDocument?.()}
+              icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" />
+              </svg>}
+            >
+              {t('mcp.openDocument')}
+            </MarketButton>
+          )}
+          {snapshot.settingsReady && snapshot.value.aiAssistantEnabled && (
+            <MarketButton
+              intent="secondary"
+              className="dsh_market_aiPick"
+              disabled={installBusy}
+              onClick={tryAiAssistant}
+              icon={<svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 3 14.3 9.7 21 12 14.3 14.3 12 21 9.7 14.3 3 12 9.7 9.7Z" />
+              </svg>}
+            >
+              {page === 'mcp' ? t('ai.pickMcp') : page === 'skills' ? t('ai.pickSkills') : t('ai.pick')}
+            </MarketButton>
+          )}
+          {page === 'mcp' && mcpToolbar?.canAdd && (
+            <MarketButton
+              intent="primary"
+              onClick={() => mcpToolbarHandlers.current.onAdd?.()}
+            >
+              {t('mcp.add')}
+            </MarketButton>
+          )}
+        </div>
       )}
       </div>
       {aiPickCard && (aiPickCard.status === 'error' || aiPickCard.status === 'needs-workspace') && page !== 'settings' && (
@@ -1743,6 +1799,9 @@ export function MarketSection({
             t={t}
             listSkills={listSkills}
             skillsSession={skillsSession}
+            installFeaturedSkill={installFeaturedSkill}
+            deleteInstalledSkill={deleteInstalledSkill}
+            pickProjectDir={directoryBrowser ? () => directoryBrowser.pick(tabsId) : undefined}
             canOpenFolder={canOpenFolder}
             openFolder={openFolder}
             onRegisterRefresh={onRegisterSkillsRefresh}
@@ -1761,7 +1820,13 @@ export function MarketSection({
           role="tabpanel"
           aria-labelledby={`${tabsId}-tab-mcp`}
         >
-          <McpView t={t} controller={mcp} onBrowsePlugins={() => { setPage('plugins') }} onRegisterRefresh={onRegisterMcpRefresh} />
+          <McpView
+            t={t}
+            controller={mcp}
+            onBrowsePlugins={() => { setPage('plugins') }}
+            onRegisterRefresh={onRegisterMcpRefresh}
+            onRegisterToolbarActions={onRegisterMcpToolbar}
+          />
         </div>
       )}
       {page === 'settings' && (
@@ -1782,6 +1847,7 @@ export function MarketSection({
           />
         </div>
       )}
+      {directoryBrowser && <DirectoryBrowserPanel controller={directoryBrowser} ownerId={tabsId} t={t} />}
       <BackToTop root={searchDock.root} page={page} label={t('backToTop')} />
     </div>
   )

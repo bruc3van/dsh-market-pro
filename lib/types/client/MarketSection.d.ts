@@ -17,7 +17,7 @@ import type { SkillsSessionSource } from './skillsSubscription.ts';
 import { type ReactElement } from 'react';
 import type { InjectFace, PropsLocale } from '@deepseek-ai/dsh-client-ui-slots';
 import type { ObservableSnapshot } from '@deepseek-ai/dsh-client-store';
-import type { MarketCatalog, MarketInstalledResult, MarketSkillsResult, SafeMarketSettings, SafeMarketSettingsUpdate } from '../contract.ts';
+import type { DeleteInstalledSkillRequest, DeleteInstalledSkillResult, InstallFeaturedSkillRequest, InstallFeaturedSkillResult, MarketCatalog, MarketInstalledResult, MarketSkillsResult, SafeMarketSettings, SafeMarketSettingsUpdate } from '../contract.ts';
 import type { McpController } from './mcpController.ts';
 /** The live snapshot the section renders from: the switch plus the deployment facts. */
 export interface SafeMarketSnapshot {
@@ -94,6 +94,10 @@ export interface MarketSectionInjected {
     /** Read the skills this deployment resolves. */
     listSkills: () => Promise<MarketSkillsResult>;
     skillsSession: SkillsSessionSource;
+    /** Directly install one allowlisted curated Agent Skill on the Host. */
+    installFeaturedSkill?: (request: InstallFeaturedSkillRequest, signal?: AbortSignal) => Promise<InstallFeaturedSkillResult>;
+    /** Safely delete one locally installed user/project Agent Skill directory on the Host. */
+    deleteInstalledSkill?: (request: DeleteInstalledSkillRequest) => Promise<DeleteInstalledSkillResult>;
     /** Whether the Host can open a folder on its desktop at all. */
     canOpenFolder: () => Promise<boolean>;
     /** Open one skill's directory in the Host's file manager. */
@@ -139,4 +143,4 @@ export interface HeaderRefreshAction {
     readonly onClick: () => void;
 }
 /** The Marketplace section. */
-export declare function MarketSection({ useScope, updateSettings, loadCatalog, peekCatalog, listSkills, skillsSession, canOpenFolder, openFolder, install, installIntoNewWorkspace, chooseWorkspace, directoryBrowser, workspaceReadiness, listInstalled, subscribeInstalledChanges, setInstalledEnabled, uninstallInstalled, directInstaller, pluginUpdater, mcp, close, t, }: MarketSectionProps): ReactElement;
+export declare function MarketSection({ useScope, updateSettings, loadCatalog, peekCatalog, listSkills, skillsSession, installFeaturedSkill, deleteInstalledSkill, canOpenFolder, openFolder, install, installIntoNewWorkspace, chooseWorkspace, directoryBrowser, workspaceReadiness, listInstalled, subscribeInstalledChanges, setInstalledEnabled, uninstallInstalled, directInstaller, pluginUpdater, mcp, close, t, }: MarketSectionProps): ReactElement;

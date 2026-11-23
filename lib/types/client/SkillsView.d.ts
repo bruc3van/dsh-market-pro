@@ -1,6 +1,6 @@
 import { type ReactElement } from 'react';
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots';
-import type { MarketSkillsResult } from '../contract.ts';
+import type { DeleteInstalledSkillRequest, DeleteInstalledSkillResult, FeaturedSkillInstallScope, InstallFeaturedSkillRequest, InstallFeaturedSkillResult, MarketSkillsResult } from '../contract.ts';
 import { type FeaturedSkill } from '../skillsFeatured.ts';
 import { type SkillsSessionSource } from './skillsSubscription.ts';
 import type { MarketLocale } from './copy.ts';
@@ -10,6 +10,7 @@ export declare const SESSIONS_PENDING = "sessions-pending";
 interface SkillsActions {
     listSkills: () => Promise<MarketSkillsResult>;
     skillsSession: SkillsSessionSource;
+    deleteInstalledSkill?: (request: DeleteInstalledSkillRequest) => Promise<DeleteInstalledSkillResult>;
     canOpenFolder: () => Promise<boolean>;
     openFolder: (path: string) => Promise<void>;
 }
@@ -19,11 +20,16 @@ export interface SkillAiInstallFeedback {
     readonly status: 'error' | 'needs-workspace';
     readonly message: string;
 }
-export declare function SkillsView({ t, listSkills, skillsSession, canOpenFolder, openFolder, project, onRegisterRefresh, onAskAiInstall, aiInstallBusy, aiInstallFeedback, }: SkillsActions & {
+export declare function SkillsView({ t, listSkills, skillsSession, installFeaturedSkill, deleteInstalledSkill, pickProjectDir, canOpenFolder, openFolder, project, onRegisterRefresh, onAskAiInstall, aiInstallBusy, aiInstallFeedback, }: SkillsActions & {
     t: MarketLocale;
     project?: boolean;
+    installFeaturedSkill?: (request: InstallFeaturedSkillRequest, signal?: AbortSignal) => Promise<InstallFeaturedSkillResult>;
+    pickProjectDir?: () => Promise<string | null>;
     onRegisterRefresh?: (action: HeaderRefreshAction | null) => void;
-    onAskAiInstall?: (item: FeaturedSkill) => Promise<boolean>;
+    onAskAiInstall?: (item: FeaturedSkill, target?: {
+        readonly scope: FeaturedSkillInstallScope;
+        readonly projectDir?: string;
+    }) => Promise<boolean>;
     aiInstallBusy?: boolean;
     aiInstallFeedback?: SkillAiInstallFeedback | null;
 }): ReactElement;

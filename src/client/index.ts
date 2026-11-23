@@ -19,6 +19,10 @@ import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type { IConversation } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {
+  DeleteInstalledSkillRequest,
+  DeleteInstalledSkillResult,
+  InstallFeaturedSkillRequest,
+  InstallFeaturedSkillResult,
   McpAdoptResult,
   McpHostContext,
   McpProbeResult,
@@ -125,6 +129,8 @@ interface SafeMarketFace {
   inspectMcp(): Promise<{ ok: true; value: McpHostContext } | { ok: false; error: { code: string; message: string } }>
   probeMcp(name: string): Promise<{ ok: true; value: McpProbeResult } | { ok: false; error: { code: string; message: string } }>
   adoptMcp(request: { loaderId: string }): Promise<{ ok: true; value: McpAdoptResult } | { ok: false; error: { code: string; message: string } }>
+  installFeaturedSkill?(request: InstallFeaturedSkillRequest, signal?: AbortSignal): Promise<{ ok: true; value: InstallFeaturedSkillResult } | { ok: false; error: { code: string; message: string } }>
+  deleteInstalledSkill?(request: DeleteInstalledSkillRequest): Promise<{ ok: true; value: DeleteInstalledSkillResult } | { ok: false; error: { code: string; message: string } }>
   reportTelemetry?(event: TelemetryClientEvent): Promise<{ ok: true; value: { ok: boolean } } | { ok: false; error: { code: string; message: string } }>
 }
 
@@ -539,6 +545,70 @@ export function apply(ctx: ClientContext): void {
     if (!result.ok) throw new Error(result.error.message)
   }
 
+  const installFeaturedSkill = async (
+    request: InstallFeaturedSkillRequest,
+    signal?: AbortSignal,
+  ): Promise<InstallFeaturedSkillResult> => {
+    const remote = market
+    if (remote === undefined || typeof remote.installFeaturedSkill !== 'function') {
+      return {
+        ok: false,
+        id: request.id,
+        name: '',
+        scope: request.scope,
+        targetPath: '',
+        fileCount: 0,
+        hasScripts: false,
+        code: 'write-failed',
+        error: 'the dshMarketPro Remote is not mounted',
+      }
+    }
+    const result = await remote.installFeaturedSkill(request, signal)
+    if (!result.ok) {
+      const cancelled = signal?.aborted === true
+      return {
+        ok: false,
+        id: request.id,
+        name: '',
+        scope: request.scope,
+        targetPath: '',
+        fileCount: 0,
+        hasScripts: false,
+        code: cancelled ? 'cancelled' : 'write-failed',
+        error: cancelled ? 'installation cancelled' : `${result.error.code}: ${result.error.message}`,
+      }
+    }
+    if (result.value.ok) refreshSkills()
+    return result.value
+  }
+
+  const deleteInstalledSkill = async (
+    request: DeleteInstalledSkillRequest,
+  ): Promise<DeleteInstalledSkillResult> => {
+    const remote = market
+    if (remote === undefined || typeof remote.deleteInstalledSkill !== 'function') {
+      return {
+        ok: false,
+        name: request.name,
+        targetPath: request.sourcePath,
+        code: 'delete-failed',
+        error: 'the dshMarketPro Remote is not mounted',
+      }
+    }
+    const result = await remote.deleteInstalledSkill(request)
+    if (!result.ok) {
+      return {
+        ok: false,
+        name: request.name,
+        targetPath: request.sourcePath,
+        code: 'delete-failed',
+        error: `${result.error.code}: ${result.error.message}`,
+      }
+    }
+    if (result.value.ok) refreshSkills()
+    return result.value
+  }
+
   // The MCP page reads the official manager, Settings and credential Remotes
   // directly; only the facts they cannot carry come through this market.
   const reflect = (name: string): unknown => (ctx.reflect as unknown as { get(name: string): unknown }).get(name)
@@ -602,6 +672,8 @@ export function apply(ctx: ClientContext): void {
     loadCatalog,
     peekCatalog,
     ...globalSkills,
+    installFeaturedSkill,
+    deleteInstalledSkill,
     canOpenFolder,
     openFolder,
     install,
@@ -625,7 +697,7 @@ export function apply(ctx: ClientContext): void {
     order: 30,
     locale: NS,
     label: () => t('tab.skills'),
-    inject: (sessionId) => ({ ...skillsFor(sessionId), canOpenFolder, openFolder }),
+    inject: (sessionId) => ({ ...skillsFor(sessionId), deleteInstalledSkill, canOpenFolder, openFolder }),
   }, ProjectSkillsView)), 'dsh-market-pro: conversation skills tab')
 
 }

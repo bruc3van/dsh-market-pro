@@ -81,6 +81,16 @@ export const TYPERT_MANIFEST: TypertContribution = {
           },
           {
             kind: 'method',
+            name: 'installFeaturedSkill',
+            signature: 'installFeaturedSkill(request: InstallFeaturedSkillRequest, signal: AbortSignal): Promise<InstallFeaturedSkillResult>',
+          },
+          {
+            kind: 'method',
+            name: 'deleteInstalledSkill',
+            signature: 'deleteInstalledSkill(request: DeleteInstalledSkillRequest): Promise<DeleteInstalledSkillResult>',
+          },
+          {
+            kind: 'method',
             name: 'reportTelemetry',
             signature: 'reportTelemetry(event: TelemetryClientEvent): { ok: boolean }',
           },

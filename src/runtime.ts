@@ -14,6 +14,10 @@ import type { CatalogSource } from './catalog.ts'
 import type { InstalledManager } from './installed.ts'
 import type { McpAdoptResult, McpHostContext, McpProbeResult } from './contract.ts'
 import type {
+  DeleteInstalledSkillRequest,
+  DeleteInstalledSkillResult,
+  InstallFeaturedSkillRequest,
+  InstallFeaturedSkillResult,
   MarketCatalogResult,
   MarketEnvironment,
   MarketInstalledResult,
@@ -47,6 +51,8 @@ export class SafeMarketRuntime extends TypertRemoteService {
     private readonly probe: (name: string, signal: AbortSignal) => Promise<McpProbeResult>,
     private readonly adopt: (loaderId: string) => Promise<McpAdoptResult>,
     private readonly telemetry?: (event: TelemetryClientEvent) => void,
+    private readonly installSkill?: (request: InstallFeaturedSkillRequest, signal: AbortSignal) => Promise<InstallFeaturedSkillResult>,
+    private readonly deleteSkill?: (request: DeleteInstalledSkillRequest) => Promise<DeleteInstalledSkillResult>,
   ) {
     super(ctx, 'dshMarketPro')
   }
@@ -163,6 +169,40 @@ export class SafeMarketRuntime extends TypertRemoteService {
   @Remote
   async adoptMcp(request: { readonly loaderId: string }): Promise<McpAdoptResult> {
     return await this.adopt(request.loaderId)
+  }
+
+  /** Download and atomically install one allowlisted curated Agent Skill into the chosen target directory. */
+  @Remote
+  async installFeaturedSkill(request: InstallFeaturedSkillRequest, signal: AbortSignal): Promise<InstallFeaturedSkillResult> {
+    if (this.installSkill === undefined) {
+      return {
+        ok: false,
+        id: request.id,
+        name: '',
+        scope: request.scope,
+        targetPath: '',
+        fileCount: 0,
+        hasScripts: false,
+        code: 'write-failed',
+        error: 'skill installation is unavailable on this host',
+      }
+    }
+    return await this.installSkill(request, signal)
+  }
+
+  /** Safely delete one locally installed user/project Agent Skill directory from disk. */
+  @Remote
+  async deleteInstalledSkill(request: DeleteInstalledSkillRequest): Promise<DeleteInstalledSkillResult> {
+    if (this.deleteSkill === undefined) {
+      return {
+        ok: false,
+        name: request.name,
+        targetPath: request.sourcePath,
+        code: 'delete-failed',
+        error: 'skill deletion is unavailable on this host',
+      }
+    }
+    return await this.deleteSkill(request)
   }
 
   /** Forward an anonymous client telemetry signal to the Host-side reporter. */

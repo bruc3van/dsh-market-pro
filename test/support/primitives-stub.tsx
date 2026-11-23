@@ -17,6 +17,8 @@ export const Switch = () => null
 export const Menu = ({ anchor }: { anchor?: ReactNode }) => <>{anchor}</>
 export const Modal = ({ open, children }: { open: boolean; children?: ReactNode }) => (open ? <>{children}</> : null)
 export const Tooltip = passthrough
+export const StateDot = icon
+export const TextShimmer = passthrough
 export const IconChevronDownOutlineRegular = icon
 export const IconCloseOutlineRegular = icon
 export const IconInfoOutlineRegular = icon

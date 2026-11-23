@@ -48,7 +48,8 @@ test('unified built-in market-pro skill covers Skills guidance, allows override,
     assert.ok(loaded)
     assert.match(loaded.content, new RegExp(SKILLS_TOOL_NAME))
     assert.match(loaded.content, /untrusted_skill_data/)
-    assert.match(loaded.content, /npx skills add https:\/\/github\.com\/vercel-labs\/skills --skill find-skills/)
+    assert.match(loaded.content, /install_featured/)
+    assert.match(loaded.content, /vercel-labs\/skills\/find-skills/)
 
     const disposeOverride = ctx.skills.registerProvider(() => ({
       name: 'custom-skills-override',
@@ -116,13 +117,14 @@ test('dsh_skills_pro tool lists installed skills, searches bilingual/CJK queries
     readInstalledSkills: async () => installedSnapshot,
   }) as {
     name: string
-    isConcurrencySafe: () => boolean
+    isConcurrencySafe: (args?: unknown) => boolean
     output: { render: (args: unknown, value: unknown) => { type: string; text: string }[] }
-    execute: (args: unknown) => Promise<string>
+    execute: (args: unknown, exec?: unknown) => Promise<string>
   }
 
   assert.equal(def.name, SKILLS_TOOL_NAME)
-  assert.equal(def.isConcurrencySafe(), true)
+  assert.equal(def.isConcurrencySafe({ action: 'list_installed' }), true)
+  assert.equal(def.isConcurrencySafe({ action: 'install_featured' }), false)
 
   // list_installed
   const installedOut = JSON.parse(await def.execute({ action: 'list_installed' })) as {
@@ -167,19 +169,28 @@ test('dsh_skills_pro tool lists installed skills, searches bilingual/CJK queries
   assert.ok(officialOut.items.length > 0)
   assert.ok(officialOut.items.every(item => item.official === true))
 
-  // empty search returns broadenSearch guidance pointing to vercel-labs/skills find-skills
+  // empty search returns broadenSearch guidance pointing to direct install_featured of find-skills
   const missOut = JSON.parse(await def.execute({
     action: 'search_featured',
     query: 'ultra-rare-unmatched-topic-xyz',
     lang: 'zh',
   })) as {
     totalMatched: number
-    broadenSearch?: { findSkillsInstalled: boolean; recommendedSkill: string; installCommand: string }
+    broadenSearch?: {
+      findSkillsInstalled: boolean
+      recommendedSkill: string
+      installAction: { tool: string; action: string; id: string; scope: string }
+    }
   }
   assert.equal(missOut.totalMatched, 0)
   assert.equal(missOut.broadenSearch?.findSkillsInstalled, false)
   assert.equal(missOut.broadenSearch?.recommendedSkill, 'vercel-labs/skills/find-skills')
-  assert.equal(missOut.broadenSearch?.installCommand, 'npx skills add https://github.com/vercel-labs/skills --skill find-skills')
+  assert.deepEqual(missOut.broadenSearch?.installAction, {
+    tool: SKILLS_TOOL_NAME,
+    action: 'install_featured',
+    id: 'vercel-labs/skills/find-skills',
+    scope: 'user-dsh',
+  })
 
   // detail batch + notFound
   const detailOut = JSON.parse(await def.execute({
@@ -187,11 +198,19 @@ test('dsh_skills_pro tool lists installed skills, searches bilingual/CJK queries
     ids: ['vercel-labs/skills/find-skills', 'frontend-design', 'nonexistent-skill-xyz'],
     lang: 'en',
   })) as {
-    items: { id: string; installed: boolean; githubUrl: string; installCommand: string }[]
+    items: {
+      id: string
+      installed: boolean
+      githubUrl: string
+      directInstall: { action: string; id: string; defaultScope: string; requiresCli: boolean }
+    }[]
     notFound: string[]
   }
   assert.equal(detailOut.items.length, 2)
-  assert.equal(detailOut.items[0]?.installCommand, 'npx skills add vercel-labs/skills --skill find-skills')
+  assert.equal(detailOut.items[0]?.directInstall.action, 'install_featured')
+  assert.equal(detailOut.items[0]?.directInstall.id, 'vercel-labs/skills/find-skills')
+  assert.equal(detailOut.items[0]?.directInstall.defaultScope, 'user-dsh')
+  assert.equal(detailOut.items[0]?.directInstall.requiresCli, false)
   assert.equal(detailOut.items[1]?.installed, true)
   assert.deepEqual(detailOut.notFound, ['nonexistent-skill-xyz'])
 
@@ -206,6 +225,117 @@ test('dsh_skills_pro tool lists installed skills, searches bilingual/CJK queries
   // disabled AI assistant refuses execution
   aiEnabled = false
   await assert.rejects(() => def.execute({ action: 'list_installed' }), /disabled/)
+})
+
+test('dsh_skills_pro install_featured enforces fail-closed native approval and supports user-dsh, user-agents, and project-dsh', async () => {
+  let aiEnabled = true
+  let approvalOutcome: 'allowed-once' | 'rejected' | 'cancelled' = 'allowed-once'
+  let disableDuringApproval = false
+  const approvalCalls: { toolName: string; reason: string }[] = []
+  const installCalls: { id: string; scope: string; projectDir?: string; overwrite?: boolean }[] = []
+  let nextResult: {
+    ok: boolean
+    code?: 'already-exists' | 'download-failed'
+    hasScripts?: boolean
+    error?: string
+  } = { ok: true, hasScripts: true }
+
+  const def = createMarketAiSkillsToolDefinition({
+    profile: 'default',
+    homeDir: '/mock/home',
+    readSettings: () => ({ enabled: true, aiAssistantEnabled: aiEnabled, telemetryEnabled: true }),
+    readInstalledSkills: async () => ({
+      available: true,
+      complete: true,
+      cwd: '/mock/workspace',
+      skills: [],
+    }),
+    getApprover: () => ({
+      async request(req) {
+        approvalCalls.push({ toolName: req.toolName, reason: req.reason })
+        if (disableDuringApproval) aiEnabled = false
+        return approvalOutcome
+      },
+    }),
+    installSkill: async (request) => {
+      installCalls.push({ ...request })
+      const targetPath = request.scope === 'user-agents'
+        ? '/mock/home/.agents/skills/find-skills'
+        : request.scope === 'project-dsh'
+          ? `${request.projectDir}/.dsh/skills/find-skills`
+          : '/mock/home/.dsh/skills/find-skills'
+      return {
+        ok: nextResult.ok,
+        id: request.id,
+        name: 'find-skills',
+        scope: request.scope,
+        targetPath,
+        fileCount: nextResult.ok ? 3 : 0,
+        hasScripts: nextResult.hasScripts ?? false,
+        ...(nextResult.code ? { code: nextResult.code } : {}),
+        error: nextResult.error ?? '',
+      }
+    },
+  }) as {
+    execute: (args: unknown, exec?: { agent?: unknown; callId?: string }) => Promise<string>
+  }
+
+  // Fails closed without calling agent
+  await assert.rejects(
+    () => def.execute({ action: 'install_featured', id: 'vercel-labs/skills/find-skills' }),
+    /calling Agent/,
+  )
+  assert.equal(installCalls.length, 0)
+
+  // Fails closed when user rejects approval
+  approvalOutcome = 'rejected'
+  await assert.rejects(
+    () => def.execute({ action: 'install_featured', id: 'vercel-labs/skills/find-skills' }, { agent: { id: 'a1' } }),
+    /declined/,
+  )
+  assert.equal(installCalls.length, 0)
+
+  // Approved install defaults to user-dsh (~/.dsh/skills)
+  approvalOutcome = 'allowed-once'
+  const okOut = JSON.parse(await def.execute(
+    { action: 'install_featured', id: 'vercel-labs/skills/find-skills' },
+    { agent: { id: 'a1' }, callId: 'call-1' },
+  )) as { outcome: string; installed: boolean; scope: string; hasScripts: boolean; nextStep: string }
+  assert.equal(okOut.outcome, 'installed')
+  assert.equal(okOut.installed, true)
+  assert.equal(okOut.scope, 'user-dsh')
+  assert.equal(okOut.hasScripts, true)
+  assert.match(okOut.nextStep, /script/i)
+  assert.equal(installCalls.at(-1)?.scope, 'user-dsh')
+  assert.match(approvalCalls.at(-1)?.reason ?? '', /vercel-labs\/skills/)
+
+  // project-dsh defaults projectDir to session cwd
+  const projOut = JSON.parse(await def.execute(
+    { action: 'install_featured', id: 'vercel-labs/skills/find-skills', scope: 'project-dsh' },
+    { agent: { id: 'a1' } },
+  )) as { outcome: string; targetPath: string }
+  assert.equal(projOut.outcome, 'installed')
+  assert.equal(installCalls.at(-1)?.projectDir, '/mock/workspace')
+
+  // already-exists surfaces structured outcome without failing
+  nextResult = { ok: false, code: 'already-exists', error: 'already exists' }
+  const existsOut = JSON.parse(await def.execute(
+    { action: 'install_featured', id: 'vercel-labs/skills/find-skills', scope: 'user-agents' },
+    { agent: { id: 'a1' } },
+  )) as { outcome: string; installed: boolean; nextStep: string }
+  assert.equal(existsOut.outcome, 'already-exists')
+  assert.equal(existsOut.installed, false)
+  assert.match(existsOut.nextStep, /overwrite: true/)
+
+  // Refuses write if AI assistant is toggled off while waiting for approval
+  nextResult = { ok: true }
+  disableDuringApproval = true
+  const beforeCount = installCalls.length
+  await assert.rejects(
+    () => def.execute({ action: 'install_featured', id: 'vercel-labs/skills/find-skills' }, { agent: { id: 'a1' } }),
+    /disabled while waiting/,
+  )
+  assert.equal(installCalls.length, beforeCount)
 })
 
 test('wrapUntrustedSkillData strips zero-width characters and neutralizes angle brackets', () => {

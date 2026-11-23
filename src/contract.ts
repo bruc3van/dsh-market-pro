@@ -154,6 +154,45 @@ export interface MarketSkillsResult {
   readonly error: string
 }
 
+/** Target location for installing one curated Agent Skill. */
+export type FeaturedSkillInstallScope = 'user-dsh' | 'user-agents' | 'project-dsh'
+
+/** Wire request for Host-side direct installation of one curated Agent Skill. */
+export interface InstallFeaturedSkillRequest {
+  readonly id: string
+  readonly scope: FeaturedSkillInstallScope
+  readonly projectDir?: string
+  readonly overwrite?: boolean
+}
+
+/** Structured outcome of installing one curated Agent Skill on the Host. */
+export interface InstallFeaturedSkillResult {
+  readonly ok: boolean
+  readonly id: string
+  readonly name: string
+  readonly scope: FeaturedSkillInstallScope
+  readonly targetPath: string
+  readonly fileCount: number
+  readonly hasScripts: boolean
+  readonly code?: 'not-found' | 'already-exists' | 'invalid-project-dir' | 'download-failed' | 'invalid-skill' | 'write-failed' | 'cancelled'
+  readonly error: string
+}
+
+/** Request to delete one locally installed Agent Skill directory from disk. */
+export interface DeleteInstalledSkillRequest {
+  readonly name: string
+  readonly sourcePath: string
+}
+
+/** Outcome of deleting one locally installed Agent Skill directory on the Host. */
+export interface DeleteInstalledSkillResult {
+  readonly ok: boolean
+  readonly name: string
+  readonly targetPath: string
+  readonly code?: 'not-found' | 'not-deletable' | 'delete-failed'
+  readonly error: string
+}
+
 /**
  * What the browser needs to name the install command. The profile is a
  * deployment fact (the Host is the only side that knows which profile it
@@ -649,6 +688,48 @@ export const mcpProbeResultSchema = z.discriminatedUnion('ok', [
 ])
 export type McpProbeResult = z.infer<typeof mcpProbeResultSchema>
 
+export const featuredSkillInstallScopeSchema = z.enum(['user-dsh', 'user-agents', 'project-dsh'])
+
+export const installFeaturedSkillRequestSchema = z.object({
+  id: z.string().min(1).max(200),
+  scope: featuredSkillInstallScopeSchema,
+  projectDir: z.string().max(4096).optional(),
+  overwrite: z.boolean().optional(),
+}).readonly()
+
+export const installFeaturedSkillResultSchema = z.object({
+  ok: z.boolean(),
+  id: z.string(),
+  name: z.string(),
+  scope: featuredSkillInstallScopeSchema,
+  targetPath: z.string(),
+  fileCount: z.number().int().nonnegative(),
+  hasScripts: z.boolean(),
+  code: z.enum([
+    'not-found',
+    'already-exists',
+    'invalid-project-dir',
+    'download-failed',
+    'invalid-skill',
+    'write-failed',
+    'cancelled',
+  ]).optional(),
+  error: z.string(),
+}).readonly()
+
+export const deleteInstalledSkillRequestSchema = z.object({
+  name: z.string().min(1).max(160),
+  sourcePath: z.string().min(1).max(4096),
+}).readonly()
+
+export const deleteInstalledSkillResultSchema = z.object({
+  ok: z.boolean(),
+  name: z.string(),
+  targetPath: z.string(),
+  code: z.enum(['not-found', 'not-deletable', 'delete-failed']).optional(),
+  error: z.string(),
+}).readonly()
+
 /** The dshMarketPro Remote namespace's strict invocation descriptors. */
 export const SAFE_MARKET_INVOCATIONS: readonly InvocationDescriptor[] = [
   {
@@ -866,6 +947,55 @@ export const SAFE_MARKET_INVOCATIONS: readonly InvocationDescriptor[] = [
       mode: 'strict',
       typeSymbol: 'dsh-market-pro#McpAdoptResult',
       create: () => mcpAdoptResultSchema,
+    },
+  },
+  {
+    id: 'dsh-market-pro#dshMarketPro/installFeaturedSkill',
+    service: 'dshMarketPro',
+    namespace: 'dshMarketPro',
+    method: 'installFeaturedSkill',
+    invocation: { kind: 'direct' },
+    parameters: [
+      {
+        name: 'request',
+        wire: 'request',
+        source: 'json',
+        codec: {
+          mode: 'strict',
+          typeSymbol: 'dsh-market-pro#InstallFeaturedSkillRequest',
+          create: () => installFeaturedSkillRequestSchema,
+        },
+      },
+    ],
+    cancellation: { parameter: 'signal' },
+    result: {
+      mode: 'strict',
+      typeSymbol: 'dsh-market-pro#InstallFeaturedSkillResult',
+      create: () => installFeaturedSkillResultSchema,
+    },
+  },
+  {
+    id: 'dsh-market-pro#dshMarketPro/deleteInstalledSkill',
+    service: 'dshMarketPro',
+    namespace: 'dshMarketPro',
+    method: 'deleteInstalledSkill',
+    invocation: { kind: 'direct' },
+    parameters: [
+      {
+        name: 'request',
+        wire: 'request',
+        source: 'json',
+        codec: {
+          mode: 'strict',
+          typeSymbol: 'dsh-market-pro#DeleteInstalledSkillRequest',
+          create: () => deleteInstalledSkillRequestSchema,
+        },
+      },
+    ],
+    result: {
+      mode: 'strict',
+      typeSymbol: 'dsh-market-pro#DeleteInstalledSkillResult',
+      create: () => deleteInstalledSkillResultSchema,
     },
   },
   {

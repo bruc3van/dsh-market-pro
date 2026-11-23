@@ -6,10 +6,12 @@
  * exact same verified catalog and matching logic.
  * @module dsh-market-pro/mcpFeatured
  */
-/** High-level discovery category for curated MCP servers. */
-export type FeaturedMcpCategory = 'docs' | 'search' | 'browser' | 'dev' | 'office' | 'visual' | 'life' | 'memory';
+/** High-level discovery category for curated MCP servers (aligned with Plugins). */
+export type FeaturedMcpCategory = 'developer-tools' | 'knowledge-research' | 'web-browser' | 'media-vision' | 'integrations-sharing' | 'utilities' | 'agents-workflows';
 /** Ordered category list for filter controls and overview summaries. */
 export declare const FEATURED_MCP_CATEGORIES: readonly FeaturedMcpCategory[];
+/** Normalize an MCP category string (supporting unified keys and legacy aliases). */
+export declare function normalizeFeaturedMcpCategory(raw: string): FeaturedMcpCategory | undefined;
 /** One user-supplied value a curated server accepts or requires before starting. */
 export interface FeaturedMcpInput {
     readonly key: string;

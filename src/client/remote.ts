@@ -7,6 +7,10 @@
 import type { RemoteResult, TypertRemoteContribution } from '@deepseek-ai/dsh-typert-protocol'
 import { SAFE_MARKET_INVOCATIONS } from '../contract.ts'
 import type {
+  DeleteInstalledSkillRequest,
+  DeleteInstalledSkillResult,
+  InstallFeaturedSkillRequest,
+  InstallFeaturedSkillResult,
   McpAdoptResult,
   McpHostContext,
   McpProbeResult,
@@ -49,6 +53,8 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
     inspectMcp: () => Promise<RemoteResult<McpHostContext>>
     probeMcp: (name: string, signal?: AbortSignal) => Promise<RemoteResult<McpProbeResult>>
     adoptMcp: (request: { loaderId: string }) => Promise<RemoteResult<McpAdoptResult>>
+    installFeaturedSkill: (request: InstallFeaturedSkillRequest, signal?: AbortSignal) => Promise<RemoteResult<InstallFeaturedSkillResult>>
+    deleteInstalledSkill: (request: DeleteInstalledSkillRequest) => Promise<RemoteResult<DeleteInstalledSkillResult>>
     reportTelemetry: (event: TelemetryClientEvent) => Promise<RemoteResult<{ readonly ok: boolean }>>
   }
   interface TypertRemoteMap {
@@ -63,6 +69,8 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
     'dshMarketPro/inspectMcp': () => Promise<RemoteResult<McpHostContext>>
     'dshMarketPro/probeMcp': (name: string, signal?: AbortSignal) => Promise<RemoteResult<McpProbeResult>>
     'dshMarketPro/adoptMcp': (request: { loaderId: string }) => Promise<RemoteResult<McpAdoptResult>>
+    'dshMarketPro/installFeaturedSkill': (request: InstallFeaturedSkillRequest, signal?: AbortSignal) => Promise<RemoteResult<InstallFeaturedSkillResult>>
+    'dshMarketPro/deleteInstalledSkill': (request: DeleteInstalledSkillRequest) => Promise<RemoteResult<DeleteInstalledSkillResult>>
     'dshMarketPro/reportTelemetry': (event: TelemetryClientEvent) => Promise<RemoteResult<{ readonly ok: boolean }>>
   }
   interface TypertRemoteNamespaceMap {

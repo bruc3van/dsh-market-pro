@@ -2,31 +2,34 @@
 
 <img src="./assets/logo.svg" alt="DSH Market Pro Logo" width="96" height="96" />
 
-**面向 Agent 的 DSH 插件与 MCP 市场：内置 AI 选型技能与工具、100 个精选 MCP 目录，一站式管理插件、技能、MCP 服务器与安装后安全审查。**
+**面向 Agent 的 DSH 插件、技能与 MCP 市场：内置 AI 选型技能与工具、100 个精选技能与 100 个精选 MCP 目录，一站式管理插件、技能、MCP 服务器与安装后安全审查。**
 
 中文 | [English](./README_EN.md)
 
-DeepSeek Harness（DSH）的 AI 原生第三方插件市场。基于经过核实的社区目录 [awesome-dsh-plugin-pro](https://github.com/bruc3van/awesome-dsh-plugin-pro) 与内置精选 MCP 目录，不仅让你在一个界面里完成插件浏览与安装、版本更新、技能查看、精选 MCP 一键添加、MCP 服务器托管配置和安装后 AI 审查，更直接赋予 **DSH Agent 对话内查市场、选插件、配 MCP、给方案与安全安装** 的原生能力——告别人工翻找。
+DeepSeek Harness（DSH）的 AI 原生第三方插件市场。基于经过核实的社区目录 [awesome-dsh-plugin-pro](https://github.com/bruc3van/awesome-dsh-plugin-pro)、内置 100 个精选 Agent 技能与 100 个精选 MCP 目录，不仅让你在一个界面里完成插件浏览与安装、版本更新、精选技能零依赖直装与删除管理、精选 MCP 一键添加、MCP 服务器托管配置与测试连接弹窗诊断、安装后 AI 审查，更直接赋予 **DSH Agent 对话内查市场、选插件、挑技能、配 MCP、给方案与安全安装** 的原生能力——告别人工翻找。
 
 ![插件市场主界面](./assets/screenshots/marketplace.png)
 
 ## 主要功能
 
 - **面向 Agent 的 AI 原生选型与批量更新（统一内置 Skill `/market-pro` + 插件 · 技能 · MCP 三大工具）**：
-  - 安装并启用 `dsh-market-pro` 后，默认自动向当前 DSH 会话注册统一内置技能 **`market-pro`** 以及三大底层工具 **`dsh_market_pro`**（插件选型与批量更新）、**`dsh_skills_pro`**（100 精选技能检索与盘点）、**`dsh_mcp_pro`**（精选与自定义 MCP 托管安装），无需手工配置，卸载或停用插件时自动清理。
+  - 安装并启用 `dsh-market-pro` 后，默认自动向当前 DSH 会话注册统一内置技能 **`market-pro`** 以及三大底层工具 **`dsh_market_pro`**（插件选型与批量更新）、**`dsh_skills_pro`**（100 精选技能检索、盘点与原生审批直装）、**`dsh_mcp_pro`**（精选与自定义 MCP 托管安装），无需手工配置，卸载或停用插件时自动清理。
   - **直接对话即可挑插件、选技能、配 MCP、一键更插件**：在任意会话中自然语言描述需求，或输入 **`/market-pro`** 显式唤起（支持跨插件/技能/MCP 联合选型与去重）；也可以在市场顶部点击 **「AI 帮我选插件」**、**「AI 帮我选技能」** 或 **「AI 帮我选 MCP」** 一键发起对话。
-  - **精准检索与智能盘点**：支持中文分词回退、中英多同义词并查、已装/已配项过滤与批量详情核对，直接读取本地缓存的编辑精选、2.8 万+ 全量插件目录、100 个精选技能与内置 100 个精选 MCP 目录，并联合盘点当前环境已安装的插件、技能与 MCP 避免重复推荐。
-  - **纵深防注入、原生审批与零明文密钥**：所有检索与更新探测严格只读，对第三方元数据执行隐形 Unicode 剥离、尖括号中和与 `<untrusted_market_data>` / `<untrusted_mcp_data>` / `<untrusted_skill_data>` 协议边界隔离；插件安装经你确认后交由官方 `plugin_manager` 走宿主审批，插件批量更新（`update_plugins`）严格绑定你确认过的精确包名与版本、强制走 DSH 原生审批（fail-closed）并完整列出每一项，MCP 安装与启停（`install_featured` / `install_custom` / `set_enabled`）同样强制走原生审批并拒绝一切明文密钥、自动绑定 `${credential:REF}` 凭据模板。
-  - **随时可控，兼顾零 Token 偏好**：在市场顶部的 **设置** 页签中可随时一键关闭或开启 **AI 选型助手（插件 · 技能 · MCP）**，关闭后立即撤回内置技能与全部工具、回归零常驻 Token；同时也支持一键开关社区目录联网加载，修改即时生效并随当前 profile 持久化。
+  - **精准检索与智能盘点**：支持中文分词回退、中英多同义词并查、已装/已配项过滤与批量详情核对，直接读取本地缓存的编辑精选、2.9 万+ 全量插件目录、100 个精选技能与内置 100 个精选 MCP 目录，并联合盘点当前环境已安装的插件、技能与 MCP 避免重复推荐。
+  - **纵深防注入、原生审批与零明文密钥**：所有检索与更新探测严格只读，对第三方元数据执行隐形 Unicode 剥离、尖括号中和与 `<untrusted_market_data>` / `<untrusted_mcp_data>` / `<untrusted_skill_data>` 协议边界隔离；插件安装经你确认后交由官方 `plugin_manager` 走宿主审批，插件批量更新（`update_plugins`）严格绑定你确认过的精确包名与版本、强制走 DSH 原生审批（fail-closed）并完整列出每一项，技能直装（`install_featured`）与 MCP 安装/启停（`install_featured` / `install_custom` / `set_enabled`）同样强制走原生审批，拒绝一切明文密钥并自动绑定 `${credential:REF}` 凭据模板。
+  - **随时可控，兼顾零 Token 偏好**：在市场顶部的 **设置** 页签中可随时一键关闭或开启 **AI 选型助手（插件 · 技能 · MCP）**，关闭后立即撤回内置技能与全部工具、回归零常驻 Token；同时也支持一键开关社区目录联网加载，修改即时生效并随当前 profile 持久化。顶部操作栏直接展示 **刷新**、**开源仓库** 与 **联系作者**，方便随时查阅与反馈。
 - **精选与全量目录**：剔除蹭标签与非插件项目。打开即展示编辑精选，同时提供完整插件目录，支持按分类筛选、关键词与包名搜索、「全部」目录按**活跃热门 / Star 最多 / 最近更新**排序，以及在精选或已安装范围搜不到时的**跨范围一键引导**。
 - **一键安装**：已收录安装信息的插件可直接点击安装并启用；未提供直接安装信息的仓库，可一键生成提示词交由 AI 核实后完成安装。
 - **已安装管理、筛选与一键批量更新**：集中查看已安装的插件，支持随时启用/停用（立即生效，无需重启）、卸载、按**全部状态 / 有新版**筛选，以及单插件多版本选择升级与**一键批量更新**（先弹窗确认清单、可勾选、依次更新、失败项自动跳过并支持重试、本插件自动最后更新）；当 `dsh-market-pro` 自身有新版时，主面板右上角刷新按钮旁直接提供快捷更新按钮。
 - **安装后 AI 审查**：支持对已安装插件生成审查草稿并填入对话框（由你确认发送），让 AI 协助排查本地插件代码中的联网请求、凭据读取或脚本执行等潜在风险。
-- **技能浏览**：通过搜索框与来源下拉选择器按项目、用户、随包提供等来源筛选当前对话可用的技能（包含本插件随附的 `market-pro` 统一内置技能），直观查看每个技能的说明与调用方式，并可浏览 100 个精选技能目录。
-- **MCP 精选目录与托管管理**：基于 DSH 官方 MCP 管理器（DSH ≥ 0.2.2-rc.2），分为 **精选** 与 **已配置** 两个子页签，一站式发现与管理全部 MCP 服务器：
-  - **内置 100 个精选 MCP 目录**：覆盖文档、联网搜索、浏览器、开发、办公协作、图表与创作、出行与生活、记忆与思考 8 大分类（含 Context7、DeepWiki、arXiv、Zotero、AWS Docs、Playwright、Chrome DevTools、Scrapling、Browser Use、GitHub、GitLab、Supabase、Stripe、Sentry、Azure、Firebase、腾讯云开发、DBHub、Serena、Codebase Memory、Kubernetes、MongoDB、ClickHouse、Neo4j、DuckDB、Exa、AIHOT、高德/百度地图、12306、Home Assistant、AKTools、飞书、钉钉、语雀、Notion、Excel、Airtable、AntV 图表、draw.io、GitDiagram、tldraw、MiniMax、Figma、Qdrant、Basic Memory 等）；支持分类 + 接入方式（免密钥 / HTTP / npx / uvx）双维筛选、关键词/包名搜索、自动识别已配置状态与实时连接状态，以及一键添加或弹窗配置（支持密钥获取页一键直达、密钥显隐切换、命令复制、弹窗内实时等待安装连接结果与失败重试）；
-  - **实时状态与工具弹窗**：在「已配置」视图按状态筛选、实时查看连接状态，并在独立**工具弹窗**中浏览与搜索每台服务器暴露的全部工具；
-  - **完整生命周期与凭据安全**：支持添加、编辑、启停、测试连接、重启，配置**断线自动重连策略**与**关闭超时**；展示凭据来源（凭据库 / 环境变量），支持明文密钥一键转存为凭据、更新或**清除凭据**，并可一键**打开设置文件**；
+- **精选技能零依赖直装与分组管理**：
+  - **100 个精选 Agent 技能（源自 skills.sh All Time）**：与插件统一采用 7 大功能分类（顶栏提供分类 + 来源双下拉筛选），全量展示对应开源组织/作者的真实品牌 Logo；
+  - **免 `npx`、免终端交互一键直装（支持国内回退）**：在详情弹窗中直接从 GitHub 拉取经核实的技能子路径，若 GitHub 不可达自动回退至官方 jsDelivr 镜像，无需本机预装 CLI 或手动交互确认；默认安装到 **DSH 全局目录 `~/.dsh/skills`**，也可选 **通用 Agent 目录 `~/.agents/skills`** 或通过目录选择器安装到指定 **项目级 `.dsh/skills`**；写入前强制校验根目录 `SKILL.md` 与路径边界，并在包含脚本时给出提示；同样保留「交由 AI 核实」与原生审批直装；
+  - **已安装技能分组视图与弹窗安全删除**：在「已安装」视图及对话内技能页按来源（**用户 / 项目 / 随包提供**）分组展示计数与分隔线，支持打开目录与通过**独立确认弹窗**安全删除本地用户/项目技能（Host 侧校验技能目录与 `SKILL.md`、禁止符号链接越界，并保护随包内置的 `market-pro` 技能）。
+- **MCP 精选目录、托管管理与弹窗诊断**：基于 DSH 官方 MCP 管理器（DSH ≥ 0.2.2-rc.2），分为 **精选** 与 **已配置** 两个子页签，页签工具栏右侧统一提供 **打开设置文件**、**AI 帮我选 MCP** 与 **添加 MCP** 快捷入口：
+  - **内置 100 个精选 MCP 目录**：与插件统一按功能划分为开发者工具、知识与研究、网页与浏览器、设计与视觉、集成与分享、实用工具、Agent 工作流 7 大分类（含 Context7、DeepWiki、arXiv、Zotero、AWS Docs、Playwright、Chrome DevTools、Scrapling、Browser Use、GitHub、GitLab、Supabase、Stripe、Sentry、Azure、Firebase、腾讯云开发、DBHub、Serena、Codebase Memory、Kubernetes、MongoDB、ClickHouse、Neo4j、DuckDB、Exa、AIHOT、高德/百度地图、12306、Home Assistant、AKTools、飞书、钉钉、语雀、Notion、Excel、Airtable、AntV 图表、draw.io、GitDiagram、tldraw、MiniMax、Figma、Qdrant、Basic Memory 等）；支持顶栏分类 + 接入方式（免密钥 / HTTP / npx / uvx）双下拉筛选、关键词/包名搜索、自动识别已配置状态与实时连接状态，以及一键添加或弹窗配置（支持密钥获取页一键直达、密钥显隐切换、命令复制、原生状态点与流光实时展示启动连接进度与失败重试）；
+  - **实时状态、工具列表与测试连接弹窗**：在「已配置」视图按状态筛选、实时查看连接状态，在独立**工具弹窗**中浏览与搜索每台服务器暴露的全部工具，点击 **测试连接** 弹出独立诊断弹窗实时反馈握手耗时、服务器版本、发现的工具列表与错误原因（支持一键重新测试或跳转编辑配置）；
+  - **完整生命周期与凭据安全**：支持添加、编辑、启停、重启，配置**断线自动重连策略**与**关闭超时**；展示凭据来源（凭据库 / 环境变量），支持明文密钥一键转存为凭据、更新或**清除凭据**；
   - **静态 MCP 一键转托管**：直接写入 profile 的静态 `dsh-mcp-client` 服务器不仅列出风险提示与启停开关，还支持一键**转为托管**（Host 侧自动将明文密钥安全迁入凭据库并停用原静态行）。
 
 ## 方案对比
@@ -35,7 +38,7 @@ DeepSeek Harness（DSH）的 AI 原生第三方插件市场。基于经过核实
 
 | 对比维度 | DSH Market Pro（本插件） | DSH 官方发现页 (`dsh-plugin-market`) | 常见纯 UI / 泛收录社区市场 | 独立发现型 Skill / MCP 服务 |
 |---|---|---|---|---|
-| **数据源与筛选质量** | **严选真插件 + 精选 MCP**：每日核验并剔除蹭标签、空仓与非插件项目；提供**编辑精选 + 2.8 万+ 全量插件目录 + 100 个精选 MCP**，内置国内镜像容灾与本地持久化缓存 | 仅读取用户手动添加的 format-1 订阅索引，自身不内置社区目录 | 部分目录按 GitHub topic 泛抓取，容易混入非插件或无法安装的仓库，需人工甄别 | 依赖第三方聚合 API 或外部 CLI，对 DSH 插件结构与安装目标覆盖有限 |
+| **数据源与筛选质量** | **严选真插件 + 精选技能 + 精选 MCP**：每日核验并剔除蹭标签、空仓与非插件项目；提供**编辑精选 + 2.9 万+ 全量插件目录 + 100 个精选技能 + 100 个精选 MCP**，内置国内镜像容灾（含技能 jsDelivr 回退）与本地持久化缓存 | 仅读取用户手动添加的 format-1 订阅索引，自身不内置社区目录 | 部分目录按 GitHub topic 泛抓取，容易混入非插件或无法安装的仓库，需人工甄别 | 依赖第三方聚合 API 或外部 CLI，对 DSH 插件结构与安装目标覆盖有限 |
 | **对话内 AI 选型与配置** | **安装即默认开启，标准模式可用**：统一内置 `/market-pro` 技能与 `dsh_market_pro` + `dsh_skills_pro` + `dsh_mcp_pro` 工具，支持跨形态选型、原生审批一键批量更新插件，以及安全安装/启停 MCP | 提供 `plugin_market` 工具，但**默认仅在 Creator 模式启用**，无配套选型技能与 MCP 安装能力 | 多数侧重界面点击浏览，不提供对话内 Agent 自主查库选型 | 可在对话中检索，但需额外配置独立 MCP 子进程或外部 CLI，缺少可视化管理界面 |
 | **环境感知与去重** | 自动联合盘点当前 profile **已安装插件 + 托管/静态 MCP 与工具组**，自动过滤已装项并推荐互补能力 | 标注订阅条目的安装状态，不含 MCP/技能联合盘点 | 多以卡片已安装徽章为主，不参与对话级能力规划 | 通常无法直接读取当前 DSH profile 的已安装插件与托管 MCP 状态 |
 | **一站式管理范围** | **插件 + 技能 + 精选与托管 MCP + 市场设置**四合一（支持热启停、有新版筛选与一键批量更新、精选 MCP 一键添加、转托管、凭据管理与工具弹窗） | 聚焦插件发现与管理，不含技能页和 MCP 托管界面 | 侧重插件浏览、评分或社区讨论，通常需另装插件管理 MCP 与技能 | 仅聚焦单一类型（只搜 Skill 或只搜 MCP），不含宿主插件管理 |
@@ -105,6 +108,19 @@ Agent 会通过 `dsh_mcp_pro` 完成端到端安全闭环：
 
 ![对话内 AI 原生选配与安全安装 MCP](./assets/screenshots/marketplace-ai-mcp-chat.png)
 
+### 4. 选配与原生审批直装 Agent 技能（`/market-pro`）
+
+在对话中直接输入 `/market-pro` 或点击技能页右上角的 **「AI 帮我选技能」**：
+
+```text
+/market-pro 先盘点我当前可用的技能，再推荐适合前端界面设计或代码审查的精选技能，确认后直接帮我安装到 ~/.dsh/skills
+```
+
+Agent 会通过 `dsh_skills_pro` 完成安全闭环：
+
+1. **盘点与检索**（`list_installed` / `search_featured` / `detail`）：跳过已有同类技能，核对精选技能的来源仓库、子路径与适用场景。
+2. **原生审批直装**（`install_featured`）：经你确认后发起 DSH 原生审批，直接从已核实仓库（支持国内 jsDelivr 自动回退）下载并写入目标目录（`~/.dsh/skills` / `~/.agents/skills` / 项目 `.dsh/skills`），无需调用交互式 `npx skills` 命令。
+
 > 如需关闭或重新开启该能力，打开 **插件市场Pro → 设置**，切换 **AI 选型助手（插件 · 技能 · MCP）** 即可实时生效。
 
 ## 界面预览
@@ -121,13 +137,15 @@ Agent 会通过 `dsh_mcp_pro` 完成端到端安全闭环：
 
 ![全量目录与排序](./assets/screenshots/marketplace-all.png)
 
-### MCP 精选目录、托管管理与工具查看
+### MCP 精选目录、托管管理、测试连接与工具查看
 
-在 **MCP** 页签中先通过 **精选** 子页签浏览内置的 100 个精选 MCP 服务器（支持分类与接入方式筛选、关键词检索、已添加与实时状态识别，以及弹窗内直达密钥获取页与等待安装连接完成），再切至 **已配置** 集中管理托管与静态 MCP 服务器：按状态筛选、查看凭据来源与清除操作、一键打开设置文件、将静态 MCP 转为托管，并在独立弹窗中搜索查看服务器提供的全部工具。
+在 **MCP** 页签的页签工具栏右侧即可一键 **打开设置文件**、唤起 **AI 帮我选 MCP** 或 **添加 MCP**；先通过 **精选** 子页签浏览内置的 100 个精选 MCP 服务器（与插件统一按功能分类，支持分类与接入方式双下拉筛选、关键词检索、已添加与实时状态识别，以及弹窗内直达密钥获取页与原生状态点实时跟踪安装连接），再切至 **已配置** 集中管理托管与静态 MCP 服务器：按状态筛选、查看凭据来源与清除操作、将静态 MCP 转为托管，通过独立弹窗 **测试连接** 实时诊断握手与工具列表，并在 **工具弹窗** 中搜索查看服务器提供的全部工具。
 
 ![MCP 精选目录](./assets/screenshots/marketplace-mcp-featured.png)
 
 ![MCP 已配置与托管管理](./assets/screenshots/marketplace-mcp.png)
+
+![MCP 测试连接诊断弹窗](./assets/screenshots/marketplace-mcp-probe.png)
 
 ![MCP 工具列表弹窗](./assets/screenshots/marketplace-mcp-tools.png)
 
@@ -151,11 +169,15 @@ Agent 会通过 `dsh_mcp_pro` 完成端到端安全闭环：
 
 ![AI 审查草稿](./assets/screenshots/marketplace-sec-check.png)
 
-### 技能页
+### 技能页、精选直装与分组管理
 
-在市场顶部的 **技能** 页签中可先通过 **精选** 子页签浏览内置的 100 个 skills.sh All Time 精选技能（支持分类与官方认证筛选、查看仓库子路径、一键复制安装命令或交由 AI 安装），也可切换至 **已安装** 或打开对话标题下方的 **技能** 入口，按来源筛选当前会话可用的全部技能（包含随包提供的 `market-pro` 统一内置技能）并直观查看调用方式（AI 可调用或 `/名称` 调用）。
+在市场顶部的 **技能** 页签中，可先通过 **精选** 子页签浏览内置的 100 个 skills.sh All Time 精选技能（展示真实品牌 Logo，支持功能分类与来源下拉筛选、查看仓库子路径，以及在弹窗中免 `npx` 一键直装到 **DSH 全局目录 `~/.dsh/skills`**、**通用 Agent 目录 `~/.agents/skills`** 或 **指定项目级 `.dsh/skills` 目录**，并自动支持国内 jsDelivr 回退与「交由 AI 核实」）；切换至 **已安装** 或打开对话标题下方的 **技能** 入口，可按来源分组（**用户 / 项目 / 随包提供**）查看当前会话可用的全部技能、打开目录或通过确认弹窗安全删除本地用户/项目技能。
 
-![全局技能页](./assets/screenshots/marketplace-skills.png)
+![全局技能精选页](./assets/screenshots/marketplace-skills.png)
+
+![精选技能直装弹窗](./assets/screenshots/marketplace-skills-install.png)
+
+![已安装技能分组与管理](./assets/screenshots/marketplace-skills-installed.png)
 
 ![对话内技能页](./assets/screenshots/conversation-skills.png)
 
