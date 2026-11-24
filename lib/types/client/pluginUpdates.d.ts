@@ -1,5 +1,7 @@
 /** Update discovery and replacement use the official Host's package identities and decisions. */
 import type { BundleInfo, MarketIndexSummary, MarketQuery, MarketSearchResult, PluginInstallRequestId, PluginUpdateProgress, PluginUpdateResult, PluginVersionList, Registry } from '@deepseek-ai/dsh-api-remotes/client';
+import { type SelectionRestore } from '../pluginUpdateRecovery.ts';
+export { blocksHotUpdates, isBundleInUse } from '../pluginUpdateRecovery.ts';
 type Reply<T> = {
     ok: true;
     value: T;
@@ -24,18 +26,6 @@ export interface UpdateHost {
         readonly application: string;
     }>>;
 }
-/** Whether the Host refused the hot removal because the installed version's rows are still running. */
-export declare function isBundleInUse(result: PluginUpdateResult | undefined): boolean;
-/**
- * Whether this process can no longer hot-swap profile packages after the given update. The Host keeps every later
- * recomposition waiting once a runtime resolution cannot publish (`package-moved`) or modules cannot be compared
- * (`module-comparison`); a removal it then refuses as `bundle-in-use` is the same state. Later hot updates would
- * deselect and fail the same way, so a batch stops and leaves them for after a restart. `no-hmr` is not such a state:
- * without HMR every update installs over the running version.
- */
-export declare function blocksHotUpdates(result: PluginUpdateResult | undefined): boolean;
-/** Outcome of putting back the bundle selection after a failed removal step. */
-export type SelectionRestore = 'restored' | 'failed';
 export interface UpdateMarketHost {
     listIndexes(): Promise<Reply<readonly MarketIndexSummary[]>>;
     search(url: string, query: MarketQuery): Promise<Reply<MarketSearchResult>>;
@@ -123,4 +113,3 @@ export declare function createPluginUpdater(host: () => UpdateHost | undefined, 
     close(): void;
 };
 export type PluginUpdater = ReturnType<typeof createPluginUpdater>;
-export {};

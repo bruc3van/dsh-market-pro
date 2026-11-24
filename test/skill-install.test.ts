@@ -263,13 +263,14 @@ test('deleteInstalledSkillOnHost deletes verified user/project skill dirs and re
   }
 })
 
-test('installFeaturedSkillOnHost fails over to jsDelivr GitHub CDN (fastly -> cdn, main -> master) when GitHub is unreachable', async () => {
+test('installFeaturedSkillOnHost fails over to jsDelivr at the same commit (fastly -> cdn) when GitHub is unreachable', async () => {
   const sandbox = await mkdtemp(join(tmpdir(), 'dsh-skill-jsdelivr-'))
   const home = join(sandbox, 'home')
   try {
     await mkdir(home, { recursive: true })
     const seenUrls: string[] = []
     let fastlyFailed = false
+    const item = findFeaturedSkillById('vercel-labs/skills/find-skills')!
 
     const fakeFetch: typeof fetch = async (input) => {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
@@ -277,14 +278,11 @@ test('installFeaturedSkillOnHost fails over to jsDelivr GitHub CDN (fastly -> cd
       if (url.includes('codeload.github.com') || url.includes('api.github.com')) {
         throw new Error('connect ETIMEDOUT github')
       }
-      if (url.includes('data.jsdelivr.com') && url.includes('@main?structure=flat')) {
-        return new Response('not found', { status: 404 })
-      }
-      if (url.includes('data.jsdelivr.com') && url.includes('@master?structure=flat')) {
+      if (url.includes('data.jsdelivr.com') && url.includes(`@${item.commit}?structure=flat`)) {
         return new Response(JSON.stringify({
           type: 'gh',
           name: 'vercel-labs/skills',
-          version: 'master',
+          version: item.commit,
           files: [
             { name: '/README.md', size: 10 },
             { name: '/skills/other/SKILL.md', size: 10 },
@@ -318,10 +316,13 @@ test('installFeaturedSkillOnHost fails over to jsDelivr GitHub CDN (fastly -> cd
     assert.equal(await readFile(join(res.targetPath, 'SKILL.md'), 'utf8'), '# find-skills via jsDelivr\n')
     assert.equal(await readFile(join(res.targetPath, 'scripts', 'helper.mjs'), 'utf8'), 'export const ok = true\n')
     assert.deepEqual((await readdir(res.targetPath)).sort(), [SKILL_PROVENANCE_FILE, 'SKILL.md', 'scripts'])
-    assert.ok(seenUrls.some(u => u.includes('codeload.github.com')))
-    assert.ok(seenUrls.some(u => u.includes('data.jsdelivr.com') && u.includes('@master?structure=flat')))
-    assert.ok(seenUrls.some(u => u.startsWith('https://fastly.jsdelivr.net/gh/vercel-labs/skills@master/')))
-    assert.ok(seenUrls.some(u => u.startsWith('https://cdn.jsdelivr.net/gh/vercel-labs/skills@master/')))
+    assert.deepEqual(seenUrls.slice(0, 2), [
+      `https://codeload.github.com/${item.source}/tar.gz/${item.commit}`,
+      `https://api.github.com/repos/${item.source}/tarball/${item.commit}`,
+    ])
+    assert.ok(seenUrls.some(u => u.includes('data.jsdelivr.com') && u.includes(`@${item.commit}?structure=flat`)))
+    assert.ok(seenUrls.some(u => u.startsWith(`https://fastly.jsdelivr.net/gh/${item.source}@${item.commit}/`)))
+    assert.ok(seenUrls.some(u => u.startsWith(`https://cdn.jsdelivr.net/gh/${item.source}@${item.commit}/`)))
 
     // Size limit enforcement on jsDelivr fallback
     const oversized = await installFeaturedSkillOnHost(
@@ -358,6 +359,7 @@ test('fetchSkillSubdirFromJsDelivr enforces timeout and AbortSignal while stream
   const start = Date.now()
   const timedOut = await fetchSkillSubdirFromJsDelivr(
     'vercel-labs/skills',
+    findFeaturedSkillById('vercel-labs/skills/find-skills')!.commit,
     'skills/find-skills',
     new AbortController().signal,
     { fetchImpl: async () => hangingResponse(), timeoutMs: 60 },
@@ -380,6 +382,7 @@ test('fetchSkillSubdirFromJsDelivr enforces timeout and AbortSignal while stream
   }
   const cancelled = await fetchSkillSubdirFromJsDelivr(
     'vercel-labs/skills',
+    findFeaturedSkillById('vercel-labs/skills/find-skills')!.commit,
     'skills/find-skills',
     abortController.signal,
     { fetchImpl: abortFetch, timeoutMs: 10_000 },
@@ -409,6 +412,7 @@ test('fetchSkillSubdirFromJsDelivr rejects colon path segments and skips .git an
 
   const res = await fetchSkillSubdirFromJsDelivr(
     'example/root-skill',
+    'a'.repeat(40),
     '',
     new AbortController().signal,
     { fetchImpl: fakeFetch },
@@ -495,9 +499,11 @@ test('curated skill installs record provenance that clears on delete/manual repl
       featuredId: string
       source: string
       path: string
+      commit: string
     }
     assert.equal(marker.featuredId, item.id)
     assert.equal(marker.source, item.source)
+    assert.equal(marker.commit, item.commit)
     assert.equal(await readInstalledSkillFeaturedId(installed.targetPath, 'code-review', { home }), item.id)
 
     // Deleting the curated skill and manually copying a different local `code-review` clears provenance.

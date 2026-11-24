@@ -187,7 +187,10 @@ export interface McpController {
     remove(name: string): Promise<void>;
     restart(name: string): Promise<void>;
     probe(name: string): Promise<void>;
-    save(draft: McpDraft, original: string | undefined): Promise<McpSaveOutcome>;
+    save(draft: McpDraft, edit: {
+        readonly name: string;
+        readonly revision: number;
+    } | undefined): Promise<McpSaveOutcome>;
     /** Store one credential value; resolves to an error message, or '' on success. */
     setCredential(ref: string, value: string): Promise<string>;
     /** Remove one stored credential; resolves to an error message, or '' on success. */

@@ -243,6 +243,7 @@ type Call = { method: string; args: unknown[] }
 
 function fakeHosts(options: {
   host?: Partial<McpHostContext>
+  describeSettings?: () => McpSettingsView
   mutate?: (ns: string, ops: unknown, revision?: number) => { ok: true; value: McpSettingsView } | { ok: false; error: { code: string; message: string } }
   setCredential?: (ref: string) => { ok: true; value: void } | { ok: false; error: { code: string; message: string } }
   frames?: McpServerView[][]
@@ -269,7 +270,7 @@ function fakeHosts(options: {
       return { ok: true, value: { ok: true, toolNames: ['a'], truncated: false, durationMs: 12, closeConfirmed: true } }
     },
     settings: () => ({
-      describe: async () => { record('describe'); return { ok: true, value: { writable: true, namespaces: [{ ...settingsView }] } } },
+      describe: async () => { record('describe'); return { ok: true, value: { writable: true, namespaces: [options.describeSettings?.() ?? { ...settingsView }] } } },
       mutate: async (ns, ops, revision) => {
         record('mutate', ns, ops, revision)
         return options.mutate?.(ns, ops, revision) ?? { ok: true, value: { ...settingsView, revision: (revision ?? 0) + 1 } }
@@ -338,6 +339,67 @@ test('a stale write reloads Settings and reports the conflict', async () => {
   assert.deepEqual(outcome, { ok: false, conflict: true, message: 'settings-conflict: stale' })
   assert.equal(calls.filter(call => call.method === 'describe').length, before + 1)
   detach()
+})
+
+test('an editor opened before another controller disables a server cannot re-enable it with a stale draft', async () => {
+  let current = {
+    ...settingsView,
+    value: { servers: { bridge: { transport: 'stdio', command: 'node', enabled: true } } },
+  }
+  const { hosts, calls } = fakeHosts({
+    describeSettings: () => current,
+    mutate: (_ns, ops, revision) => {
+      assert.equal(revision, current.revision)
+      assert.deepEqual(ops, [{ op: 'set', path: ['servers', 'bridge', 'enabled'], value: false }])
+      current = { ...current, revision: current.revision + 1, value: {
+        servers: { bridge: { ...current.value.servers.bridge, enabled: false } },
+      } }
+      return { ok: true, value: current }
+    },
+  })
+  const first = createMcpController(hosts)
+  const second = createMcpController(hosts)
+  await Promise.all([first.refresh(), second.refresh()])
+  const edit = { name: 'bridge', revision: first.getSnapshot().settings!.revision }
+  const entry = first.getSnapshot().rows.find(row => row.name === edit.name)!.entry!
+  const draft = { ...draftFromEntry(edit.name, entry), cwd: '/new/path' }
+
+  await second.setEnabled(edit.name, false)
+  await first.refresh()
+
+  assert.deepEqual(await first.save(draft, edit), { ok: false, conflict: true, message: 'settings-conflict' })
+  assert.equal(calls.filter(call => call.method === 'mutate').length, 1)
+  assert.equal(current.value.servers.bridge.enabled, false)
+})
+
+test('new and changed plaintext secrets never reach Settings, and an existing secret can be migrated', async () => {
+  const old = { transport: 'stdio', command: 'node', env: { API_TOKEN: 'example-old-token' } }
+  const servers = { legacy: old }
+  const legacySettings = { ...settingsView, value: { servers }, user: { servers } }
+  const { hosts, calls } = fakeHosts({
+    describeSettings: () => legacySettings,
+    mutate: (_ns, _ops, revision) => ({ ok: true, value: { ...legacySettings, revision: revision! + 1 } }),
+  })
+  const controller = createMcpController(hosts)
+  await controller.refresh()
+
+  const edit = { name: 'legacy', revision: settingsView.revision }
+  const original = draftFromEntry(edit.name, old)
+  const draft = { ...original, env: [{ key: 'API_TOKEN', value: 'example-new-token' }] }
+  const blocked = { ok: false, conflict: false, message: 'plaintext-secrets' }
+  assert.deepEqual(await controller.save({ ...draft, name: 'new' }, undefined), blocked)
+  assert.deepEqual(await controller.save(draft, edit), blocked)
+  assert.deepEqual(await controller.save({ ...original, name: 'renamed' }, edit), blocked)
+  assert.ok(!calls.some(call => call.method === 'mutate' || call.method === 'credentials.set'))
+
+  assert.deepEqual(await controller.save({ ...original, cwd: '/work' }, edit), { ok: true })
+  const converted = convertToCredential(draft, 'env.API_TOKEN', 'LEGACY_TOKEN')
+  assert.deepEqual(await controller.save(converted, { ...edit, revision: edit.revision + 1 }), { ok: true })
+  const writes = calls.filter(call => call.method === 'mutate' || call.method === 'credentials.set')
+  assert.deepEqual(writes.map(call => call.method), ['mutate', 'credentials.set', 'mutate'])
+  assert.deepEqual((writes[2]!.args[1] as { value: unknown }[])[0]?.value, {
+    transport: 'stdio', command: 'node', env: { API_TOKEN: '${credential:LEGACY_TOKEN}' }, enabled: true,
+  })
 })
 
 test('a save stores pending secrets first, and writes nothing when one store fails', async () => {
@@ -583,7 +645,7 @@ test('restart and save clear stale probe results for the targeted server', async
 
   const row = controller.getSnapshot().rows.find(r => r.name === 'tuned')!
   const draft = draftFromEntry('tuned', row.entry!)
-  const outcome = await controller.save({ ...draft, enabled: true }, 'tuned')
+  const outcome = await controller.save({ ...draft, enabled: true }, { name: 'tuned', revision: controller.getSnapshot().settings!.revision })
   assert.equal(outcome.ok, true)
   assert.equal(controller.getSnapshot().probes.tuned, undefined, 'save clears stale probe state')
   detach()
@@ -731,4 +793,47 @@ test('local MCP description store saves, renames, clears, and deletes notes', ()
   assert.equal(getMcpDescription('srv-0', fakeStorage), 'refreshed note 0')
   assert.equal(getMcpDescription('srv-1', fakeStorage), '')
   assert.equal(getMcpDescription('srv-200', fakeStorage), 'note 200')
+})
+
+test('DSH JSON import retains host timing settings and reports fields and legacy SSE it cannot import', () => {
+  const result = parseMcpJsonSnippet(JSON.stringify({ servers: {
+    tuned: {
+      transport: 'stdio', command: 'node', startupTimeoutMs: 120_000, toolCallTimeoutMs: 90_000,
+      closeTimeoutMs: 2_000, reconnect: { enabled: false, initialDelayMs: 100, maxDelayMs: 500, maxAttempts: 3, unknown: true },
+      foreignOption: 'unused',
+    },
+    legacy: { transport: 'sse', url: 'https://example.com/sse' },
+  } }))
+  assert.equal(result.ok, true)
+  if (!result.ok) return
+  assert.deepEqual(result.unsupported, ['legacy'])
+  const [parsed] = result.entries
+  assert.equal(result.entries.length, 1)
+  assert.deepEqual(parsed?.ignored, ['foreignOption', 'reconnect.unknown'])
+  assert.deepEqual(entryFromDraft({ ...emptyDraft(), command: parsed!.command, ...parsed!.timing }), {
+    transport: 'stdio', command: 'node', enabled: true, startupTimeoutMs: 120_000, toolCallTimeoutMs: 90_000,
+    closeTimeoutMs: 2_000, reconnect: { enabled: false, initialDelayMs: 100, maxDelayMs: 500, maxAttempts: 3 },
+  })
+  for (const transport of [undefined, '', '  ']) {
+    assert.deepEqual(parseMcpJsonSnippet(JSON.stringify({ transport, type: 'sse', url: 'https://example.com/sse' })),
+      { ok: false, code: 'unsupported-transport', unsupported: [''] })
+  }
+})
+
+test('DSH JSON import reports invalid timeouts and retains values at the accepted limits', () => {
+  for (const timeout of [0, -1, 1.5, 2_147_483_648, '1000']) {
+    const result = parseMcpJsonSnippet(JSON.stringify({
+      command: 'node', startupTimeoutMs: timeout, toolCallTimeoutMs: timeout, closeTimeoutMs: timeout,
+    }))
+    assert.ok(result.ok)
+    const [entry] = result.entries
+    assert.deepEqual(entry!.ignored, ['startupTimeoutMs', 'toolCallTimeoutMs', 'closeTimeoutMs'])
+    assert.deepEqual(entryFromDraft({ ...emptyDraft(), command: entry!.command, ...entry!.timing }),
+      { transport: 'stdio', command: 'node', enabled: true })
+  }
+  const result = parseMcpJsonSnippet('{"command":"node","startupTimeoutMs":1,"closeTimeoutMs":2147483647}')
+  assert.ok(result.ok)
+  assert.deepEqual(result.entries[0]!.ignored, [])
+  assert.equal(result.entries[0]!.timing.startupTimeoutMs, '1')
+  assert.equal(result.entries[0]!.timing.closeTimeoutMs, '2147483647')
 })

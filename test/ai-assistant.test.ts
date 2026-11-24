@@ -1234,6 +1234,65 @@ test('dsh_market_pro check_updates and update_plugins enforce pinned scope, full
   )
 })
 
+test('AI updates report restart requirements from selection restoration and defer when hot updates are blocked', async () => {
+  for (const [removalCode, restoreApplication] of [
+    ['bundle-in-use', 'restart-required'],
+    ['bundle-in-use', 'failed'],
+    ['operation-error', 'restart-required'],
+  ] as const) {
+    let enabled = true
+    const calls: string[] = []
+    const tool = createMarketAiToolDefinition({
+      profile: 'web',
+      readSettings: () => ({ enabled: false, aiAssistantEnabled: true }),
+      readCatalog: async () => { throw new Error('catalog must not be called') },
+      listInstalled: async () => installedResultFixture,
+      readMcp: () => mcpFixture,
+      pluginManager: () => ({
+        listBundles: async () => ['first', 'second'].map(name => ({
+          name, version: '1.0.0', installed: true, enabled: name === 'first' ? enabled : true, update: 'registry',
+        })),
+        listVersions: async () => ({
+          status: 'listed', installed: '1.0.0', registry: null,
+          versions: [{ version: '2.0.0', prerelease: false, bundle: true }],
+        }),
+        updateBundle: async name => {
+          calls.push(`update:${name}`)
+          if (name === 'second') {
+            return { from: '1.0.0', to: '2.0.0', step: 'install', result: { changed: true, application: 'applied' } }
+          }
+          enabled = false
+          return {
+            from: '1.0.0', to: '2.0.0', step: 'remove',
+            result: { changed: false, application: 'failed', error: { code: removalCode } },
+          }
+        },
+        setBundleEnabled: async (name, next) => {
+          calls.push(`select:${name}:${next}`)
+          if (restoreApplication !== 'failed') enabled = next
+          return { application: restoreApplication }
+        },
+      }),
+      getApprover: () => ({ request: async () => 'allowed-once' }),
+    }) as { execute: (args: unknown, exec?: { agent: unknown }) => Promise<string> }
+
+    const result = JSON.parse(await tool.execute({
+      action: 'update_plugins',
+      updates: ['first', 'second'].map(packageName => ({ packageName, version: '2.0.0' })),
+    }, { agent: { id: 'a1' } }))
+    const blocked = removalCode === 'bundle-in-use'
+    assert.deepEqual(calls, blocked ? ['update:first', 'select:first:true'] : ['update:first', 'select:first:true', 'update:second'])
+    assert.equal(enabled, restoreApplication !== 'failed')
+    assert.equal(result.restartRequired, true)
+    assert.equal(result.summary.restoreRestartRequired, restoreApplication === 'restart-required' ? 1 : undefined)
+    assert.match(result.nextStep, /restart DSH/i)
+    assert.deepEqual(result.results.map(({ status, selectionRestore, deferred }) => [status, selectionRestore, deferred]), [
+      ['failed', enabled ? 'restored' : 'failed', undefined],
+      blocked ? ['skipped', undefined, 'restart'] : ['applied', undefined, undefined],
+    ])
+  }
+})
+
 test('dsh_market_pro check_updates and update_plugins support DSH 0.2.2-rc.1 BundleInfo.updatable', async () => {
   const updatedOrder: string[] = []
   const tool = createMarketAiToolDefinition({

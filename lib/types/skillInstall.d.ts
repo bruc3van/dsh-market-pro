@@ -22,7 +22,7 @@ export declare function readInstalledSkillFeaturedId(skillDir: string, skillName
     readonly agentsLock?: ReadonlyMap<string, AgentsSkillLockEntry>;
 }): Promise<string | undefined>;
 /** Build the ordered GitHub archive tarball URLs for one verified `owner/repo`. */
-export declare function skillArchiveUrls(source: string): readonly string[];
+export declare function skillArchiveUrls(source: string, commit: string): readonly string[];
 export type SkillTargetResolution = {
     readonly ok: true;
     readonly rootDir: string;
@@ -38,7 +38,7 @@ export declare function resolveSkillInstallTarget(item: FeaturedSkill, scope: Fe
 export interface InstallFeaturedSkillOptions {
     readonly home?: string;
     readonly fetchImpl?: typeof fetch;
-    readonly archiveUrls?: (source: string) => readonly string[];
+    readonly archiveUrls?: (source: string, commit: string) => readonly string[];
     readonly timeoutMs?: number;
     readonly limits?: SubdirExtractLimits;
     /** Enable jsDelivr GitHub CDN failover when direct GitHub tarball URLs fail (default true). */
@@ -51,7 +51,7 @@ export interface InstallFeaturedSkillOptions {
  * (`data.jsdelivr.com`) and Fastly/CDN edges (`fastly.jsdelivr.net`,
  * `cdn.jsdelivr.net`) when `codeload.github.com` and `api.github.com` fail.
  */
-export declare function fetchSkillSubdirFromJsDelivr(source: string, subdir: string, signal: AbortSignal, options?: {
+export declare function fetchSkillSubdirFromJsDelivr(source: string, ref: string, subdir: string, signal: AbortSignal, options?: {
     readonly fetchImpl?: typeof fetch;
     readonly timeoutMs?: number;
     readonly limits?: SubdirExtractLimits;

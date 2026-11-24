@@ -33,7 +33,7 @@ import {
 } from './mcpFeatured.ts'
 import {
   canProbe, canRestart, commandLine, commandRisks, convertToCredential, draftFromEntry, draftPlaintext, emptyDraft,
-  hasDraftContent, isConfigured, isDraftDirty, isEnabled, matchesMcpSearch, parseMcpJsonSnippet, pendingToStore,
+  hasCustomMcpTiming, hasDraftContent, isConfigured, isDraftDirty, isEnabled, matchesMcpSearch, newDraftPlaintext, parseMcpJsonSnippet, pendingToStore, serversOf,
   splitCommandLine, statusError, statusKind, suggestRef, summarize, targetOf,
   DEFAULT_CLOSE_MS, RECONNECT_DEFAULTS, transportOf, validateDraft,
   type McpDraft, type McpDraftError, type McpPair, type McpRow, type McpStatus, type ParsedMcpSnippet,
@@ -45,6 +45,7 @@ type McpSubTab = 'featured' | 'configured'
 /** Translate the controller's fixed reason tokens; pass Host text through. */
 function reasonText(t: MarketLocale, raw: string): string {
   switch (raw) {
+    case 'plaintext-secrets': return t('mcp.field.secretsRequired')
     case 'settings-unavailable': return t('mcp.reason.settings')
     case 'settings-readonly': return t('mcp.reason.settingsReadonly')
     case 'namespace-missing': return t('mcp.reason.namespace')
@@ -114,7 +115,7 @@ function matchesFilter(row: McpRow, filter: Filter): boolean {
 type McpModalState =
   | { readonly kind: 'closed' }
   | { readonly kind: 'featured'; readonly item: FeaturedMcpServer }
-  | { readonly kind: 'editor'; readonly row: McpRow | null; readonly initialDraft?: McpDraft }
+  | { readonly kind: 'editor'; readonly row: McpRow | null; readonly revision?: number; readonly initialDraft?: McpDraft }
   | { readonly kind: 'probe'; readonly name: string }
 
 /** MCP-owned actions hoisted into the shared tab toolbar alongside the AI assistant button. */
@@ -334,7 +335,7 @@ type EditorSubmitState =
   | { readonly status: 'idle' }
   | { readonly status: 'saving' }
   | { readonly status: 'error'; readonly message: string }
-  | { readonly status: 'conflict'; readonly message: string }
+  | { readonly status: 'conflict' }
 
 type EditorIdleSubmitState = Exclude<EditorSubmitState, { readonly status: 'saving' }>
 
@@ -441,6 +442,13 @@ export function McpView({ t, controller, onBrowsePlugins, onRegisterRefresh, onR
 
   const openDocumentRef = useRef(openDocument)
   openDocumentRef.current = openDocument
+  const openEditModal = (row: McpRow) => {
+    const current = controller.getSnapshot()
+    const latest = current.rows.find(item => item.name === row.name)
+    if (latest?.entry !== undefined && current.settings !== null) {
+      setModal({ kind: 'editor', row: latest, revision: current.settings.revision })
+    }
+  }
   const openAddModalRef = useRef(() => setModal({ kind: 'editor', row: null }))
   const openingDocument = documentState.status === 'opening'
   useEffect(() => {
@@ -708,7 +716,7 @@ export function McpView({ t, controller, onBrowsePlugins, onRegisterRefresh, onR
                 <ul className="dsh_market_cards dsh_market_cardsUniform">
                   {rows.map(row => (
                     <McpCard key={row.name} t={t} row={row} customDescription={descriptions[row.name] ?? ''} snapshot={snapshot} controller={controller} writable={writable}
-                      tools={toolsOf.get(row.name)} onEdit={() => setModal({ kind: 'editor', row })}
+                      tools={toolsOf.get(row.name)} onEdit={() => openEditModal(row)}
                       onProbe={() => openProbe(row.name)} />
                   ))}
                 </ul>
@@ -744,16 +752,14 @@ export function McpView({ t, controller, onBrowsePlugins, onRegisterRefresh, onR
             setModal({ kind: 'closed' })
             viewConfigured(name)
           }}
-          onEditSaved={(row) => {
-            setModal({ kind: 'editor', row })
-          }}
+          onEditSaved={openEditModal}
           onOpenAdvanced={(draft) => {
             setModal({ kind: 'editor', row: null, initialDraft: draft })
           }}
         />
       )}
       {modal.kind === 'editor' && (
-        <McpEditor t={t} row={modal.row} initialDraft={modal.initialDraft} snapshot={snapshot} controller={controller} onClose={() => setModal({ kind: 'closed' })} />
+        <McpEditor t={t} row={modal.row} revision={modal.revision} initialDraft={modal.initialDraft} snapshot={snapshot} controller={controller} onClose={() => setModal({ kind: 'closed' })} />
       )}
       {modal.kind === 'probe' && (
         <ProbeDialog
@@ -765,7 +771,7 @@ export function McpView({ t, controller, onBrowsePlugins, onRegisterRefresh, onR
           writable={writable}
           legacy={snapshot.mode === 'legacy'}
           onRetry={() => { void controller.probe(modal.name) }}
-          onEdit={(row) => setModal({ kind: 'editor', row })}
+          onEdit={openEditModal}
           onClose={() => setModal({ kind: 'closed' })}
         />
       )}
@@ -1906,17 +1912,20 @@ function fieldLabel(draft: McpDraft, where: string): string {
   return where === 'url' ? 'URL_TOKEN' : where.slice(where.indexOf('.') + 1)
 }
 
-function McpEditor({ t, row, initialDraft, snapshot, controller, onClose }: {
-  t: MarketLocale; row: McpRow | null; initialDraft?: McpDraft; snapshot: McpSnapshot; controller: McpController; onClose: () => void
+function McpEditor({ t, row, revision, initialDraft, snapshot, controller, onClose }: {
+  t: MarketLocale; row: McpRow | null; revision?: number; initialDraft?: McpDraft; snapshot: McpSnapshot; controller: McpController; onClose: () => void
 }): ReactElement {
   const [baseline, setBaseline] = useState<McpDraft>(() =>
     row?.entry !== undefined ? draftFromEntry(row.name, row.entry, getMcpDescription(row.name)) : (initialDraft ?? emptyDraft()))
   const [draft, setDraft] = useState<McpDraft>(() => baseline)
+  const [editRevision, setEditRevision] = useState(revision)
   const [argsText, setArgsText] = useState(() => draft.args.join('\n'))
   const [pasteLine, setPasteLine] = useState('')
   const [jsonText, setJsonText] = useState('')
   const [jsonError, setJsonError] = useState('')
   const [jsonNotice, setJsonNotice] = useState('')
+  const [jsonUnsupported, setJsonUnsupported] = useState(false)
+  const [jsonIgnored, setJsonIgnored] = useState<readonly string[]>([])
   const [jsonEntries, setJsonEntries] = useState<readonly ParsedMcpSnippet[]>([])
   // Trust is given to one exact command line; any edit to it asks again.
   const [trustedLine, setTrustedLine] = useState<string | null>(null)
@@ -1930,12 +1939,16 @@ function McpEditor({ t, row, initialDraft, snapshot, controller, onClose }: {
     return () => { mounted.current = false }
   }, [])
   const tracker = useMcpInstallTracker(snapshot, controller, mounted)
-  const [advanced, setAdvanced] = useState(() => [draft.startupTimeoutMs, draft.toolCallTimeoutMs, draft.closeTimeoutMs, draft.initialDelayMs, draft.maxDelayMs, draft.maxAttempts].some(text => text !== '') || !draft.reconnectEnabled)
+  const [advanced, setAdvanced] = useState(() => hasCustomMcpTiming(draft))
   const submitState: EditorSubmitState = editorStatus.status === 'confirm-discard' ? editorStatus.previous : editorStatus
   const saving = submitState.status === 'saving'
   const confirmDiscard = editorStatus.status === 'confirm-discard'
   const conflict = submitState.status === 'conflict'
-  const saveError = submitState.status === 'error' || submitState.status === 'conflict' ? submitState.message : ''
+  const liveRow = row === null ? undefined : snapshot.rows.find(item => item.name === row.name)
+  const latest = liveRow?.entry
+  const deleted = conflict && row !== null && snapshot.settings !== null && latest === undefined
+  const saveError = conflict ? t(deleted ? 'mcp.editor.conflictDeleted' : 'mcp.editor.conflict')
+    : submitState.status === 'error' ? submitState.message : ''
   const taken = new Set([
     ...snapshot.rows.map(item => item.name),
     ...(snapshot.host?.unmanaged ?? []).map(server => server.serverName),
@@ -1952,12 +1965,14 @@ function McpEditor({ t, row, initialDraft, snapshot, controller, onClose }: {
     || baseline.transport !== 'stdio')
   const risks = draft.transport === 'stdio' ? commandRisks(draft.command, draft.args) : []
   const plaintext = draftPlaintext(draft)
+  const previous = row !== null && draft.name.trim() === row.name ? serversOf(snapshot.settings?.user)[row.name] : undefined
+  const requiresCredentials = newDraftPlaintext(draft, previous).length > 0
   const refsTaken = new Set([...draft.pending.map(secret => secret.ref), ...Object.keys(snapshot.credentials)])
   const trusted = trustedLine === line
   const needsTrust = commandChanged && draft.command.trim() !== ''
   // An empty command is not gated here: the click runs validation, which
   // names the missing field instead of leaving a silently disabled button.
-  const canSave = !saving && (!needsTrust || trusted)
+  const canSave = !saving && !deleted && (!needsTrust || trusted)
   const isFreshBlank = row === null && initialDraft === undefined
   const dirty = (isFreshBlank ? hasDraftContent(draft) : isDraftDirty(draft, baseline))
     || pasteLine.trim() !== ''
@@ -2022,21 +2037,28 @@ function McpEditor({ t, row, initialDraft, snapshot, controller, onClose }: {
       url: entry.transport === 'streamable-http' ? entry.url : '',
       headers: entry.transport === 'streamable-http' ? [...entry.headers] : [],
       enabled: entry.enabled ?? true,
+      ...entry.timing,
+      extra: {},
+      pending: [],
     }))
     setArgsText(entry.transport === 'stdio' ? entry.args.join('\n') : '')
-    setJsonNotice(t('mcp.field.jsonImportApplied', { name: entry.name || entry.rawName || entry.url || entry.command }))
+    if (hasCustomMcpTiming(entry.timing)) setAdvanced(true)
+    setJsonNotice(t('mcp.field.jsonImportApplied', { name: entry.name || entry.rawName || t('mcp.field.jsonImportUnnamed') }))
+    setJsonIgnored(entry.ignored)
   }
   const applyJsonImport = () => {
     const parsed = parseMcpJsonSnippet(jsonText)
+    setJsonUnsupported('unsupported' in parsed && parsed.unsupported.length > 0)
     if (!parsed.ok) {
       setJsonEntries([])
       setJsonNotice('')
+      setJsonIgnored([])
       setJsonError(
         parsed.code === 'empty'
           ? t('mcp.field.jsonImportEmpty')
           : parsed.code === 'invalid-json'
             ? t('mcp.field.jsonImportInvalid')
-            : t('mcp.field.jsonImportNoServer'),
+            : parsed.code === 'no-server' ? t('mcp.field.jsonImportNoServer') : '',
       )
       return
     }
@@ -2071,8 +2093,10 @@ function McpEditor({ t, row, initialDraft, snapshot, controller, onClose }: {
       onClose()
       return
     }
+    if (requiresCredentials || (row !== null && editRevision === undefined)) return
     setEditorStatus({ status: 'saving' })
-    const outcome = await controller.save({ ...draft, name: trimmedName }, row?.name)
+    const edit = row !== null && editRevision !== undefined ? { name: row.name, revision: editRevision } : undefined
+    const outcome = await controller.save({ ...draft, name: trimmedName }, edit)
     if (outcome.ok) saveMcpDescription(trimmedName, draft.description, row?.name)
     if (!mounted.current) return
     if (outcome.ok) {
@@ -2093,26 +2117,32 @@ function McpEditor({ t, row, initialDraft, snapshot, controller, onClose }: {
         onClose()
       }
     } else if (outcome.conflict) {
-      setEditorStatus({ status: 'conflict', message: t('mcp.editor.conflict') })
+      setEditorStatus({ status: 'conflict' })
     } else {
       setEditorStatus({ status: 'error', message: t('mcp.saveFailed', { reason: reasonText(t, outcome.message) }) })
     }
   }
-  /** Replace the form with the entry as it now stands; the user's edits are dropped on request only. */
-  const liveRow = row === null ? null : (snapshot.rows.find(item => item.name === row.name) ?? row)
-  const latest = liveRow?.entry
   const retryInstalled = () => {
     const customTimeout = Number(draft.startupTimeoutMs)
     const budgetMs = Math.max(45_000, (Number.isFinite(customTimeout) && customTimeout > 0 ? customTimeout : 30_000) + 15_000)
     return tracker.retry({ isStdio: draft.transport === 'stdio', budgetMs })
   }
+  /** Replace the form with the latest entry at the user’s request. */
   const reloadLatest = () => {
-    if (latest === undefined || row === null) return
+    if (latest === undefined || row === null || snapshot.settings === null) return
     const next = draftFromEntry(row.name, latest, getMcpDescription(row.name))
     setBaseline(next)
+    setEditRevision(snapshot.settings.revision)
     setDraft(next)
+    if (hasCustomMcpTiming(next)) setAdvanced(true)
     setArgsText(next.args.join('\n'))
     setPasteLine('')
+    setJsonText('')
+    setJsonNotice('')
+    setJsonError('')
+    setJsonUnsupported(false)
+    setJsonIgnored([])
+    setJsonEntries([])
     setTrustedLine(null)
     setEditorStatus({ status: 'idle' })
   }
@@ -2185,7 +2215,7 @@ function McpEditor({ t, row, initialDraft, snapshot, controller, onClose }: {
           )
         : (
           <>
-      {liveRow !== null && liveRow.refs.length > 0 && (
+      {liveRow !== undefined && liveRow.refs.length > 0 && (
         <section className="dsh_market_mcpEditorCreds" aria-label={t('mcp.editor.credentials')}>
           <Credentials t={t} row={liveRow} snapshot={snapshot} controller={controller} />
           <small className="dsh_market_meta">{t('mcp.editor.credentialsHint')}</small>
@@ -2216,6 +2246,8 @@ function McpEditor({ t, row, initialDraft, snapshot, controller, onClose }: {
               {jsonNotice !== '' && <small className="dsh_market_meta">{jsonNotice}</small>}
             </div>
             {jsonError !== '' && <span className="dsh_market_cardError">{jsonError}</span>}
+            {jsonUnsupported && <span className="dsh_market_cardNotice" role="status">{t('mcp.field.jsonImportUnsupported')}</span>}
+            {jsonIgnored.length > 0 && <span className="dsh_market_cardNotice" role="status">{t('mcp.field.jsonImportIgnored', { fields: jsonIgnored.join(', ') })}</span>}
             {jsonEntries.length > 1 && (
               <div className="dsh_market_mcpJsonPick">
                 <small className="dsh_market_meta">{t('mcp.field.jsonImportMulti', { count: String(jsonEntries.length) })}</small>
@@ -2302,7 +2334,7 @@ function McpEditor({ t, row, initialDraft, snapshot, controller, onClose }: {
             )}
         {plaintext.length > 0 && (
           <div className="dsh_market_mcpSecrets" role="status">
-            <p>{t('mcp.field.secrets')}</p>
+            <p>{t(requiresCredentials ? 'mcp.field.secretsRequired' : 'mcp.field.secrets')}</p>
             <ul>
               {plaintext.map(where => (
                 <li key={where}>
@@ -2396,7 +2428,7 @@ function McpEditor({ t, row, initialDraft, snapshot, controller, onClose }: {
             : (
               <>
                 <MarketButton size="md" intent="secondary" disabled={saving} onClick={requestClose}>{t('mcp.cancel')}</MarketButton>
-                <MarketButton size="md" type="submit" intent="primary" disabled={!canSave}>{saving ? t('mcp.saving') : t('mcp.save')}</MarketButton>
+                <MarketButton size="md" type="submit" intent="primary" disabled={!canSave || requiresCredentials}>{saving ? t('mcp.saving') : t('mcp.save')}</MarketButton>
               </>
               )}
         </div>

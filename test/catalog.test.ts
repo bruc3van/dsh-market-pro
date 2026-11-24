@@ -591,6 +591,37 @@ test('a failing refresh falls back to the catalog in memory, flagged stale', asy
   }
 })
 
+test('a compact feed with a valid subscription and no valid repository rows leaves the previous cache intact', async () => {
+  const fetch = stubFetch()
+  try {
+    const seat = stubCache()
+    const previous = makeCatalog([plugin()], 7)
+    seat.set({ catalog: previous, marketEtag: '"previous"' })
+    const source = createCatalogSource({ base: 'https://example.test/market-v4.json', marketSize: 200, cache: seat.cache })
+    const pending = source.read(true)
+    fetch.parked[0]!.resolve(jsonResponse({
+      schema_version: 4,
+      categories: [['agents-workflows', 'Agent 工作流', 'Agent workflows']],
+      entries: [{ n: 'owner/repo', c: 10 }],
+      subscription: {
+        format: 1,
+        metadata: { categories: { 'agents-workflows': { title: { zh: 'Agent 工作流', en: 'Agent workflows' } } } },
+        plugins: [{
+          name: 'demo', title: { zh: '示例', en: 'Demo' }, metadata: { category: 'agents-workflows' },
+          versions: [{ version: '1.0.0', source: { type: 'npm', registry: 'https://registry.npmjs.org/' } }],
+        }],
+      },
+    }, '"invalid"'))
+    const result = await pending
+    assert.equal(result.catalog, previous)
+    assert.equal(result.stale, true)
+    assert.match(result.error, /no valid entries/)
+    assert.deepEqual(seat.writes, [])
+  } finally {
+    fetch.restore()
+  }
+})
+
 test('one caller aborting never kills the shared read (M3)', async () => {
   const fetch = stubFetch()
   try {

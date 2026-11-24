@@ -357,6 +357,8 @@ export function deriveMarket(body: unknown, marketSize: number): MarketCatalog {
     })
   }
 
+  if (items.length === 0) throw new Error('the published market carried no valid entries')
+
   // Schema 3/4 is a complete repository catalog. Legacy marketSize reductions
   // must not silently cut an upgraded installation back down to 1000 rows.
   const cut = isCompleteCatalog ? items : items.slice(0, marketSize)
@@ -689,7 +691,7 @@ export function createCatalogSource(options: CatalogOptions): CatalogSource {
   const seedFromCache = (): void => {
     if (snapshot.status === 'loaded') return
     const cached = options.cache?.read()
-    if (cached === undefined || cached.catalog === null) return
+    if (cached === undefined || cached.catalog === null || cached.catalog.items.length === 0) return
     const migratedBase = cached.activeBase ? migrateBuiltIn(cached.activeBase) : ''
     if (migratedBase && !chain.includes(migratedBase)) return
     snapshot = {

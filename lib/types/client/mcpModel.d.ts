@@ -212,6 +212,15 @@ export declare const RECONNECT_DEFAULTS: {
     readonly maxDelayMs: 30000;
     readonly maxAttempts: 10;
 };
+declare function draftTiming(entry: McpEntry): {
+    startupTimeoutMs: string;
+    toolCallTimeoutMs: string;
+    closeTimeoutMs: string;
+    reconnectEnabled: boolean;
+    initialDelayMs: string;
+    maxDelayMs: string;
+    maxAttempts: string;
+};
 /** A draft over an existing entry. */
 export declare function draftFromEntry(name: string, entry: McpEntry, description?: string): McpDraft;
 /** What a field-level validation failure names. */
@@ -240,6 +249,7 @@ export type McpDraftError = {
 };
 /** The editor's numeric fields, all positive integers. */
 export type McpNumberField = 'startupTimeoutMs' | 'toolCallTimeoutMs' | 'closeTimeoutMs' | 'initialDelayMs' | 'maxDelayMs' | 'maxAttempts';
+export declare function hasCustomMcpTiming(timing: Pick<McpDraft, McpNumberField | 'reconnectEnabled'>): boolean;
 /**
  * The same rules the manager enforces at write time, checked before the
  * round trip so the form can point at the field rather than a Host message.
@@ -263,6 +273,8 @@ export declare function saveOps(draft: McpDraft, original: string | undefined): 
 export declare function convertToCredential(draft: McpDraft, where: string, ref: string): McpDraft;
 /** The plaintext secrets a draft still carries, by config path. */
 export declare function draftPlaintext(draft: McpDraft): string[];
+/** A save may retain an existing plaintext value at the same path in the user document. */
+export declare function newDraftPlaintext(draft: McpDraft, previous?: McpEntry): string[];
 /** Summary counts for the page header. */
 export declare function summarize(rows: readonly McpRow[], unmanaged: number): {
     servers: number;
@@ -282,10 +294,17 @@ export interface ParsedMcpSnippet {
     readonly url: string;
     readonly headers: readonly McpPair[];
     readonly enabled?: boolean;
+    readonly timing: ReturnType<typeof draftTiming>;
+    readonly ignored: readonly string[];
 }
 export type ParseMcpJsonResult = {
     readonly ok: true;
     readonly entries: readonly ParsedMcpSnippet[];
+    readonly unsupported: readonly string[];
+} | {
+    readonly ok: false;
+    readonly code: 'unsupported-transport';
+    readonly unsupported: readonly string[];
 } | {
     readonly ok: false;
     readonly code: 'empty' | 'invalid-json' | 'no-server';

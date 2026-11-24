@@ -381,6 +381,20 @@ export const RECONNECT_DEFAULTS = { initialDelayMs: 500, maxDelayMs: 30_000, max
 const numberText = (value: unknown, fallback?: number): string =>
   typeof value === 'number' && value !== fallback ? String(value) : ''
 
+function draftTiming(entry: McpEntry) {
+  const reconnect = entry.reconnect ?? {}
+  return {
+    startupTimeoutMs: entry.startupTimeoutMs === undefined || entry.startupTimeoutMs === DEFAULT_STARTUP_MS
+      ? '' : String(entry.startupTimeoutMs),
+    toolCallTimeoutMs: entry.toolCallTimeoutMs === undefined ? '' : String(entry.toolCallTimeoutMs),
+    closeTimeoutMs: numberText(entry.closeTimeoutMs, DEFAULT_CLOSE_MS),
+    reconnectEnabled: reconnect.enabled !== false,
+    initialDelayMs: numberText(reconnect.initialDelayMs, RECONNECT_DEFAULTS.initialDelayMs),
+    maxDelayMs: numberText(reconnect.maxDelayMs, RECONNECT_DEFAULTS.maxDelayMs),
+    maxAttempts: numberText(reconnect.maxAttempts, RECONNECT_DEFAULTS.maxAttempts),
+  }
+}
+
 /** A draft over an existing entry. */
 export function draftFromEntry(name: string, entry: McpEntry, description = ''): McpDraft {
   const extra: Record<string, unknown> = {}
@@ -399,14 +413,7 @@ export function draftFromEntry(name: string, entry: McpEntry, description = ''):
     url: entry.url ?? '',
     headers: Object.entries(entry.headers ?? {}).map(([key, value]) => ({ key, value })),
     enabled: entry.enabled !== false,
-    startupTimeoutMs: entry.startupTimeoutMs === undefined || entry.startupTimeoutMs === DEFAULT_STARTUP_MS
-      ? '' : String(entry.startupTimeoutMs),
-    toolCallTimeoutMs: entry.toolCallTimeoutMs === undefined ? '' : String(entry.toolCallTimeoutMs),
-    closeTimeoutMs: numberText(entry.closeTimeoutMs, DEFAULT_CLOSE_MS),
-    reconnectEnabled: reconnect.enabled !== false,
-    initialDelayMs: numberText(reconnect.initialDelayMs, RECONNECT_DEFAULTS.initialDelayMs),
-    maxDelayMs: numberText(reconnect.maxDelayMs, RECONNECT_DEFAULTS.maxDelayMs),
-    maxAttempts: numberText(reconnect.maxAttempts, RECONNECT_DEFAULTS.maxAttempts),
+    ...draftTiming(entry),
     extra,
     pending: [],
   }
@@ -441,6 +448,14 @@ const RECONNECT_NUMBER_FIELDS: ReadonlySet<McpNumberField> = new Set(['initialDe
 
 const MAX_TIMER = 2_147_483_647
 
+function isTimingNumber(value: unknown, max = MAX_TIMER): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= max
+}
+
+export function hasCustomMcpTiming(timing: Pick<McpDraft, McpNumberField | 'reconnectEnabled'>): boolean {
+  return !timing.reconnectEnabled || NUMBER_FIELDS.some(field => timing[field] !== '')
+}
+
 /**
  * The same rules the manager enforces at write time, checked before the
  * round trip so the form can point at the field rather than a Host message.
@@ -473,7 +488,7 @@ export function validateDraft(draft: McpDraft, taken: ReadonlySet<string>): McpD
     if (text === '') continue
     const value = Number(text)
     const max = field === 'maxAttempts' ? Number.MAX_SAFE_INTEGER : MAX_TIMER
-    if (!Number.isInteger(value) || value < 1 || value > max) {
+    if (!isTimingNumber(value, max)) {
       errors.push({ field, code: 'number' })
       bad.add(field)
     }
@@ -510,7 +525,7 @@ export function entryFromDraft(draft: McpDraft): Record<string, unknown> {
     if (text === '') continue
     const value = Number(text)
     const max = field === 'maxAttempts' ? Number.MAX_SAFE_INTEGER : MAX_TIMER
-    if (Number.isInteger(value) && value >= 1 && value <= max) reconnect[field] = value
+    if (isTimingNumber(value, max)) reconnect[field] = value
   }
   const { reconnect: _carried, ...extra } = draft.extra
   if (Object.keys(reconnect).length > 0) entry.reconnect = reconnect
@@ -591,6 +606,17 @@ export function draftPlaintext(draft: McpDraft): string[] {
     : { transport: 'streamable-http', url: draft.url, headers: Object.fromEntries(draft.headers.map(pair => [pair.key, pair.value])) })
 }
 
+/** A save may retain an existing plaintext value at the same path in the user document. */
+export function newDraftPlaintext(draft: McpDraft, previous?: McpEntry): string[] {
+  const next = entryFromDraft(draft) as McpEntry
+  const detected = plaintextSecrets(next)
+  if (previous === undefined || detected.length === 0) return detected
+  const previouslyPlain = new Set(plaintextSecrets(previous))
+  const oldValues = new Map(entryStrings(previous).map(([value, path]) => [path, value]))
+  const newValues = new Map(entryStrings(next).map(([value, path]) => [path, value]))
+  return detected.filter(path => !previouslyPlain.has(path) || oldValues.get(path) !== newValues.get(path))
+}
+
 /** Summary counts for the page header. */
 export function summarize(rows: readonly McpRow[], unmanaged: number): { servers: number; connected: number; tools: number } {
   let connected = 0
@@ -617,10 +643,13 @@ export interface ParsedMcpSnippet {
   readonly url: string
   readonly headers: readonly McpPair[]
   readonly enabled?: boolean
+  readonly timing: ReturnType<typeof draftTiming>
+  readonly ignored: readonly string[]
 }
 
 export type ParseMcpJsonResult =
-  | { readonly ok: true; readonly entries: readonly ParsedMcpSnippet[] }
+  | { readonly ok: true; readonly entries: readonly ParsedMcpSnippet[]; readonly unsupported: readonly string[] }
+  | { readonly ok: false; readonly code: 'unsupported-transport'; readonly unsupported: readonly string[] }
   | { readonly ok: false; readonly code: 'empty' | 'invalid-json' | 'no-server' }
 
 /** Sanitize an arbitrary display name (e.g. `"IP location"`) into a valid MCP server id. */
@@ -647,53 +676,80 @@ function pairsFromRecord(value: unknown): McpPair[] {
   return pairs
 }
 
-function parseServerObject(rawName: string, obj: Record<string, unknown>): ParsedMcpSnippet | null {
+function parseServerObject(
+  rawName: string,
+  obj: Record<string, unknown>,
+): ParsedMcpSnippet | 'unsupported-transport' | null {
   const url = typeof obj.url === 'string' && obj.url.trim() !== ''
     ? obj.url.trim()
-    : typeof obj.serverUrl === 'string' && obj.serverUrl.trim() !== ''
-      ? obj.serverUrl.trim()
-      : ''
+    : typeof obj.serverUrl === 'string' ? obj.serverUrl.trim() : ''
   const command = typeof obj.command === 'string' ? obj.command.trim() : ''
-  const rawType = typeof obj.type === 'string' ? obj.type.trim().toLowerCase()
-    : typeof obj.transport === 'string' ? obj.transport.trim().toLowerCase() : ''
-  const description = typeof obj.description === 'string' ? normalizeMcpDescription(obj.description) : ''
-  const explicitHttp = rawType === 'http' || rawType === 'sse' || rawType === 'streamablehttp' || rawType === 'streamable-http'
-  // Without an explicit HTTP type, a non-empty `command` wins over a companion `url` (e.g. a docs/homepage link).
-  const useHttp = url !== '' && (explicitHttp || (rawType !== 'stdio' && command === ''))
+  if (url === '' && command === '') return null
+
+  const rawType = typeof obj.transport === 'string' && obj.transport.trim() !== '' ? obj.transport.trim().toLowerCase()
+    : typeof obj.type === 'string' ? obj.type.trim().toLowerCase() : ''
+  const explicitHttp = rawType === 'http' || rawType === 'streamablehttp' || rawType === 'streamable-http'
+  if (rawType !== '' && rawType !== 'stdio' && !explicitHttp) return 'unsupported-transport'
+  // Without an explicit HTTP type, a command wins over a companion docs URL.
+  const useHttp = explicitHttp || (rawType === '' && command === '')
+  if (useHttp ? url === '' : command === '') return null
+
+  const ignored = new Set(Object.keys(obj))
+  for (const field of ['name', 'type', 'transport']) ignored.delete(field)
+  const advanced: Record<string, unknown> = {}
+  for (const field of ['startupTimeoutMs', 'toolCallTimeoutMs', 'closeTimeoutMs'] as const) {
+    const value = obj[field]
+    if (isTimingNumber(value)) {
+      advanced[field] = value
+      ignored.delete(field)
+    }
+  }
+  if (isRecord(obj.reconnect)) {
+    ignored.delete('reconnect')
+    const reconnect: Record<string, unknown> = {}
+    for (const [key, value] of Object.entries(obj.reconnect)) {
+      if (key === 'enabled' ? typeof value === 'boolean'
+        : Object.hasOwn(RECONNECT_DEFAULTS, key) && isTimingNumber(value, key === 'maxAttempts' ? Number.MAX_SAFE_INTEGER : MAX_TIMER)) {
+        reconnect[key] = value
+      } else {
+        ignored.add(`reconnect.${key}`)
+      }
+    }
+    advanced.reconnect = reconnect
+  }
+  if (typeof obj.enabled === 'boolean') ignored.delete('enabled')
+  if (typeof obj.description === 'string') ignored.delete('description')
+  const pairs = (field: 'env' | 'headers') => {
+    const raw = obj[field]
+    const parsed = pairsFromRecord(raw)
+    if (isRecord(raw) && parsed.length === Object.keys(raw).length) ignored.delete(field)
+    return parsed
+  }
+  const args = !useHttp && Array.isArray(obj.args) ? obj.args.filter((item): item is string => typeof item === 'string') : []
+  const env = useHttp ? [] : pairs('env')
+  const headers = useHttp ? pairs('headers') : []
   if (useHttp) {
-    return {
-      rawName,
-      name: sanitizeServerName(rawName),
-      description,
-      transport: 'streamable-http',
-      command: '',
-      args: [],
-      cwd: '',
-      env: [],
-      url,
-      headers: pairsFromRecord(obj.headers),
-      ...(typeof obj.enabled === 'boolean' ? { enabled: obj.enabled } : {}),
-    }
+    ignored.delete(typeof obj.url === 'string' && obj.url.trim() !== '' ? 'url' : 'serverUrl')
+  } else {
+    ignored.delete('command')
+    if (Array.isArray(obj.args) && args.length === obj.args.length) ignored.delete('args')
+    if (typeof obj.cwd === 'string') ignored.delete('cwd')
   }
-  if (!explicitHttp && command !== '') {
-    const args = Array.isArray(obj.args)
-      ? obj.args.filter((item): item is string => typeof item === 'string')
-      : []
-    return {
-      rawName,
-      name: sanitizeServerName(rawName),
-      description,
-      transport: 'stdio',
-      command,
-      args,
-      cwd: typeof obj.cwd === 'string' ? obj.cwd.trim() : '',
-      env: pairsFromRecord(obj.env),
-      url: '',
-      headers: [],
-      ...(typeof obj.enabled === 'boolean' ? { enabled: obj.enabled } : {}),
-    }
+  return {
+    rawName,
+    name: sanitizeServerName(rawName),
+    description: typeof obj.description === 'string' ? normalizeMcpDescription(obj.description) : '',
+    transport: useHttp ? 'streamable-http' : 'stdio',
+    command: useHttp ? '' : command,
+    args,
+    cwd: !useHttp && typeof obj.cwd === 'string' ? obj.cwd.trim() : '',
+    env,
+    url: useHttp ? url : '',
+    headers,
+    ...(typeof obj.enabled === 'boolean' ? { enabled: obj.enabled } : {}),
+    timing: draftTiming(advanced),
+    ignored: [...ignored],
   }
-  return null
 }
 
 /** Whether a configured or static MCP card matches the search query across visible text and tool names. */
@@ -725,25 +781,19 @@ export function parseMcpJsonSnippet(raw: string): ParseMcpJsonResult {
   if (!isRecord(parsed)) return { ok: false, code: 'no-server' }
 
   const entries: ParsedMcpSnippet[] = []
-  const container = isRecord(parsed.mcpServers) ? parsed.mcpServers
-    : isRecord(parsed.servers) ? parsed.servers : null
-  if (container !== null) {
-    for (const [key, value] of Object.entries(container)) {
-      if (!isRecord(value)) continue
-      const item = parseServerObject(key, value)
-      if (item !== null) entries.push(item)
-    }
-  } else {
-    const bare = parseServerObject(typeof parsed.name === 'string' ? parsed.name : '', parsed)
-    if (bare !== null) {
-      entries.push(bare)
-    } else {
-      for (const [key, value] of Object.entries(parsed)) {
-        if (!isRecord(value)) continue
-        const item = parseServerObject(key, value)
-        if (item !== null) entries.push(item)
-      }
-    }
+  const unsupported: string[] = []
+  const addServer = (name: string, value: unknown): boolean => {
+    if (!isRecord(value)) return false
+    const server = parseServerObject(name, value)
+    if (server === null) return false
+    if (server === 'unsupported-transport') unsupported.push(name)
+    else entries.push(server)
+    return true
   }
-  return entries.length > 0 ? { ok: true, entries } : { ok: false, code: 'no-server' }
+  const container = isRecord(parsed.mcpServers) ? parsed.mcpServers : isRecord(parsed.servers) ? parsed.servers : null
+  if (container !== null || !addServer(typeof parsed.name === 'string' ? parsed.name : '', parsed)) {
+    for (const [name, value] of Object.entries(container ?? parsed)) addServer(name, value)
+  }
+  if (entries.length > 0) return { ok: true, entries, unsupported }
+  return unsupported.length > 0 ? { ok: false, code: 'unsupported-transport', unsupported } : { ok: false, code: 'no-server' }
 }

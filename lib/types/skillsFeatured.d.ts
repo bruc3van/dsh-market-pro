@@ -23,6 +23,8 @@ export interface FeaturedSkill {
     readonly name: string;
     /** Verified GitHub repository slug (`owner/repo`). */
     readonly source: string;
+    /** GitHub commit at which the skill path was verified. */
+    readonly commit: string;
     /** Verified subdirectory path inside the repository containing `SKILL.md` (`""` for repo root). */
     readonly path: string;
     /** Whether marked as official on skills.sh. */

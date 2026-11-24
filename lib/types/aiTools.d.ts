@@ -28,6 +28,7 @@ export interface HostPluginManagerUpdateFace {
         readonly name: string;
         readonly version?: string;
         readonly installed?: boolean;
+        readonly enabled?: boolean;
         readonly update?: 'registry' | 'git';
         readonly updatable?: boolean;
     }[]>;
@@ -48,6 +49,9 @@ export interface HostPluginManagerUpdateFace {
         readonly status: 'refused';
         readonly reason: string;
     }>;
+    setBundleEnabled?: (name: string, enabled: boolean) => Promise<{
+        readonly application: string;
+    }>;
     updateBundle?: (name: string, version: string, options?: {
         readonly registry?: string | null;
         readonly spec?: string;
@@ -59,6 +63,7 @@ export interface HostPluginManagerUpdateFace {
         readonly result: {
             readonly changed: boolean;
             readonly application: string;
+            readonly restartReason?: string;
             readonly stage?: string;
             readonly target?: string;
             readonly error?: {
@@ -72,6 +77,7 @@ export interface HostPluginManagerUpdateFace {
         };
         readonly restore?: {
             readonly application: string;
+            readonly restartReason?: string;
         };
     }>;
 }

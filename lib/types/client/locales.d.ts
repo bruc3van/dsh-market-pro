@@ -566,7 +566,8 @@ export declare const zh: {
     readonly "mcp.editor.add": "添加 MCP 服务器";
     readonly "mcp.editor.edit": "编辑 {name}";
     readonly "mcp.editor.close": "关闭";
-    readonly "mcp.editor.conflict": "这台服务器的配置已在别处被修改。直接保存会用你当前的修改覆盖它；也可以先载入最新配置再修改。";
+    readonly "mcp.editor.conflict": "编辑期间 MCP 设置已变更。草稿仍在，请先核对修改，再载入最新配置重新编辑。";
+    readonly "mcp.editor.conflictDeleted": "编辑期间此服务器已在别处移除。草稿仍在，你可以复制需要的内容，关闭编辑器，再从「添加 MCP」重新添加。";
     readonly "mcp.editor.reload": "载入最新配置";
     readonly "mcp.editor.inherited": "这是继承的服务器，保存后会写入你的覆盖配置；之后可随时恢复默认。";
     readonly "mcp.editor.unsaved": "有未保存的修改，确定放弃吗？";
@@ -589,7 +590,11 @@ export declare const zh: {
     readonly "mcp.field.jsonImportHint": "支持粘贴 Claude / Cursor 风格的 mcpServers JSON，自动识别名称、传输方式、地址与请求头。";
     readonly "mcp.field.jsonImportPlaceholder": "{\"mcpServers\": {\"my-server\": {\"type\": \"streamableHttp\", \"url\": \"https://...\", \"headers\": {\"Authorization\": \"Bearer ...\"}}}}";
     readonly "mcp.field.jsonImportApply": "解析并填入";
-    readonly "mcp.field.jsonImportApplied": "已从 JSON 填入「{name}」，请检查下方字段（如含明文密钥建议点击「转为凭据」）。";
+    readonly "mcp.field.jsonImportApplied": "已从 JSON 填入「{name}」，请检查下方字段。";
+    readonly "mcp.field.jsonImportUnnamed": "未命名服务器";
+    readonly "mcp.field.jsonImportUnsupported": "已跳过使用宿主不支持的传输方式的条目（例如旧版 SSE）。请使用服务器提供的 stdio 或 Streamable HTTP 配置。";
+    readonly "mcp.field.jsonImportIgnored": "以下字段未完整导入：{fields}";
+    readonly "mcp.field.secretsRequired": "请先将新增或修改的明文密钥转为凭据，再保存。";
     readonly "mcp.field.jsonImportMulti": "检测到 {count} 台服务器，点击名称切换填入：";
     readonly "mcp.field.jsonImportEmpty": "请粘贴包含 MCP 服务器配置的 JSON 内容";
     readonly "mcp.field.jsonImportInvalid": "JSON 格式有误，请检查括号与引号后重试";

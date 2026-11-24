@@ -3,6 +3,8 @@ import type {
   BundleInfo, MarketIndexSummary, MarketQuery, MarketSearchResult, PluginInstallRequestId,
   PluginUpdateProgress, PluginUpdateResult, PluginVersionList, Registry,
 } from '@deepseek-ai/dsh-api-remotes/client'
+import { blocksHotUpdates, selectionWasRestored, updateKeepingSelection, type SelectionRestore } from '../pluginUpdateRecovery.ts'
+export { blocksHotUpdates, isBundleInUse } from '../pluginUpdateRecovery.ts'
 
 type Reply<T> = { ok: true; value: T } | { ok: false; error: { message: string } }
 export interface UpdateHost {
@@ -18,60 +20,24 @@ function bundleUpdateKind(bundle: { readonly update?: 'registry' | 'git'; readon
   return bundle.update ?? (bundle.updatable === true ? 'registry' : undefined)
 }
 
-/** Whether the Host refused the hot removal because the installed version's rows are still running. */
-export function isBundleInUse(result: PluginUpdateResult | undefined): boolean {
-  return result?.step === 'remove' && result.result.application === 'failed' && result.result.error?.code === 'bundle-in-use'
-}
-
-/**
- * Whether this process can no longer hot-swap profile packages after the given update. The Host keeps every later
- * recomposition waiting once a runtime resolution cannot publish (`package-moved`) or modules cannot be compared
- * (`module-comparison`); a removal it then refuses as `bundle-in-use` is the same state. Later hot updates would
- * deselect and fail the same way, so a batch stops and leaves them for after a restart. `no-hmr` is not such a state:
- * without HMR every update installs over the running version.
- */
-export function blocksHotUpdates(result: PluginUpdateResult | undefined): boolean {
-  if (result === undefined) return false
-  if (isBundleInUse(result)) return true
-  const profileWide = (reason: string | undefined) => reason === 'package-moved' || reason === 'module-comparison'
-  return profileWide(result.result.restartReason) || profileWide(result.restore?.restartReason)
-}
-
-/** Outcome of putting back the bundle selection after a failed removal step. */
-export type SelectionRestore = 'restored' | 'failed'
-
-/**
- * Run one Host update and, when it fails at the removal step, re-select a bundle that was enabled before.
- * With HMR the Host deselects the bundle before checking whether its rows stopped; a refusal such as
- * `bundle-in-use` leaves it deselected, so the plugin would silently stop loading at the next boot.
- */
-async function updateKeepingSelection(
+async function updateHostBundle(
   api: UpdateHost,
   name: string,
   version: string,
   options: { registry?: Registry; spec?: string; requestId: PluginInstallRequestId },
-): Promise<{ answer: Reply<PluginUpdateResult>; selectionRestore?: SelectionRestore }> {
-  const enabledNow = async (): Promise<boolean | undefined> => {
-    try {
+) {
+  return updateKeepingSelection(
+    async () => {
       const listed = await api.listBundles()
-      if (!listed.ok) return undefined
-      const row = listed.value.find(item => item.name === name)
-      return row?.installed ? row.enabled : undefined
-    } catch { return undefined }
-  }
-  const wasEnabled = typeof api.setBundleEnabled === 'function' ? await enabledNow() : undefined
-  const answer = await api.updateBundle(name, version, options)
-  if (!answer.ok || answer.value.step !== 'remove' || wasEnabled !== true) return { answer }
-  const app = answer.value.result.application
-  if (app !== 'failed' && app !== 'cancelled') return { answer }
-  if (await enabledNow() !== false) return { answer }
-  try {
-    const restored = await api.setBundleEnabled!(name, true)
-    const ok = restored.ok && (restored.value.application === 'applied' || restored.value.application === 'restart-required')
-    return { answer, selectionRestore: ok ? 'restored' : 'failed' }
-  } catch {
-    return { answer, selectionRestore: 'failed' }
-  }
+      return listed.ok ? listed.value.find(item => item.name === name && item.installed)?.enabled : undefined
+    },
+    () => api.updateBundle(name, version, options),
+    answer => answer.ok ? answer.value : undefined,
+    api.setBundleEnabled && (async () => {
+      const restored = await api.setBundleEnabled!(name, true)
+      return restored.ok && selectionWasRestored(restored.value.application)
+    }),
+  )
 }
 export interface UpdateMarketHost {
   listIndexes(): Promise<Reply<readonly MarketIndexSummary[]>>
@@ -450,7 +416,7 @@ export function createPluginUpdater(host: () => UpdateHost | undefined, market: 
         const api = host()
         if (!api) throw new Error('The plugin manager is unavailable.')
         const source = choice.source
-        const { answer, selectionRestore } = await updateKeepingSelection(api, state.packageName, choice.version,
+        const { answer, selectionRestore } = await updateHostBundle(api, state.packageName, choice.version,
           { ...('registry' in source ? { registry: source.registry } : { spec: source.spec }), requestId })
         const applied = answer.ok && (answer.value.result.application === 'applied' || answer.value.result.application === 'restart-required')
         set(answer.ok ? {
@@ -514,7 +480,7 @@ export function createPluginUpdater(host: () => UpdateHost | undefined, market: 
           const api = host()
           if (!api?.updateBundle) throw new Error('The plugin manager is unavailable.')
           const source = entry.source
-          const { answer, selectionRestore } = await updateKeepingSelection(api, entry.packageName, entry.to, {
+          const { answer, selectionRestore } = await updateHostBundle(api, entry.packageName, entry.to, {
             ...('registry' in source ? { registry: source.registry } : { spec: source.spec }),
             requestId,
           })

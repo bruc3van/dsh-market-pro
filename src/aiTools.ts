@@ -13,6 +13,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { z } from 'zod'
 import { registerDynamicAiTool } from './aiRegistry.ts'
 import { PACKAGE_NAME } from './shapes.ts'
+import { blocksHotUpdates, selectionWasRestored, updateKeepingSelection, type SelectionRestore } from './pluginUpdateRecovery.ts'
 import type {
   MarketCatalogResult,
   MarketInstalledResult,
@@ -148,6 +149,7 @@ export interface HostPluginManagerUpdateFace {
     readonly name: string
     readonly version?: string
     readonly installed?: boolean
+    readonly enabled?: boolean
     readonly update?: 'registry' | 'git'
     readonly updatable?: boolean
   }[]>
@@ -166,6 +168,7 @@ export interface HostPluginManagerUpdateFace {
     readonly status: 'refused'
     readonly reason: string
   }>
+  setBundleEnabled?: (name: string, enabled: boolean) => Promise<{ readonly application: string }>
   updateBundle?: (
     name: string,
     version: string,
@@ -177,13 +180,14 @@ export interface HostPluginManagerUpdateFace {
     readonly result: {
       readonly changed: boolean
       readonly application: string
+      readonly restartReason?: string
       readonly stage?: string
       readonly target?: string
       readonly error?: { readonly code?: string; readonly diagnostic?: string }
       readonly packageResult?: { readonly output?: string }
       readonly output?: string
     }
-    readonly restore?: { readonly application: string }
+    readonly restore?: { readonly application: string; readonly restartReason?: string }
   }>
 }
 
@@ -650,16 +654,16 @@ function updatePluginsMeta(summary: {
     return {
       outcome: 'failed',
       nextStep: summary.restartRequired
-        ? 'Report that no plugins were updated, share each failure and rollback status, and ask the user to restart DSH before retrying.'
-        : 'Report that no plugins were updated and share each failure and rollback status without retrying automatically.',
+        ? 'Report that no plugins were updated, share each failure, rollback, and selection restoration status, and ask the user to restart DSH before retrying.'
+        : 'Report that no plugins were updated and share each failure, rollback, and selection restoration status without retrying automatically.',
     }
   }
   if (summary.failed > 0 || summary.skipped > 0) {
     return {
       outcome: 'partial-failure',
       nextStep: summary.restartRequired
-        ? 'Summarize succeeded, failed, and skipped plugins (with rollback status), and remind the user to restart DSH for pending changes to take effect.'
-        : 'Summarize succeeded, failed, and skipped plugins with their error and rollback status.',
+        ? 'Summarize succeeded, failed, and skipped plugins (with rollback and selection restoration status), and remind the user to restart DSH for pending changes to take effect.'
+        : 'Summarize succeeded, failed, and skipped plugins with their errors, rollback, and selection restoration status.',
     }
   }
   if (summary.restartRequired) {
@@ -881,6 +885,8 @@ export function createMarketAiToolDefinition(deps: MarketAiToolDeps): Record<str
           readonly status: string
           readonly self?: boolean
           readonly restore?: string
+          readonly selectionRestore?: SelectionRestore
+          readonly deferred?: 'restart'
           readonly error?: string
         }[] = []
         let applied = 0
@@ -888,9 +894,10 @@ export function createMarketAiToolDefinition(deps: MarketAiToolDeps): Record<str
         let restoreRestartRequired = 0
         let failed = 0
         let skipped = 0
+        let hotUpdatesBlocked = false
         for (let i = 0; i < resolved.plan.length; i += 1) {
           const item = resolved.plan[i]!
-          if (exec?.signal?.aborted) {
+          if (hotUpdatesBlocked || exec?.signal?.aborted) {
             for (let j = i; j < resolved.plan.length; j += 1) {
               const rest = resolved.plan[j]!
               skipped += 1
@@ -899,21 +906,33 @@ export function createMarketAiToolDefinition(deps: MarketAiToolDeps): Record<str
                 from: rest.installed,
                 to: rest.latest,
                 status: 'skipped',
+                ...(hotUpdatesBlocked ? { deferred: 'restart' as const } : {}),
                 ...(rest.self ? { self: true } : {}),
               })
             }
             break
           }
           try {
-            const outcome = await manager.updateBundle(item.packageName, item.latest, {
-              ...('registry' in item.source ? { registry: item.source.registry } : { spec: item.source.spec }),
-              requestId: randomUUID(),
-            })
+            let selectionRestartRequired = false
+            const { answer: outcome, selectionRestore } = await updateKeepingSelection(
+              async () => (await manager.listBundles()).find(row => row.name === item.packageName && row.installed)?.enabled,
+              () => manager.updateBundle!(item.packageName, item.latest, {
+                ...('registry' in item.source ? { registry: item.source.registry } : { spec: item.source.spec }),
+                requestId: randomUUID(),
+              }),
+              answer => answer,
+              manager.setBundleEnabled && (async () => {
+                const restored = await manager.setBundleEnabled!(item.packageName, true)
+                selectionRestartRequired = restored.application === 'restart-required'
+                return selectionWasRestored(restored.application)
+              }),
+            )
+            hotUpdatesBlocked = blocksHotUpdates(outcome)
             const app = outcome.result.application
             if (app === 'applied') applied += 1
             else if (app === 'restart-required') restartRequired += 1
             else failed += 1
-            if (outcome.restore?.application === 'restart-required') restoreRestartRequired += 1
+            if (selectionRestartRequired || outcome.restore?.application === 'restart-required') restoreRestartRequired += 1
             const failureReason = app === 'applied' || app === 'restart-required'
               ? undefined
               : extractUpdateFailureReason(outcome.result)
@@ -924,6 +943,7 @@ export function createMarketAiToolDefinition(deps: MarketAiToolDeps): Record<str
               status: app,
               ...(item.self ? { self: true } : {}),
               ...(outcome.restore ? { restore: outcome.restore.application } : {}),
+              ...(selectionRestore !== undefined ? { selectionRestore } : {}),
               ...(failureReason !== undefined ? { error: failureReason } : {}),
             })
           } catch (error) {
@@ -939,7 +959,7 @@ export function createMarketAiToolDefinition(deps: MarketAiToolDeps): Record<str
             })
           }
         }
-        const needsRestart = restartRequired > 0 || restoreRestartRequired > 0
+        const needsRestart = hotUpdatesBlocked || restartRequired > 0 || restoreRestartRequired > 0
         const succeeded = applied + restartRequired
         const meta = updatePluginsMeta({ succeeded, failed, skipped, restartRequired: needsRestart })
         return JSON.stringify({

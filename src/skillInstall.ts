@@ -128,7 +128,6 @@ export async function readInstalledSkillFeaturedId(
 const DEFAULT_FETCH_TIMEOUT_MS = 12_000
 const JSDELIVR_DATA_API_BASE = 'https://data.jsdelivr.com/v1/packages/gh'
 const JSDELIVR_FILE_HOSTS = ['fastly.jsdelivr.net', 'cdn.jsdelivr.net'] as const
-const JSDELIVR_BRANCH_REFS = ['main', 'master'] as const
 const JSDELIVR_CONCURRENCY = 6
 const MAX_JSDELIVR_MANIFEST_BYTES = 4 * 1024 * 1024
 const DEFAULT_EXTRACT_LIMITS: SubdirExtractLimits = {
@@ -143,10 +142,10 @@ const SCRIPT_PATH_PATTERN = /(^|\/)scripts?\//i
 const SCRIPT_EXT_PATTERN = /\.(?:sh|bash|zsh|ps1|bat|cmd|py|js|mjs|cjs|ts)$/i
 
 /** Build the ordered GitHub archive tarball URLs for one verified `owner/repo`. */
-export function skillArchiveUrls(source: string): readonly string[] {
+export function skillArchiveUrls(source: string, commit: string): readonly string[] {
   return [
-    `https://codeload.github.com/${source}/tar.gz/HEAD`,
-    `https://api.github.com/repos/${source}/tarball/HEAD`,
+    `https://codeload.github.com/${source}/tar.gz/${commit}`,
+    `https://api.github.com/repos/${source}/tarball/${commit}`,
   ]
 }
 
@@ -204,7 +203,7 @@ async function pathExists(path: string): Promise<boolean> {
 export interface InstallFeaturedSkillOptions {
   readonly home?: string
   readonly fetchImpl?: typeof fetch
-  readonly archiveUrls?: (source: string) => readonly string[]
+  readonly archiveUrls?: (source: string, commit: string) => readonly string[]
   readonly timeoutMs?: number
   readonly limits?: SubdirExtractLimits
   /** Enable jsDelivr GitHub CDN failover when direct GitHub tarball URLs fail (default true). */
@@ -312,6 +311,7 @@ async function fetchBufferWithLimit(
  */
 export async function fetchSkillSubdirFromJsDelivr(
   source: string,
+  ref: string,
   subdir: string,
   signal: AbortSignal,
   options: {
@@ -328,133 +328,118 @@ export async function fetchSkillSubdirFromJsDelivr(
   const dataApiBase = (options.dataApiBase ?? JSDELIVR_DATA_API_BASE).replace(/\/+$/, '')
   const fileHosts = options.fileHosts ?? JSDELIVR_FILE_HOSTS
   const normalizedSubdir = normalizeSkillSubpath(subdir)
-  let lastError = 'could not fetch skill files from jsDelivr mirror'
-
-  for (const ref of JSDELIVR_BRANCH_REFS) {
+  if (signal.aborted) return { ok: false, error: 'installation cancelled' }
+  const manifestUrl = `${dataApiBase}/${source}@${ref}?structure=flat`
+  let manifestJson: unknown
+  try {
+    const manifestFetch = await fetchBufferWithLimit(
+      fetchImpl,
+      manifestUrl,
+      { 'user-agent': 'dsh-market-pro', accept: 'application/json' },
+      signal,
+      timeoutMs,
+      MAX_JSDELIVR_MANIFEST_BYTES,
+    )
+    if (!manifestFetch.ok) {
+      return { ok: false, error: `HTTP ${String(manifestFetch.status)} from jsDelivr (${ref})` }
+    }
+    manifestJson = JSON.parse(manifestFetch.buffer.toString('utf8'))
+  } catch (error) {
     if (signal.aborted) return { ok: false, error: 'installation cancelled' }
-    const manifestUrl = `${dataApiBase}/${source}@${ref}?structure=flat`
-    let manifestJson: unknown
-    try {
-      const manifestFetch = await fetchBufferWithLimit(
-        fetchImpl,
-        manifestUrl,
-        { 'user-agent': 'dsh-market-pro', accept: 'application/json' },
-        signal,
-        timeoutMs,
-        MAX_JSDELIVR_MANIFEST_BYTES,
-      )
-      if (!manifestFetch.ok) {
-        lastError = `HTTP ${String(manifestFetch.status)} from jsDelivr (${ref})`
-        continue
-      }
-      manifestJson = JSON.parse(manifestFetch.buffer.toString('utf8'))
-    } catch (error) {
-      if (signal.aborted) return { ok: false, error: 'installation cancelled' }
-      lastError = error instanceof Error ? error.message : String(error)
-      continue
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  }
+
+  const rawFiles = manifestJson !== null && typeof manifestJson === 'object'
+    ? (manifestJson as { files?: unknown }).files
+    : undefined
+  if (!Array.isArray(rawFiles)) {
+    return { ok: false, error: `invalid jsDelivr manifest for ${source}@${ref}` }
+  }
+
+  const candidates: { readonly repoPath: string; readonly relPath: string }[] = []
+  for (const entry of rawFiles) {
+    if (entry === null || typeof entry !== 'object') continue
+    const name = (entry as { name?: unknown }).name
+    if (typeof name !== 'string') continue
+    const relPath = safeRelativeFromFlatEntry(name, normalizedSubdir)
+    if (relPath === null) continue
+    const size = (entry as { size?: unknown }).size
+    if (typeof size === 'number' && size > limits.maxFileBytes) {
+      return { ok: false, error: `skill file "${relPath}" exceeds ${limits.maxFileBytes} bytes limit` }
     }
-
-    const rawFiles = manifestJson !== null && typeof manifestJson === 'object'
-      ? (manifestJson as { files?: unknown }).files
-      : undefined
-    if (!Array.isArray(rawFiles)) {
-      lastError = `invalid jsDelivr manifest for ${source}@${ref}`
-      continue
-    }
-
-    const candidates: { readonly repoPath: string; readonly relPath: string }[] = []
-    for (const entry of rawFiles) {
-      if (entry === null || typeof entry !== 'object') continue
-      const name = (entry as { name?: unknown }).name
-      if (typeof name !== 'string') continue
-      const relPath = safeRelativeFromFlatEntry(name, normalizedSubdir)
-      if (relPath === null) continue
-      const size = (entry as { size?: unknown }).size
-      if (typeof size === 'number' && size > limits.maxFileBytes) {
-        return { ok: false, error: `skill file "${relPath}" exceeds ${limits.maxFileBytes} bytes limit` }
-      }
-      candidates.push({ repoPath: name.slice(1), relPath })
-      if (candidates.length > limits.maxFiles) {
-        return { ok: false, error: `skill directory exceeds maximum ${limits.maxFiles} files limit` }
-      }
-    }
-
-    const hasRootSkillDoc = candidates.some(c => !c.relPath.includes('/') && c.relPath.toLowerCase() === 'skill.md')
-    if (candidates.length === 0 || !hasRootSkillDoc) {
-      lastError = `jsDelivr mirror (${ref}) did not contain SKILL.md under "${normalizedSubdir || '/'}"`
-      continue
-    }
-
-    const downloaded = new Map<string, Buffer>()
-    let totalBytes = 0
-    let cursor = 0
-    let preferredHostIndex = 0
-    let workerError: string | undefined
-
-    const downloadOne = async (candidate: { readonly repoPath: string; readonly relPath: string }): Promise<void> => {
-      const encoded = encodePathSegments(candidate.repoPath)
-      const order = [
-        ...fileHosts.slice(preferredHostIndex),
-        ...fileHosts.slice(0, preferredHostIndex),
-      ]
-      let fileErr = `failed to download ${candidate.relPath}`
-      for (let i = 0; i < order.length; i += 1) {
-        if (signal.aborted || workerError !== undefined) return
-        const host = order[i]!
-        const fileUrl = `https://${host}/gh/${source}@${ref}/${encoded}`
-        try {
-          const fileFetch = await fetchBufferWithLimit(
-            fetchImpl,
-            fileUrl,
-            { 'user-agent': 'dsh-market-pro' },
-            signal,
-            timeoutMs,
-            limits.maxFileBytes,
-          )
-          if (!fileFetch.ok) {
-            fileErr = `HTTP ${String(fileFetch.status)} from ${host}`
-            continue
-          }
-          const buf = fileFetch.buffer
-          totalBytes += buf.byteLength
-          if (totalBytes > limits.maxExtractedBytes) {
-            throw new Error(`extracted skill files exceed ${limits.maxExtractedBytes} bytes limit`)
-          }
-          downloaded.set(candidate.relPath, buf)
-          preferredHostIndex = fileHosts.indexOf(host)
-          return
-        } catch (error) {
-          if (signal.aborted) return
-          fileErr = error instanceof Error ? error.message : String(error)
-          if (fileErr.includes('exceed')) {
-            workerError = fileErr
-            return
-          }
-        }
-      }
-      workerError = fileErr
-    }
-
-    const workers = Array.from({ length: Math.min(JSDELIVR_CONCURRENCY, candidates.length) }, async () => {
-      while (cursor < candidates.length && workerError === undefined && !signal.aborted) {
-        const next = candidates[cursor]!
-        cursor += 1
-        await downloadOne(next)
-      }
-    })
-    await Promise.all(workers)
-
-    if (signal.aborted) return { ok: false, error: 'installation cancelled' }
-    if (workerError !== undefined) {
-      lastError = workerError
-      continue
-    }
-    if (downloaded.size === candidates.length) {
-      return { ok: true, files: downloaded }
+    candidates.push({ repoPath: name.slice(1), relPath })
+    if (candidates.length > limits.maxFiles) {
+      return { ok: false, error: `skill directory exceeds maximum ${limits.maxFiles} files limit` }
     }
   }
 
-  return { ok: false, error: lastError }
+  const hasRootSkillDoc = candidates.some(c => !c.relPath.includes('/') && c.relPath.toLowerCase() === 'skill.md')
+  if (candidates.length === 0 || !hasRootSkillDoc) {
+    return { ok: false, error: `jsDelivr mirror (${ref}) did not contain SKILL.md under "${normalizedSubdir || '/'}"` }
+  }
+
+  const downloaded = new Map<string, Buffer>()
+  let totalBytes = 0
+  let cursor = 0
+  let preferredHostIndex = 0
+  let workerError: string | undefined
+
+  const downloadOne = async (candidate: { readonly repoPath: string; readonly relPath: string }): Promise<void> => {
+    const encoded = encodePathSegments(candidate.repoPath)
+    const order = [
+      ...fileHosts.slice(preferredHostIndex),
+      ...fileHosts.slice(0, preferredHostIndex),
+    ]
+    let fileErr = `failed to download ${candidate.relPath}`
+    for (let i = 0; i < order.length; i += 1) {
+      if (signal.aborted || workerError !== undefined) return
+      const host = order[i]!
+      const fileUrl = `https://${host}/gh/${source}@${ref}/${encoded}`
+      try {
+        const fileFetch = await fetchBufferWithLimit(
+          fetchImpl,
+          fileUrl,
+          { 'user-agent': 'dsh-market-pro' },
+          signal,
+          timeoutMs,
+          limits.maxFileBytes,
+        )
+        if (!fileFetch.ok) {
+          fileErr = `HTTP ${String(fileFetch.status)} from ${host}`
+          continue
+        }
+        const buf = fileFetch.buffer
+        totalBytes += buf.byteLength
+        if (totalBytes > limits.maxExtractedBytes) {
+          throw new Error(`extracted skill files exceed ${limits.maxExtractedBytes} bytes limit`)
+        }
+        downloaded.set(candidate.relPath, buf)
+        preferredHostIndex = fileHosts.indexOf(host)
+        return
+      } catch (error) {
+        if (signal.aborted) return
+        fileErr = error instanceof Error ? error.message : String(error)
+        if (fileErr.includes('exceed')) {
+          workerError = fileErr
+          return
+        }
+      }
+    }
+    workerError = fileErr
+  }
+
+  const workers = Array.from({ length: Math.min(JSDELIVR_CONCURRENCY, candidates.length) }, async () => {
+    while (cursor < candidates.length && workerError === undefined && !signal.aborted) {
+      const next = candidates[cursor]!
+      cursor += 1
+      await downloadOne(next)
+    }
+  })
+  await Promise.all(workers)
+
+  if (signal.aborted) return { ok: false, error: 'installation cancelled' }
+  if (workerError !== undefined) return { ok: false, error: workerError }
+  return { ok: true, files: downloaded }
 }
 
 function failResult(
@@ -517,7 +502,7 @@ export async function installFeaturedSkillOnHost(
   }
 
   const fetchImpl = options.fetchImpl ?? fetch
-  const urls = (options.archiveUrls ?? skillArchiveUrls)(item.source)
+  const urls = (options.archiveUrls ?? skillArchiveUrls)(item.source, item.commit)
   const timeoutMs = options.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS
   const limits = options.limits ?? DEFAULT_EXTRACT_LIMITS
 
@@ -561,7 +546,7 @@ export async function installFeaturedSkillOnHost(
   }
 
   if (files === undefined && options.jsDelivrFallback !== false && !signal.aborted) {
-    const mirror = await fetchSkillSubdirFromJsDelivr(item.source, item.path, signal, {
+    const mirror = await fetchSkillSubdirFromJsDelivr(item.source, item.commit, item.path, signal, {
       fetchImpl,
       timeoutMs,
       limits,
@@ -614,6 +599,7 @@ export async function installFeaturedSkillOnHost(
       featuredId: item.id,
       source: item.source,
       path: item.path,
+      commit: item.commit,
     }, null, 2)}\n`
     await writeFile(join(stageDir, SKILL_PROVENANCE_FILE), provenance, 'utf8')
     if (signal.aborted) {

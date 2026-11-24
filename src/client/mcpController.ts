@@ -17,7 +17,7 @@
  */
 import type { McpAdoptResult, McpHostContext, McpProbeResult } from '../contract.ts'
 import {
-  buildRows, canProbe, entryRefs, pendingToStore, saveOps, serversOf,
+  buildRows, canProbe, entryRefs, newDraftPlaintext, pendingToStore, saveOps, serversOf,
   type McpCredentialInfo, type McpDraft, type McpRow, type McpServerView, type McpSettingsOp, type McpSettingsView,
 } from './mcpModel.ts'
 
@@ -168,7 +168,7 @@ export interface McpController {
   remove(name: string): Promise<void>
   restart(name: string): Promise<void>
   probe(name: string): Promise<void>
-  save(draft: McpDraft, original: string | undefined): Promise<McpSaveOutcome>
+  save(draft: McpDraft, edit: { readonly name: string; readonly revision: number } | undefined): Promise<McpSaveOutcome>
   /** Store one credential value; resolves to an error message, or '' on success. */
   setCredential(ref: string, value: string): Promise<string>
   /** Remove one stored credential; resolves to an error message, or '' on success. */
@@ -446,9 +446,8 @@ export function createMcpController(hosts: McpHosts, options: McpControllerOptio
     ensureWatch()
   }
 
-  const mutate = async (ops: McpSettingsOp[]): Promise<McpSaveOutcome> => {
+  const mutate = async (ops: McpSettingsOp[], view = state.settings): Promise<McpSaveOutcome> => {
     const remote = hosts.settings()
-    const view = state.settings
     if (remote === undefined || view === null) return { ok: false, message: 'settings-unavailable', conflict: false }
     // A write supersedes any read in flight or scheduled: its reply is newer.
     clearTimeout(settingsTimer)
@@ -534,12 +533,28 @@ export function createMcpController(hosts: McpHosts, options: McpControllerOptio
         patchRecord('probes', name, { status: 'error', message: message(error) })
       }
     },
-    async save(draft, original) {
+    async save(draft, edit) {
+      const original = edit?.name
       const report = (outcome: McpSaveOutcome): McpSaveOutcome => {
         if (original === undefined) {
           hosts.onSaveOutcome?.({ draft, original, ok: outcome.ok, message: outcome.ok ? '' : outcome.message })
         }
         return outcome
+      }
+      const view = state.settings
+      if (view === null) return report({ ok: false, message: 'settings-unavailable', conflict: false })
+      const current = serversOf(view.value)
+      const name = draft.name.trim()
+      if (edit !== undefined && (edit.revision !== view.revision || !Object.hasOwn(current, edit.name))) {
+        return report({ ok: false, message: 'settings-conflict', conflict: true })
+      }
+      if (name !== original && (Object.hasOwn(current, name) || state.rows.some(row => row.name === name)
+        || state.host?.unmanaged.some(server => server.serverName === name))) {
+        return report({ ok: false, message: 'name-conflict', conflict: false })
+      }
+      const previous = name === original ? serversOf(view.user)[name] : undefined
+      if (newDraftPlaintext(draft, previous).length > 0) {
+        return report({ ok: false, message: 'plaintext-secrets', conflict: false })
       }
       // Secrets first: an entry that names a credential the store does not
       // hold would land straight in `waiting-credentials`. If a store fails,
@@ -558,7 +573,7 @@ export function createMcpController(hosts: McpHosts, options: McpControllerOptio
         }
       }
       try {
-        const outcome = await mutate(saveOps(draft, original))
+        const outcome = await mutate(saveOps(draft, original), view)
         if (outcome.ok) {
           if (Object.hasOwn(state.probes, draft.name)) patchRecord('probes', draft.name, undefined)
           if (original !== undefined && original !== draft.name && Object.hasOwn(state.probes, original)) {
