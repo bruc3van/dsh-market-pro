@@ -481,8 +481,18 @@ export const cssText = `
   font-size: 11px; line-height: 16px; font-weight: 500; font-variant-numeric: tabular-nums;
 }
 .dsh_market_cards.dsh_market_skillCards { align-items: stretch; }
-.dsh_market_card.dsh_market_skillCard { overflow-wrap: anywhere; }
-.dsh_market_skillCard .dsh_market_name { white-space: normal; }
+/* Installed skill cards share the MCP card geometry: icon and identity,
+   badges, a two-line description, and bottom-pinned actions. */
+.dsh_market_card.dsh_market_skillCard {
+  min-height: 212px; box-sizing: border-box; gap: 10px; padding: 16px;
+  overflow-wrap: anywhere;
+}
+.dsh_market_skillCard > .dsh_market_head { align-items: center; gap: 10px; }
+.dsh_market_skillCard .dsh_market_name { font-size: 14px; line-height: 20px; }
+.dsh_market_skillCard > .dsh_market_desc { -webkit-line-clamp: 2; color: var(--dsw-alias-label-secondary); }
+.dsh_market_skillCard > .dsh_market_head, .dsh_market_skillCard > .dsh_market_skillBadges,
+.dsh_market_skillCard > .dsh_market_desc, .dsh_market_skillCard > .dsh_market_foot { flex: none; }
+.dsh_market_skillCard .dsh_market_hint { margin-left: 4px; vertical-align: 0; }
 .dsh_market_foot.dsh_market_skillFooter { flex-wrap: nowrap; justify-content: space-between; }
 .dsh_market_skillFooter .dsh_market_folderButton {
   flex: none; align-items: center; justify-content: center; width: 28px; height: 28px;
@@ -1265,6 +1275,23 @@ export const cssText = `
 /* The installed set renders in the same card as the catalog rows, so it needs
    no layout of its own — only the live state badge in each card's head and the
    post-action notice line. */
+/* Installed plugin cards share the same geometry as MCP and installed skill
+   cards: icon and identity, badges, a two-line description, optional notices,
+   and bottom-pinned actions. */
+.dsh_market_card.dsh_market_installedCard {
+  min-height: 212px; box-sizing: border-box; gap: 10px; padding: 16px;
+}
+.dsh_market_installedCard > .dsh_market_head { align-items: center; gap: 10px; }
+.dsh_market_installedCard .dsh_market_name { font-size: 14px; line-height: 20px; }
+.dsh_market_installedCard > .dsh_market_desc { -webkit-line-clamp: 2; color: var(--dsw-alias-label-secondary); }
+.dsh_market_installedCard > .dsh_market_head, .dsh_market_installedCard > .dsh_market_skillBadges,
+.dsh_market_installedCard > .dsh_market_desc, .dsh_market_installedCard > .dsh_market_foot { flex: none; }
+.dsh_market_installedCard .dsh_market_cardError,
+.dsh_market_installedCard .dsh_market_cardNotice {
+  margin: 0; font-size: 12px; line-height: 18px; overflow-wrap: anywhere;
+}
+.dsh_market_installedCard .dsh_market_repoIcon { margin-left: auto; vertical-align: 0; }
+.dsh_market_installedCard .dsh_market_hint { margin-left: 4px; vertical-align: 0; }
 .dsh_market_installedNotice {
   margin: 0;
   font-size: 12px;
@@ -1329,34 +1356,59 @@ button.dsh_market_dangerButton { color: var(--dsw-alias-state-error-primary); }
 .dsh_market_mcpState {
   flex: none; margin-left: auto; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary);
 }
+.dsh_market_mcpStateButton {
+  display: inline-flex; align-items: center; gap: 3px;
+  padding: 3px 8px 3px 10px; border: 0; border-radius: 999px; corner-shape: round;
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  font: inherit; font-size: 12px; line-height: 18px; font-weight: 500;
+  white-space: nowrap; cursor: pointer;
+  transition: background-color var(--ds-transition-duration) var(--ds-ease-in-out);
+}
+.dsh_market_mcpStateButton svg {
+  flex: none;
+  opacity: 0.75;
+}
+@media (hover: hover) {
+  .dsh_market_mcpStateButton:hover { background: color-mix(in srgb, currentColor 16%, transparent); }
+}
+.dsh_market_mcpStateButton:active { background: color-mix(in srgb, currentColor 22%, transparent); }
+.dsh_market_mcpStateButton:focus-visible {
+  outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  outline-offset: 2px;
+}
 .dsh_market_mcpState[data-kind="connected"] { color: var(--dsw-alias-state-success-primary, var(--dsw-alias-state-business-primary)); }
 .dsh_market_mcpState[data-kind="issue"],
 .dsh_market_mcpState[data-kind="locked"] { color: var(--dsw-alias-state-error-primary); }
 .dsh_market_mcpState[data-kind="disabled"],
 .dsh_market_mcpState[data-kind="unknown"] { color: var(--dsw-alias-label-tertiary); }
-.dsh_market_mcpCode {
-  margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; line-height: 17px;
-  color: var(--dsw-alias-label-secondary);
-}
 .dsh_market_cardNotice[data-warning="true"] { color: var(--dsw-alias-state-warn-primary); }
 .dsh_market_mcpProbeTools { display: flex; flex-direction: column; gap: 6px; }
 .dsh_market_mcpCreds code, .dsh_market_mcpSecrets code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; overflow-wrap: anywhere;
 }
-/* Every MCP card has one fixed height so the grid reads as an even list;
-   the variable middle (notices, credentials, probe result) scrolls inside
-   the card, and the tool count sits at the right end of the badge row. */
-.dsh_market_card.dsh_market_mcpCard { height: 208px; box-sizing: border-box; overflow: hidden; }
-.dsh_market_card.dsh_market_mcpCard[data-confirming="true"] { height: auto; min-height: 208px; }
+/* MCP cards share the same natural-height geometry as installed plugin and
+   skill cards: icon and identity, semantic badges (with tooltips for secondary
+   notices), a two-line description, blocking errors if any, and bottom-pinned
+   actions — never a cramped inner scrollbar. */
+.dsh_market_card.dsh_market_mcpCard { min-height: 212px; box-sizing: border-box; gap: 10px; padding: 16px; }
+.dsh_market_mcpCard > .dsh_market_head { align-items: center; gap: 10px; }
+.dsh_market_mcpCard .dsh_market_name { font-size: 14px; line-height: 20px; }
+.dsh_market_mcpCard > .dsh_market_desc { -webkit-line-clamp: 2; color: var(--dsw-alias-label-secondary); }
 .dsh_market_mcpCard > .dsh_market_head, .dsh_market_mcpCard > .dsh_market_skillBadges,
-.dsh_market_mcpCard > .dsh_market_mcpCode, .dsh_market_mcpCard > .dsh_market_foot { flex: none; }
-.dsh_market_mcpBody {
-  flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 6px;
-  overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin;
+.dsh_market_mcpCard > .dsh_market_desc, .dsh_market_mcpCard > .dsh_market_foot { flex: none; }
+.dsh_market_mcpCard > .dsh_market_skillBadges { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.dsh_market_mcpCard .dsh_market_hint { margin-left: 4px; vertical-align: 0; }
+.dsh_market_mcpEditorCreds {
+  display: flex; flex-direction: column; gap: 6px; margin-top: 16px; padding: 12px 14px;
+  border: 0.5px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-lg); background: var(--dsw-alias-bg-layer-2);
 }
+.dsh_market_mcpEditorCreds > small { font-size: 12px; line-height: 18px; }
+.dsh_market_mcpEditor > .dsh_market_mcpCreds { margin-top: 16px; }
+.dsh_market_mcpBody {
+  display: flex; flex-direction: column; gap: 6px;
+}
+.dsh_market_mcpBody:empty { display: none; }
 .dsh_market_mcpBody > p { margin: 0; }
-.dsh_market_skillBadges .dsh_market_mcpToolsButton { margin-left: auto; padding: 2px 10px; }
 /* The tools sheet: a fixed-size dialog whose list alone scrolls. */
 .dsh_market_modal:has(.dsh_market_mcpToolsDialog) { width: min(640px, 100%); height: min(600px, 100%); }
 .dsh_market_directPanel.dsh_market_mcpToolsDialog { display: flex; flex-direction: column; padding: 0; overflow: hidden; }
@@ -1431,6 +1483,12 @@ button.dsh_market_dangerButton { color: var(--dsw-alias-state-error-primary); }
   margin: 0; background: var(--dsw-alias-interactive-bg-hover); border: 0; border-radius: var(--dsw-radius-md);
 }
 .dsh_market_mcpField > .dsh_market_chip { align-self: flex-start; }
+.dsh_market_mcpJsonImport {
+  padding: 12px 14px; border-radius: var(--dsw-radius-lg);
+  border: 0.5px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-layer-2);
+}
+.dsh_market_mcpJsonActions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.dsh_market_mcpJsonPick { display: flex; flex-direction: column; gap: 6px; }
 .dsh_market_mcpPair { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .dsh_market_mcpPair input { flex: 1 1 0; }
 .dsh_market_mcpPair .dsh_market_chip { flex: none; }
@@ -1841,8 +1899,9 @@ button.dsh_market_dangerButton { color: var(--dsw-alias-state-error-primary); }
   .dsh_market_cardsUniform { grid-auto-rows: auto; align-items: start; }
   .dsh_market_card { padding: 12px; }
   .dsh_market_catalogCard { padding: 14px; gap: 10px; }
-  .dsh_market_card.dsh_market_mcpCard { height: auto; min-height: 0; overflow: visible; }
-  .dsh_market_mcpBody { overflow: visible; }
+  .dsh_market_card.dsh_market_mcpCard,
+  .dsh_market_card.dsh_market_skillCard,
+  .dsh_market_card.dsh_market_installedCard { min-height: 0; padding: 14px; }
   .dsh_market_foot { gap: 6px 8px; }
   .dsh_market_empty { padding: 28px 16px 24px; }
   .dsh_market_emptyActions { width: 100%; }

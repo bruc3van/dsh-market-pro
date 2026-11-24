@@ -11,7 +11,7 @@
  * - `project-dsh`: `<projectDir>/.dsh/skills/<name>` (project-scoped)
  */
 import { randomBytes } from 'node:crypto'
-import { lstat, mkdir, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, readdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import type {
@@ -21,11 +21,109 @@ import type {
   InstallFeaturedSkillRequest,
   InstallFeaturedSkillResult,
 } from './contract.ts'
-import { findFeaturedSkillById, isDeletableSkillPath, type FeaturedSkill } from './skillsFeatured.ts'
+import {
+  findFeaturedSkillByExactId, findFeaturedSkillById, findFeaturedSkillBySource, isDeletableSkillPath,
+  type FeaturedSkill,
+} from './skillsFeatured.ts'
 import { extractSubdirFromTgzResponse, type SubdirExtractLimits } from './tarball.ts'
 
 /** Strict directory-name pattern for installed skill folders (single path segment). */
 export const SAFE_SKILL_DIR_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/
+/** Provenance marker written inside curated skills installed by `dsh-market-pro`. */
+export const SKILL_PROVENANCE_FILE = '.dsh-market-pro.json'
+
+const MAX_PROVENANCE_BYTES = 16 * 1024
+const MAX_SKILL_LOCK_BYTES = 1024 * 1024
+
+/** One entry parsed from `~/.agents/.skill-lock.json` (written by `npx skills`). */
+export interface AgentsSkillLockEntry {
+  readonly source: string
+  readonly skillPath?: string
+}
+
+/** Read `~/.agents/.skill-lock.json` once per listing to verify `npx skills`-installed provenance. */
+export async function readAgentsSkillLock(home: string = homedir()): Promise<ReadonlyMap<string, AgentsSkillLockEntry>> {
+  const lockPath = join(home, '.agents', '.skill-lock.json')
+  try {
+    const info = await stat(lockPath)
+    if (!info.isFile() || info.size > MAX_SKILL_LOCK_BYTES) return new Map()
+    const raw = await readFile(lockPath, 'utf8')
+    const parsed: unknown = JSON.parse(raw)
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return new Map()
+    const skills = (parsed as { skills?: unknown }).skills
+    if (skills === null || typeof skills !== 'object' || Array.isArray(skills)) return new Map()
+    const out = new Map<string, AgentsSkillLockEntry>()
+    for (const [key, value] of Object.entries(skills as Record<string, unknown>)) {
+      if (value === null || typeof value !== 'object' || Array.isArray(value)) continue
+      const source = (value as { source?: unknown }).source
+      const skillPath = (value as { skillPath?: unknown }).skillPath
+      if (typeof source !== 'string' || source.trim() === '') continue
+      out.set(key.trim().toLowerCase(), {
+        source: source.trim(),
+        ...(typeof skillPath === 'string' && skillPath.trim() !== '' ? { skillPath: skillPath.trim() } : {}),
+      })
+    }
+    return out
+  } catch {
+    return new Map()
+  }
+}
+
+function isInsideAgentsUserSkills(skillDir: string, home: string): boolean {
+  const agentsSkillsRoot = resolve(home, '.agents', 'skills')
+  const normalizedTarget = resolve(skillDir)
+  const rel = relative(agentsSkillsRoot, normalizedTarget)
+  if (rel === '' || rel === '..' || rel.startsWith('..') || isAbsolute(rel)) return false
+  return !rel.includes('/') && !rel.includes('\\')
+}
+
+/**
+ * Resolve the verified curated `featuredId` (`owner/repo/skillId`) for an
+ * installed skill directory on disk, or `undefined` when no provenance matches.
+ */
+export async function readInstalledSkillFeaturedId(
+  skillDir: string,
+  skillName: string,
+  options: {
+    readonly source?: string
+    readonly home?: string
+    readonly agentsLock?: ReadonlyMap<string, AgentsSkillLockEntry>
+  } = {},
+): Promise<string | undefined> {
+  const trimmedName = skillName.trim()
+  if (skillDir.trim() === '' || trimmedName === '') return undefined
+  const markerPath = join(skillDir, SKILL_PROVENANCE_FILE)
+  try {
+    const info = await stat(markerPath)
+    if (info.isFile() && info.size <= MAX_PROVENANCE_BYTES) {
+      const parsed: unknown = JSON.parse(await readFile(markerPath, 'utf8'))
+      if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        const featuredId = (parsed as { featuredId?: unknown }).featuredId
+        if (typeof featuredId === 'string') {
+          const item = findFeaturedSkillByExactId(featuredId)
+          if (item !== undefined
+            && (item.name.toLowerCase() === trimmedName.toLowerCase()
+              || item.skillId.toLowerCase() === trimmedName.toLowerCase())) {
+            return item.id
+          }
+        }
+      }
+    }
+  } catch {
+    // Missing or unreadable marker; fall through to `.skill-lock.json` for `.agents/skills` only.
+  }
+
+  const home = options.home ?? homedir()
+  if (options.source === 'user-agents' || isInsideAgentsUserSkills(skillDir, home)) {
+    const lock = options.agentsLock ?? await readAgentsSkillLock(home)
+    const entry = lock.get(basename(skillDir).trim().toLowerCase()) ?? lock.get(trimmedName.toLowerCase())
+    if (entry !== undefined) {
+      const matched = findFeaturedSkillBySource(entry.source, trimmedName, entry.skillPath)
+      if (matched !== undefined) return matched.id
+    }
+  }
+  return undefined
+}
 
 const DEFAULT_FETCH_TIMEOUT_MS = 12_000
 const JSDELIVR_DATA_API_BASE = 'https://data.jsdelivr.com/v1/packages/gh'
@@ -511,6 +609,13 @@ export async function installFeaturedSkillOnHost(
       await mkdir(dirname(destFile), { recursive: true })
       await writeFile(destFile, content)
     }
+    const provenance = `${JSON.stringify({
+      schemaVersion: 1,
+      featuredId: item.id,
+      source: item.source,
+      path: item.path,
+    }, null, 2)}\n`
+    await writeFile(join(stageDir, SKILL_PROVENANCE_FILE), provenance, 'utf8')
     if (signal.aborted) {
       return failResult(item.id, item.name, request.scope, targetPath, 'cancelled', 'installation cancelled')
     }

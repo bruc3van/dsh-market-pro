@@ -174,6 +174,8 @@ export interface McpPendingSecret {
 /** The editor's working copy of one entry. */
 export interface McpDraft {
     readonly name: string;
+    /** Optional local-only description note persisted by `dsh-market-pro` (never written to `dsh-mcp-manager` Settings). */
+    readonly description: string;
     readonly transport: 'stdio' | 'streamable-http';
     readonly command: string;
     readonly args: readonly string[];
@@ -198,7 +200,9 @@ export interface McpDraft {
 }
 /** Whether the working draft differs from its opened or last-reloaded baseline. */
 export declare function isDraftDirty(draft: McpDraft, baseline: McpDraft): boolean;
-/** A fresh draft. New servers start switched off, so they can be probed first. */
+/** Whether a blank "Add MCP" draft has any user-entered content worth confirming on close. */
+export declare function hasDraftContent(draft: McpDraft): boolean;
+/** A fresh draft. New servers start enabled so saving connects them right away. */
 export declare function emptyDraft(): McpDraft;
 /** `dsh-mcp-client`'s close-timeout default. */
 export declare const DEFAULT_CLOSE_MS = 5000;
@@ -209,7 +213,7 @@ export declare const RECONNECT_DEFAULTS: {
     readonly maxAttempts: 10;
 };
 /** A draft over an existing entry. */
-export declare function draftFromEntry(name: string, entry: McpEntry): McpDraft;
+export declare function draftFromEntry(name: string, entry: McpEntry, description?: string): McpDraft;
 /** What a field-level validation failure names. */
 export type McpDraftError = {
     readonly field: 'name';
@@ -265,3 +269,34 @@ export declare function summarize(rows: readonly McpRow[], unmanaged: number): {
     connected: number;
     tools: number;
 };
+/** One server definition parsed from a pasted MCP JSON snippet. */
+export interface ParsedMcpSnippet {
+    readonly rawName: string;
+    readonly name: string;
+    readonly description: string;
+    readonly transport: 'stdio' | 'streamable-http';
+    readonly command: string;
+    readonly args: readonly string[];
+    readonly cwd: string;
+    readonly env: readonly McpPair[];
+    readonly url: string;
+    readonly headers: readonly McpPair[];
+    readonly enabled?: boolean;
+}
+export type ParseMcpJsonResult = {
+    readonly ok: true;
+    readonly entries: readonly ParsedMcpSnippet[];
+} | {
+    readonly ok: false;
+    readonly code: 'empty' | 'invalid-json' | 'no-server';
+};
+/** Sanitize an arbitrary display name (e.g. `"IP location"`) into a valid MCP server id. */
+export declare function sanitizeServerName(raw: string): string;
+/** Whether a configured or static MCP card matches the search query across visible text and tool names. */
+export declare function matchesMcpSearch(texts: readonly string[], query: string, toolNames?: readonly string[]): boolean;
+/**
+ * Parse a pasted MCP JSON snippet (Claude Desktop / Cursor `mcpServers`,
+ * DSH `servers`, keyed map `{ "name": { ... } }`, or a bare server object).
+ * Tolerates surrounding Markdown code fences.
+ */
+export declare function parseMcpJsonSnippet(raw: string): ParseMcpJsonResult;

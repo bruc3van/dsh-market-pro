@@ -216,11 +216,20 @@ export function pageOf<T>(items: readonly T[], requested: number, size = 50) {
     start: items.length ? offset + 1 : 0, end: Math.min(offset + size, items.length) }
 }
 
-/** Whether one skill survives the current query. */
-export function matchesSkill(skill: MarketSkill, query: string): boolean {
-  if (query === '') return true
-  const haystack = `${skill.name} ${skill.description} ${skill.whenToUse} ${skill.provider} ${skill.source ?? ''} ${skill.sourceDirectory ?? ''}`.toLocaleLowerCase()
-  return query.split(/\s+/).every(word => haystack.includes(word))
+/** Whether one skill survives the current query (including optional curated card copy). */
+export function matchesSkill(skill: MarketSkill, query: string, extra: readonly string[] = []): boolean {
+  const needle = query.trim().toLocaleLowerCase()
+  if (needle === '') return true
+  const haystack = [
+    skill.name,
+    skill.description,
+    skill.whenToUse,
+    skill.provider,
+    skill.source ?? '',
+    skill.sourceDirectory ?? '',
+    ...extra,
+  ].join(' ').toLocaleLowerCase()
+  return needle.split(/\s+/).every(word => haystack.includes(word))
 }
 
 /** The status a package row shows, from its own live facts. */

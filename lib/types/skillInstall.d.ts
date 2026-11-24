@@ -3,6 +3,24 @@ import { type FeaturedSkill } from './skillsFeatured.ts';
 import { type SubdirExtractLimits } from './tarball.ts';
 /** Strict directory-name pattern for installed skill folders (single path segment). */
 export declare const SAFE_SKILL_DIR_NAME: RegExp;
+/** Provenance marker written inside curated skills installed by `dsh-market-pro`. */
+export declare const SKILL_PROVENANCE_FILE = ".dsh-market-pro.json";
+/** One entry parsed from `~/.agents/.skill-lock.json` (written by `npx skills`). */
+export interface AgentsSkillLockEntry {
+    readonly source: string;
+    readonly skillPath?: string;
+}
+/** Read `~/.agents/.skill-lock.json` once per listing to verify `npx skills`-installed provenance. */
+export declare function readAgentsSkillLock(home?: string): Promise<ReadonlyMap<string, AgentsSkillLockEntry>>;
+/**
+ * Resolve the verified curated `featuredId` (`owner/repo/skillId`) for an
+ * installed skill directory on disk, or `undefined` when no provenance matches.
+ */
+export declare function readInstalledSkillFeaturedId(skillDir: string, skillName: string, options?: {
+    readonly source?: string;
+    readonly home?: string;
+    readonly agentsLock?: ReadonlyMap<string, AgentsSkillLockEntry>;
+}): Promise<string | undefined>;
 /** Build the ordered GitHub archive tarball URLs for one verified `owner/repo`. */
 export declare function skillArchiveUrls(source: string): readonly string[];
 export type SkillTargetResolution = {

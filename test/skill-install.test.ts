@@ -5,7 +5,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { gzipSync } from 'node:zlib'
 import { findFeaturedSkillById, isDeletableSkillPath } from '../src/skillsFeatured.ts'
-import { deleteInstalledSkillOnHost, fetchSkillSubdirFromJsDelivr, installFeaturedSkillOnHost, resolveSkillInstallTarget } from '../src/skillInstall.ts'
+import {
+  SKILL_PROVENANCE_FILE, deleteInstalledSkillOnHost, fetchSkillSubdirFromJsDelivr, installFeaturedSkillOnHost,
+  readInstalledSkillFeaturedId, resolveSkillInstallTarget,
+} from '../src/skillInstall.ts'
 
 function tarEntry(path: string, content: Buffer | string, typeFlag = '0'): Buffer {
   const data = typeof content === 'string' ? Buffer.from(content, 'utf8') : content
@@ -314,7 +317,7 @@ test('installFeaturedSkillOnHost fails over to jsDelivr GitHub CDN (fastly -> cd
     assert.equal(res.hasScripts, true)
     assert.equal(await readFile(join(res.targetPath, 'SKILL.md'), 'utf8'), '# find-skills via jsDelivr\n')
     assert.equal(await readFile(join(res.targetPath, 'scripts', 'helper.mjs'), 'utf8'), 'export const ok = true\n')
-    assert.deepEqual((await readdir(res.targetPath)).sort(), ['SKILL.md', 'scripts'])
+    assert.deepEqual((await readdir(res.targetPath)).sort(), [SKILL_PROVENANCE_FILE, 'SKILL.md', 'scripts'])
     assert.ok(seenUrls.some(u => u.includes('codeload.github.com')))
     assert.ok(seenUrls.some(u => u.includes('data.jsdelivr.com') && u.includes('@master?structure=flat')))
     assert.ok(seenUrls.some(u => u.startsWith('https://fastly.jsdelivr.net/gh/vercel-labs/skills@master/')))
@@ -462,6 +465,77 @@ test('deleteInstalledSkillOnHost rejects symlinked skills roots and symlinked in
     })
     assert.equal(directDel.ok, true, directDel.error)
     assert.equal(await readFile(join(outsideSkill, 'SKILL.md'), 'utf8'), '# do not delete')
+  } finally {
+    await rm(sandbox, { recursive: true, force: true })
+  }
+})
+
+test('curated skill installs record provenance that clears on delete/manual replacement and respects .skill-lock.json', async () => {
+  const sandbox = await mkdtemp(join(tmpdir(), 'dsh-skill-provenance-'))
+  try {
+    const home = join(sandbox, 'home')
+    const item = findFeaturedSkillById('mattpocock/skills/code-review')!
+    assert.ok(item)
+
+    const archive = makeTgz([
+      { path: `skills-main/${item.path}/SKILL.md`, content: '---\nname: code-review\n---\n# Matt Pocock review' },
+    ])
+    const installed = await installFeaturedSkillOnHost(
+      { id: item.id, scope: 'user-dsh' },
+      new AbortController().signal,
+      {
+        home,
+        fetchImpl: async () => new Response(new Uint8Array(archive), { status: 200 }),
+      },
+    )
+    assert.equal(installed.ok, true, installed.error)
+    assert.equal(installed.fileCount, 1)
+
+    const marker = JSON.parse(await readFile(join(installed.targetPath, SKILL_PROVENANCE_FILE), 'utf8')) as {
+      featuredId: string
+      source: string
+      path: string
+    }
+    assert.equal(marker.featuredId, item.id)
+    assert.equal(marker.source, item.source)
+    assert.equal(await readInstalledSkillFeaturedId(installed.targetPath, 'code-review', { home }), item.id)
+
+    // Deleting the curated skill and manually copying a different local `code-review` clears provenance.
+    const removed = await deleteInstalledSkillOnHost({ name: 'code-review', sourcePath: installed.targetPath })
+    assert.equal(removed.ok, true, removed.error)
+    await mkdir(installed.targetPath, { recursive: true })
+    await writeFile(join(installed.targetPath, 'SKILL.md'), '---\nname: code-review\n---\n# Custom local review', 'utf8')
+    assert.equal(await readInstalledSkillFeaturedId(installed.targetPath, 'code-review', { home }), undefined)
+
+    // For ~/.agents/skills/*, verified `.skill-lock.json` provenance matches curated skills,
+    // while unrelated repos or mismatched skills do not.
+    const agentsDir = join(home, '.agents')
+    const agentsSkillDir = join(agentsDir, 'skills', 'frontend-design')
+    await mkdir(agentsSkillDir, { recursive: true })
+    await writeFile(join(agentsSkillDir, 'SKILL.md'), '---\nname: frontend-design\n---', 'utf8')
+    await writeFile(join(agentsDir, '.skill-lock.json'), JSON.stringify({
+      version: 3,
+      skills: {
+        'frontend-design': {
+          source: 'anthropics/skills',
+          skillPath: 'skills/frontend-design/SKILL.md',
+        },
+        'code-review': {
+          source: 'someone-else/custom-skills',
+          skillPath: 'skills/code-review/SKILL.md',
+        },
+      },
+    }), 'utf8')
+    assert.equal(
+      await readInstalledSkillFeaturedId(agentsSkillDir, 'frontend-design', { source: 'user-agents', home }),
+      'anthropics/skills/frontend-design',
+    )
+    const otherAgentsSkillDir = join(agentsDir, 'skills', 'code-review')
+    await mkdir(otherAgentsSkillDir, { recursive: true })
+    assert.equal(
+      await readInstalledSkillFeaturedId(otherAgentsSkillDir, 'code-review', { source: 'user-agents', home }),
+      undefined,
+    )
   } finally {
     await rm(sandbox, { recursive: true, force: true })
   }

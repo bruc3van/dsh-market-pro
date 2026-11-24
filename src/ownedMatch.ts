@@ -145,3 +145,44 @@ export function hasRemainingTargets(
   if (targets.length <= 1) return false
   return targets.some(target => ownedByTarget(index, target.install) === undefined)
 }
+
+/**
+ * Reverse lookup: for each installed package, the catalog card that best
+ * describes it (icon, localized title/category/description), using the same
+ * {@link ownedBy} rule as the catalog grid. Exact `packageName` matches win
+ * over repository-level matches; entries carrying an icon win ties.
+ */
+export function catalogIndexForInstalled(
+  packages: readonly MarketInstalledPackage[],
+  catalogItems: readonly MarketPlugin[],
+): ReadonlyMap<string, MarketPlugin> {
+  const out = new Map<string, MarketPlugin>()
+  if (packages.length === 0 || catalogItems.length === 0) return out
+  const index = ownedIndexOf(packages)
+  const score = (item: MarketPlugin): number =>
+    (item.packageName ? 4 : 0) + (item.icon ? 2 : 0) + (item.categoryZh || item.categoryEn ? 1 : 0)
+  const record = (pkg: MarketInstalledPackage, item: MarketPlugin): void => {
+    const existing = out.get(pkg.packageName)
+    if (existing === undefined || score(item) > score(existing)) {
+      out.set(pkg.packageName, item)
+    }
+  }
+  for (const item of catalogItems) {
+    const targets = item.packageName ? [] : uniqueCommandTargets(item)
+    if (targets.length > 1) {
+      const itemRepo = item.fullName.toLowerCase()
+      let anyMatched = false
+      for (const target of targets) {
+        const matched = ownedByTarget(index, target.install)
+        if (matched === undefined) continue
+        if (itemRepo !== '' && matched.repository !== '' && matched.repository.toLowerCase() !== itemRepo) continue
+        record(matched, item)
+        anyMatched = true
+      }
+      if (anyMatched) continue
+    }
+    const matched = ownedBy(index, item)
+    if (matched !== undefined) record(matched, item)
+  }
+  return out
+}

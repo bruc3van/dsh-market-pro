@@ -9,6 +9,7 @@ import {
   FEATURED_MCP_CATEGORIES,
   FEATURED_MCP_SERVERS,
   draftFromFeatured,
+  featuredForServer,
   featuredRuntimeBadge,
   featuredTargetPreview,
   findInstalledFeatured,
@@ -441,5 +442,26 @@ test('resolveFeaturedInstallOutcome tracks connecting, connected, failed, waitin
       { awaitingRetryTransition: true },
     ),
     { kind: 'waiting' },
+  )
+})
+
+test('featuredForServer resolves curated servers by launch target and optional targetless name fallback', () => {
+  const github = byId('github')
+  const filesystem = byId('filesystem')
+  // Matches HTTP server by normalized URL regardless of local server name.
+  assert.equal(
+    featuredForServer({ transport: 'http', url: 'https://api.githubcopilot.com/mcp/' }, 'my-gh')?.id,
+    github.id,
+  )
+  // Matches stdio server by normalized package/command identity.
+  const fsEntry = entryFromDraft(draftFromFeatured(filesystem, { dir: '/tmp' }, { name: 'custom-fs', enabled: true }))
+  assert.equal(featuredForServer(fsEntry, 'custom-fs')?.id, filesystem.id)
+  // Falls back to exact catalog id ONLY when target is absent and name is provided (e.g. plugin-registered).
+  assert.equal(featuredForServer(undefined, 'github')?.id, github.id)
+  assert.equal(featuredForServer(undefined, ''), undefined)
+  // When a target is present but does not match any curated server, never fall back to name.
+  assert.equal(
+    featuredForServer({ transport: 'http', url: 'https://custom.example.com/mcp' }, 'github'),
+    undefined,
   )
 })

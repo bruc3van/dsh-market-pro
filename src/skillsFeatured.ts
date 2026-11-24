@@ -1505,26 +1505,86 @@ export function matchesFeaturedSkill(
   return terms.every(term => haystack.includes(term))
 }
 
+/** Exact lookup by canonical curated id (`owner/repo/skillId`), never falling back to bare names. */
+export function findFeaturedSkillByExactId(id: string): FeaturedSkill | undefined {
+  const needle = id.trim().toLowerCase()
+  if (needle === '') return undefined
+  return FEATURED_SKILLS.find(item => item.id.toLowerCase() === needle)
+}
+
+/**
+ * Resolve a curated skill from verified GitHub provenance (`owner/repo` plus
+ * skill name and optional `SKILL.md` subpath from `.skill-lock.json`).
+ */
+export function findFeaturedSkillBySource(
+  source: string,
+  skillName: string,
+  skillPath?: string,
+): FeaturedSkill | undefined {
+  const repoNeedle = source.trim().toLowerCase()
+  const nameNeedle = skillName.trim().toLowerCase()
+  if (repoNeedle === '' || nameNeedle === '') return undefined
+  const normalizedPath = skillPath === undefined
+    ? undefined
+    : skillPath
+      .replace(/\\/g, '/')
+      .replace(/^\/+|\/+$/g, '')
+      .replace(/(?:^|\/)skill\.md$/i, '')
+      .replace(/\/+$/, '')
+      .toLowerCase()
+  return FEATURED_SKILLS.find((item) => {
+    if (item.source.toLowerCase() !== repoNeedle) return false
+    if (item.name.toLowerCase() !== nameNeedle && item.skillId.toLowerCase() !== nameNeedle) return false
+    if (normalizedPath !== undefined && normalizedPath !== item.path.replace(/^\/+|\/+$/g, '').toLowerCase()) {
+      return false
+    }
+    return true
+  })
+}
+
 /** Minimal shape of an installed local skill needed for featured matching. */
 export interface InstalledSkillLike {
   readonly name: string
   readonly source?: string
   readonly sourceDirectory?: string
   readonly provider?: string
+  /** Verified canonical curated id (`owner/repo/skillId`) resolved from on-disk provenance. */
+  readonly featuredId?: string
 }
 
-/** Match a curated skill against the session's currently available skills. */
+/**
+ * Match a curated skill against the session's currently available skills.
+ *
+ * Requires verified provenance (`featuredId`) so a custom local skill that
+ * merely shares a generic name (e.g. `code-review`) is never misclaimed.
+ */
 export function findInstalledFeaturedSkill<T extends InstalledSkillLike>(
-  item: Pick<FeaturedSkill, 'skillId' | 'name'>,
+  item: Pick<FeaturedSkill, 'id'>,
   installed: readonly T[],
 ): T | null {
-  const idNeedle = item.skillId.toLowerCase()
-  const nameNeedle = item.name.toLowerCase()
+  const idNeedle = item.id.trim().toLowerCase()
+  if (idNeedle === '') return null
   for (const skill of installed) {
-    const current = skill.name.trim().toLowerCase()
-    if (current === idNeedle || current === nameNeedle) return skill
+    const current = skill.featuredId?.trim().toLowerCase() ?? ''
+    if (current === idNeedle) return skill
   }
   return null
+}
+
+let featuredSkillById: Map<string, FeaturedSkill> | undefined
+
+/**
+ * The curated catalog item an installed skill matches, if any: resolved
+ * strictly from verified provenance (`featuredId`), never by bare skill name.
+ */
+export function featuredForSkill(
+  skill: Pick<InstalledSkillLike, 'featuredId'>,
+): FeaturedSkill | undefined {
+  if (featuredSkillById === undefined) {
+    featuredSkillById = new Map(FEATURED_SKILLS.map(item => [item.id.toLowerCase(), item] as const))
+  }
+  const key = skill.featuredId?.trim().toLowerCase() ?? ''
+  return key === '' ? undefined : featuredSkillById.get(key)
 }
 
 /**

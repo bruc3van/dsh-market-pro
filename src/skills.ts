@@ -21,6 +21,7 @@ import { homedir } from 'node:os'
 import { posix, win32 } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { MarketSkill, MarketSkillsResult } from './contract.ts'
+import { readAgentsSkillLock, readInstalledSkillFeaturedId, type AgentsSkillLockEntry } from './skillInstall.ts'
 
 /** The registry face this module needs — structural, so the plugin body owns the import. */
 interface SkillRegistryFace {
@@ -195,21 +196,41 @@ export async function readSkills(
   const { registry, cwd, scope } = view
   try {
     const observation = await registry.snapshot({ cwd, signal, scope })
-    const skills: MarketSkill[] = observation.skills.map(entry => ({
-      name: text(entry.name, 120),
-      description: text(entry.description, 400),
-      whenToUse: text(entry.whenToUse, 400),
-      provider: text(entry.provider, 60),
-      ...(entry.source === undefined ? {} : { source: text(entry.source, 60) }),
-      ...(validPath(entry.path) ? { instructionPath: entry.path } : {}),
-      ...(entry.resourceBase?.kind === 'directory'
-        ? {
-            sourceDirectory: skillDirectory(entry.resourceBase.path, cwd),
-            ...(validPath(entry.resourceBase.path) ? { sourcePath: entry.resourceBase.path } : {}),
-          }
-        : {}),
-      modelInvocable: entry.invocation.modelInvocable,
-      userInvocable: entry.invocation.userInvocable,
+    let agentsLockPromise: Promise<ReadonlyMap<string, AgentsSkillLockEntry>> | undefined
+    const getAgentsLock = (): Promise<ReadonlyMap<string, AgentsSkillLockEntry>> => {
+      agentsLockPromise ??= readAgentsSkillLock()
+      return agentsLockPromise
+    }
+    const skills: MarketSkill[] = await Promise.all(observation.skills.map(async (entry): Promise<MarketSkill> => {
+      const name = text(entry.name, 120)
+      const dirPath = entry.resourceBase?.kind === 'directory' && validPath(entry.resourceBase.path)
+        ? entry.resourceBase.path
+        : undefined
+      const featuredId = dirPath === undefined
+        ? undefined
+        : await readInstalledSkillFeaturedId(dirPath, name, {
+            source: entry.source,
+            ...(entry.source === 'user-agents' || /[\\/]\.agents[\\/]skills[\\/]/i.test(dirPath)
+              ? { agentsLock: await getAgentsLock() }
+              : { agentsLock: new Map() }),
+          })
+      return {
+        name,
+        description: text(entry.description, 400),
+        whenToUse: text(entry.whenToUse, 400),
+        provider: text(entry.provider, 60),
+        ...(entry.source === undefined ? {} : { source: text(entry.source, 60) }),
+        ...(validPath(entry.path) ? { instructionPath: entry.path } : {}),
+        ...(entry.resourceBase?.kind === 'directory'
+          ? {
+              sourceDirectory: skillDirectory(entry.resourceBase.path, cwd),
+              ...(dirPath !== undefined ? { sourcePath: dirPath } : {}),
+            }
+          : {}),
+        ...(featuredId === undefined ? {} : { featuredId }),
+        modelInvocable: entry.invocation.modelInvocable,
+        userInvocable: entry.invocation.userInvocable,
+      }
     }))
     skills.sort((a, b) => a.name.localeCompare(b.name))
     return { skills, ...(cwd === undefined ? {} : { cwd }), complete: observation.complete, error: '' }

@@ -20,12 +20,17 @@ import {
 } from '../src/mcpShapes.ts'
 import {
   buildRows, canProbe, canRestart, commandRisks, convertToCredential, draftFromEntry, emptyDraft, entryFromDraft,
-  isDraftDirty, pendingToStore, saveOps, splitCommandLine, statusKind, suggestRef, targetOf, validateDraft,
+  hasDraftContent, isDraftDirty, matchesMcpSearch, parseMcpJsonSnippet, pendingToStore, sanitizeServerName, saveOps,
+  splitCommandLine, statusKind, suggestRef, targetOf, validateDraft,
   type McpServerView, type McpSettingsView,
 } from '../src/client/mcpModel.ts'
 import {
   createMcpController, staticKey, type McpHosts, type McpManagerFace, type McpPluginChange, type McpPluginRow,
 } from '../src/client/mcpController.ts'
+import {
+  MCP_DESCRIPTION_MAX_LENGTH, deleteMcpDescription, getMcpDescription, saveMcpDescription,
+} from '../src/client/mcpDescriptions.ts'
+import { featuredForServer, featuredMcpSearchTexts } from '../src/client/mcpFeatured.ts'
 
 // ——— shapes ———
 
@@ -582,4 +587,148 @@ test('restart and save clear stale probe results for the targeted server', async
   assert.equal(outcome.ok, true)
   assert.equal(controller.getSnapshot().probes.tuned, undefined, 'save clears stale probe state')
   detach()
+})
+
+test('parseMcpJsonSnippet parses mcpServers HTTP/stdio configs, bare objects, and markdown fences', () => {
+  assert.equal(sanitizeServerName('IP location'), 'ip-location')
+  assert.equal(sanitizeServerName('  My_MCP Server!  '), 'my_mcp-server')
+
+  const fenced = parseMcpJsonSnippet('```json\n' + JSON.stringify({
+    mcpServers: {
+      'IP location': {
+        description: '',
+        type: 'streamableHttp',
+        url: 'https://example.com/mcp',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer sk-test-token-1234',
+        },
+      },
+    },
+  }) + '\n```')
+  assert.equal(fenced.ok, true)
+  if (fenced.ok) {
+    assert.equal(fenced.entries.length, 1)
+    assert.equal(fenced.entries[0]!.name, 'ip-location')
+    assert.equal(fenced.entries[0]!.transport, 'streamable-http')
+    assert.equal(fenced.entries[0]!.url, 'https://example.com/mcp')
+    assert.deepEqual(fenced.entries[0]!.headers, [
+      { key: 'Content-Type', value: 'application/json' },
+      { key: 'Authorization', value: 'Bearer sk-test-token-1234' },
+    ])
+  }
+
+  const stdio = parseMcpJsonSnippet(JSON.stringify({
+    type: 'stdio',
+    command: 'npx',
+    args: ['-y', '@modelcontextprotocol/server-everything'],
+    url: 'https://docs.example.com/homepage',
+    env: { API_KEY: 'secret-123456' },
+  }))
+  assert.equal(stdio.ok, true)
+  if (stdio.ok) {
+    assert.equal(stdio.entries[0]!.transport, 'stdio')
+    assert.equal(stdio.entries[0]!.command, 'npx')
+    assert.deepEqual(stdio.entries[0]!.args, ['-y', '@modelcontextprotocol/server-everything'])
+    assert.deepEqual(stdio.entries[0]!.env, [{ key: 'API_KEY', value: 'secret-123456' }])
+  }
+
+  const typelessBoth = parseMcpJsonSnippet(JSON.stringify({
+    command: 'npx',
+    args: ['-y', '@modelcontextprotocol/server-everything'],
+    url: 'https://docs.example.com/homepage',
+    env: { API_KEY: 'secret-123456' },
+    description: `  Multi\n  line ${'x'.repeat(350)}`,
+  }))
+  assert.equal(typelessBoth.ok, true)
+  if (typelessBoth.ok) {
+    assert.equal(typelessBoth.entries[0]!.transport, 'stdio', 'typeless snippet with command + doc url must keep stdio')
+    assert.equal(typelessBoth.entries[0]!.command, 'npx')
+    assert.deepEqual(typelessBoth.entries[0]!.args, ['-y', '@modelcontextprotocol/server-everything'])
+    assert.deepEqual(typelessBoth.entries[0]!.env, [{ key: 'API_KEY', value: 'secret-123456' }])
+    assert.equal(typelessBoth.entries[0]!.description.length, MCP_DESCRIPTION_MAX_LENGTH)
+    assert.ok(!typelessBoth.entries[0]!.description.includes('\n'))
+  }
+
+  const explicitHttpBoth = parseMcpJsonSnippet(JSON.stringify({
+    type: 'streamableHttp',
+    command: 'npx',
+    url: 'https://example.com/mcp',
+  }))
+  assert.equal(explicitHttpBoth.ok, true)
+  if (explicitHttpBoth.ok) {
+    assert.equal(explicitHttpBoth.entries[0]!.transport, 'streamable-http')
+    assert.equal(explicitHttpBoth.entries[0]!.url, 'https://example.com/mcp')
+  }
+
+  assert.deepEqual(parseMcpJsonSnippet(''), { ok: false, code: 'empty' })
+  assert.deepEqual(parseMcpJsonSnippet('```json\n```'), { ok: false, code: 'empty' })
+  assert.deepEqual(parseMcpJsonSnippet('{bad json'), { ok: false, code: 'invalid-json' })
+  assert.deepEqual(parseMcpJsonSnippet('{"foo": 123}'), { ok: false, code: 'no-server' })
+})
+
+test('matchesMcpSearch matches configured and static cards by curated description, publisher, and tool names', () => {
+  const github = featuredForServer({ transport: 'streamable-http', url: 'https://api.githubcopilot.com/mcp/' })
+  assert.ok(github !== undefined)
+  const texts = ['my-gh', 'https://api.githubcopilot.com/mcp/', '', ...featuredMcpSearchTexts(github, '开发者工具')]
+  assert.equal(matchesMcpSearch(texts, 'GitHub', ['list_issues']), true)
+  assert.equal(matchesMcpSearch(texts, github.descriptionZh.slice(0, 4)), true)
+  assert.equal(matchesMcpSearch(texts, `${github.publisher} list_issues`, ['list_issues']), true)
+  assert.equal(matchesMcpSearch(texts, '开发者工具'), true)
+  assert.equal(matchesMcpSearch(texts, 'nonexistent-keyword', ['list_issues']), false)
+})
+
+test('hasDraftContent ignores blank transport switches and empty header rows on a fresh form', () => {
+  const blank = emptyDraft()
+  assert.equal(blank.enabled, true)
+  assert.equal(hasDraftContent(blank), false)
+  assert.equal(hasDraftContent({ ...blank, transport: 'streamable-http' }), false)
+  assert.equal(hasDraftContent({ ...blank, transport: 'streamable-http', headers: [{ key: '  ', value: '' }] }), false)
+  assert.equal(hasDraftContent({ ...blank, url: 'https://example.com/mcp' }), true)
+  assert.equal(hasDraftContent({ ...blank, name: 'ip-location' }), true)
+  assert.equal(hasDraftContent({ ...blank, description: 'IP lookup' }), true)
+})
+
+test('local MCP description store saves, renames, clears, and deletes notes', () => {
+  const backing = new Map<string, string>()
+  const fakeStorage = {
+    get length() { return backing.size },
+    clear: () => backing.clear(),
+    key: (index: number) => [...backing.keys()][index] ?? null,
+    getItem: (key: string) => backing.get(key) ?? null,
+    setItem: (key: string, value: string) => { backing.set(key, value) },
+    removeItem: (key: string) => { backing.delete(key) },
+  } as Storage
+
+  saveMcpDescription('ip-location', '  Query IP geolocation  ', undefined, fakeStorage)
+  assert.equal(getMcpDescription('ip-location', fakeStorage), 'Query IP geolocation')
+
+  saveMcpDescription('ip-lookup', 'Updated IP note', 'ip-location', fakeStorage)
+  assert.equal(getMcpDescription('ip-location', fakeStorage), '')
+  assert.equal(getMcpDescription('ip-lookup', fakeStorage), 'Updated IP note')
+
+  deleteMcpDescription('ip-lookup', fakeStorage)
+  assert.equal(getMcpDescription('ip-lookup', fakeStorage), '')
+
+  // When storage.setItem throws (e.g. quota exceeded), the in-memory cache stays authoritative.
+  const failingStorage = {
+    ...fakeStorage,
+    setItem: () => { throw new Error('QuotaExceededError') },
+    removeItem: () => { throw new Error('QuotaExceededError') },
+  } as Storage
+  saveMcpDescription('blender', 'Control Blender', undefined, failingStorage)
+  assert.equal(getMcpDescription('blender', failingStorage), 'Control Blender')
+  // Subsequent healthy write clears the memory override cleanly.
+  deleteMcpDescription('blender', fakeStorage)
+  assert.equal(getMcpDescription('blender', fakeStorage), '')
+
+  // Updating an existing key refreshes its LRU position so capping at 200 entries keeps recently updated notes.
+  for (let i = 0; i < 200; i += 1) {
+    saveMcpDescription(`srv-${i}`, `note ${i}`, undefined, fakeStorage)
+  }
+  saveMcpDescription('srv-0', 'refreshed note 0', undefined, fakeStorage)
+  saveMcpDescription('srv-200', 'note 200', undefined, fakeStorage)
+  assert.equal(getMcpDescription('srv-0', fakeStorage), 'refreshed note 0')
+  assert.equal(getMcpDescription('srv-1', fakeStorage), '')
+  assert.equal(getMcpDescription('srv-200', fakeStorage), 'note 200')
 })

@@ -145,15 +145,17 @@ test('narrow containers stack search above full-width selectors and drop desktop
   assert.match(block, /\.dsh_market_pagination\s*\{[^}]*margin-right:\s*0/)
   assert.match(block, /\.dsh_market_cards\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/)
   assert.match(block, /\.dsh_market_cardsUniform\s*\{[^}]*grid-auto-rows:\s*auto/)
-  assert.match(block, /\.dsh_market_card\.dsh_market_mcpCard\s*\{[^}]*height:\s*auto/)
+  assert.match(block, /\.dsh_market_card\.dsh_market_mcpCard[\s\S]*?\{[^}]*min-height:\s*0/)
   assert.match(cssText, /\.dsh_market_dirBody\s*\{[^}]*min-height:\s*0/)
   assert.match(cssText, /\.dsh_market_directPanel\.dsh_market_dirDialog\s+\.dsh_market_cardError\s*\{[^}]*color:\s*var\(--dsw-alias-state-error-primary\)/)
-  // Ensure the narrow MCP card override comes after the desktop 208px height rule.
+  // Ensure the narrow MCP card override comes after the desktop min-height rule.
   assert.ok(
-    cssText.lastIndexOf('.dsh_market_card.dsh_market_mcpCard { height: auto;')
-      > cssText.indexOf('.dsh_market_card.dsh_market_mcpCard { height: 208px;'),
-    'single-column auto height must override the desktop fixed 208px MCP card height',
+    cssText.lastIndexOf('.dsh_market_card.dsh_market_mcpCard,')
+      > cssText.indexOf('.dsh_market_card.dsh_market_mcpCard { min-height: 212px;'),
+    'single-column min-height reset must override the desktop MCP card min-height',
   )
+  assert.match(cssText, /\.dsh_market_card\.dsh_market_skillCard\s*\{[^}]*min-height:\s*212px/)
+  assert.match(cssText, /\.dsh_market_card\.dsh_market_installedCard\s*\{[^}]*min-height:\s*212px/)
 })
 
 test('one overlapping client module cannot remove another module copy\'s stylesheet', async () => {
@@ -529,6 +531,10 @@ test('the skills filter ANDs its words across name, description and provider', (
   assert.ok(matchesSkill(skill, 'flowchart'), 'whenToUse is searchable too')
   assert.ok(matchesSkill(skill, 'drawio diagram'))
   assert.ok(!matchesSkill(skill, 'drawio nonesuch'))
+  // Curated card copy (localized description, repo, category) is searchable alongside SKILL.md fields.
+  assert.ok(matchesSkill(skill, '绘制架构图', ['vercel-labs/skills', '绘制架构图与流程图', '设计与视觉']))
+  assert.ok(matchesSkill(skill, 'drawio 设计与视觉', ['vercel-labs/skills', '绘制架构图与流程图', '设计与视觉']))
+  assert.ok(!matchesSkill(skill, '绘制架构图'))
 })
 
 // ——— the catalog/installed join's remaining helper ———

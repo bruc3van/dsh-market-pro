@@ -27,6 +27,15 @@ export type FeaturedMcpError = {
 };
 /** Find whether a curated server is already configured as a managed or static row. */
 export declare function findInstalledFeatured(item: FeaturedMcpServer, rows: readonly McpRow[], unmanaged: readonly McpUnmanagedServer[]): FeaturedMcpMatch | null;
+/**
+ * The curated catalog item a configured server runs, if any: the same
+ * identity rule {@link findInstalledFeatured} matches by, read the other way,
+ * so a configured card can show the item's icon and description. A row with
+ * no launch target (plugin-registered) falls back to its exact catalog id.
+ */
+export declare function featuredForServer(target: Parameters<typeof mcpIdentityKey>[0] | undefined, name?: string): FeaturedMcpServer | undefined;
+/** Searchable curated metadata shown on a configured or static MCP card. */
+export declare function featuredMcpSearchTexts(featured: FeaturedMcpServer | undefined, categoryLabel?: string): string[];
 /** Validate the server name, required inputs, and credential template syntax before building a draft. */
 export declare function validateFeaturedValues(item: FeaturedMcpServer, rawName: string, values: Readonly<Record<string, string>>, takenNames: ReadonlySet<string>): FeaturedMcpError[];
 /**

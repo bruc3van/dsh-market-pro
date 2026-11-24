@@ -28,7 +28,10 @@ import type {
   InstallFeaturedSkillResult,
   SafeMarketSettings,
 } from './contract.ts'
-import { installFeaturedSkillOnHost, resolveSkillInstallTarget } from './skillInstall.ts'
+import {
+  installFeaturedSkillOnHost, readAgentsSkillLock, readInstalledSkillFeaturedId, resolveSkillInstallTarget,
+  type AgentsSkillLockEntry,
+} from './skillInstall.ts'
 import {
   FEATURED_SKILLS,
   FEATURED_SKILL_CATEGORIES,
@@ -658,19 +661,37 @@ export async function readLiveSessionSkills(ctx: Context, agent: unknown, signal
     : session?.header?.cwd) ?? safeGet<{ defaultDirectory?: string }>('workingDirectory')?.defaultDirectory
   try {
     const observation = await registry.snapshot({ cwd, signal, scope: agent })
-    return {
-      available: true,
-      complete: observation.complete,
-      ...(cwd ? { cwd } : {}),
-      skills: observation.skills.map(entry => ({
+    let agentsLockPromise: Promise<ReadonlyMap<string, AgentsSkillLockEntry>> | undefined
+    const getAgentsLock = (): Promise<ReadonlyMap<string, AgentsSkillLockEntry>> => {
+      agentsLockPromise ??= readAgentsSkillLock()
+      return agentsLockPromise
+    }
+    const skills = await Promise.all(observation.skills.map(async (entry) => {
+      const dirPath = entry.resourceBase?.kind === 'directory' ? entry.resourceBase.path : undefined
+      const featuredId = dirPath === undefined
+        ? undefined
+        : await readInstalledSkillFeaturedId(dirPath, entry.name, {
+            source: entry.source,
+            ...(entry.source === 'user-agents' || /[\\/]\.agents[\\/]skills[\\/]/i.test(dirPath)
+              ? { agentsLock: await getAgentsLock() }
+              : { agentsLock: new Map() }),
+          })
+      return {
         name: entry.name,
         description: entry.description,
         provider: entry.provider,
         ...(entry.source ? { source: entry.source } : {}),
-        ...(entry.resourceBase?.kind === 'directory' ? { sourceDirectory: entry.resourceBase.path } : {}),
+        ...(dirPath ? { sourceDirectory: dirPath } : {}),
+        ...(featuredId ? { featuredId } : {}),
         modelInvocable: entry.invocation.modelInvocable,
         userInvocable: entry.invocation.userInvocable,
-      })),
+      }
+    }))
+    return {
+      available: true,
+      complete: observation.complete,
+      ...(cwd ? { cwd } : {}),
+      skills,
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)

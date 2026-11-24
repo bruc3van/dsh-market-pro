@@ -44,7 +44,7 @@ import type {
 } from '../contract.ts'
 import { FEATURED_CATEGORY, PACKAGE_NAME, SUBSCRIPTION_CATEGORY, isSafeVersion } from '../shapes.ts'
 import type { MarketLocale } from './copy.ts'
-import { hasRemainingTargets, ownedBy, ownedIndexOf, shortName } from './owned.ts'
+import { catalogIndexForInstalled, hasRemainingTargets, ownedBy, ownedIndexOf, shortName } from './owned.ts'
 import {
   INSTALLED_FILTER, SELF_CARD_KEY, allCatalogMatchCount, featuredRows, installedReviewCardKey, marketKey, marketRows, matches, pageOf, sortMarketRows, starCount, stateOf, type MarketSort,
 } from './rows.ts'
@@ -359,9 +359,11 @@ function useInstalled({ t, active, listInstalled, subscribeInstalledChanges, set
  * stays one grid and the eye does not have to re-learn the layout when the
  * filter changes.
  */
-function InstalledCard({ t, item, installed, snapshot, card, installBusy, readiness, onReview, onCheckUpdate, availableVersion }: {
+function InstalledCard({ t, english, item, matched, installed, snapshot, card, installBusy, readiness, onReview, onCheckUpdate, availableVersion }: {
   t: MarketLocale
+  english: boolean
   item: MarketInstalledPackage
+  matched?: MarketPlugin
   installed: ReturnType<typeof useInstalled>
   snapshot: SafeMarketSnapshot
   card: CardState | undefined
@@ -377,11 +379,6 @@ function InstalledCard({ t, item, installed, snapshot, card, installBusy, readin
   const uninstalling = action.status === 'uninstalling' && action.packageName === item.packageName
   const busyRow = toggling || uninstalling
   const confirmRow = (action.status === 'confirming-uninstall' && action.packageName === item.packageName) || uninstalling
-  const metaParts = [
-    item.self ? t('installed.self') : '',
-    item.inBox ? t('installed.inBox') : '',
-    item.unregistered ? t('installed.unregistered') : '',
-  ].filter(part => part !== '')
   const reviewNeedsWorkspace = card?.status === 'needs-workspace' || (readiness === 'none' && card === undefined)
   const reviewDisabled = anyBusy || installBusy || snapshot.profile === null
 
@@ -394,54 +391,65 @@ function InstalledCard({ t, item, installed, snapshot, card, installBusy, readin
     installed: t('installed.installedState'),
     unregistered: t('installed.unregisteredState'),
   }
+  const displayName = (english ? matched?.titleEn : matched?.titleZh) || shortName(item.packageName)
+  const repoSlug = item.repository || matched?.fullName || ''
+  const categoryLabel = matched !== undefined ? (english ? matched.categoryEn : matched.categoryZh) : ''
+  const catalogDesc = matched === undefined ? '' : (english ? matched.descriptionEn || matched.description : matched.description)
+  const description = catalogDesc || item.description
   return (
-    <li className="dsh_market_card">
+    <li className="dsh_market_card dsh_market_installedCard" data-confirming={confirmRow ? 'true' : undefined}>
       <div className="dsh_market_head">
-        <span className="dsh_market_name" title={item.packageName}>{shortName(item.packageName)}</span>
+        <PluginLogo src={matched?.icon} name={displayName} fullName={repoSlug || undefined} />
+        <div className="dsh_market_identity">
+          <span className="dsh_market_name" title={displayName}>{displayName}</span>
+          <span className="dsh_market_packageName" title={item.packageName}>{item.packageName}</span>
+        </div>
         <span className="dsh_market_installedState" data-state={stateOf(item)}>{stateLabels[stateOf(item)]}</span>
       </div>
-      <p className="dsh_market_meta">
-        {metaParts.join(' · ')}
-        {metaParts.length > 0 && item.version !== '' ? ' · ' : ''}
-        {item.version !== '' && `v${item.version}`}
-        {/* The repository identity has already been reduced to owner/name by
-            the Host. Keep the link beside the version it describes instead
-            of spending a full action-button seat on it. */}
-        {item.repository !== '' && (
-          <Tooltip label={`${t('repo')}: ${item.repository}`} side="top" portal>
-          <a
-            className="dsh_market_repoIcon"
-            href={`https://github.com/${item.repository}`}
-            target="_blank"
-            rel="noreferrer"
-            aria-label={`${t('repo')}: ${item.repository}`}
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path fill="currentColor" d="M12 .7a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2.23c-3.22.7-3.9-1.37-3.9-1.37-.53-1.34-1.29-1.7-1.29-1.7-1.05-.72.08-.71.08-.71 1.17.08 1.78 1.2 1.78 1.2 1.04 1.77 2.72 1.26 3.38.96.1-.75.4-1.26.74-1.55-2.57-.29-5.27-1.28-5.27-5.68 0-1.26.45-2.28 1.19-3.08-.12-.29-.52-1.46.11-3.04 0 0 .97-.31 3.16 1.18A10.98 10.98 0 0 1 12 6.16c.98 0 1.94.13 2.86.38 2.2-1.49 3.16-1.18 3.16-1.18.63 1.58.23 2.75.11 3.04.74.8 1.19 1.82 1.19 3.08 0 4.41-2.71 5.38-5.29 5.67.42.36.79 1.06.79 2.14v3.26c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .7Z" />
-            </svg>
-          </a>
-          </Tooltip>
-        )}
-        {/* The how-and-why of a desktop seat, folded behind a hint icon: it
-            matters exactly once — when someone wonders what this row is —
-            and as a standing paragraph it dwarfed the card it explains.
-            Focusable, so the tooltip is reachable without a pointer. */}
+      <div className="dsh_market_meta dsh_market_skillBadges">
+        {categoryLabel !== '' && <span className="dsh_market_categoryTag">{categoryLabel}</span>}
+        {item.version !== '' && <span className="dsh_market_categoryTag">{`v${item.version}`}</span>}
+        {item.self && <span className="dsh_market_categoryTag">{t('installed.self')}</span>}
         {item.inBox && (
-          <Tooltip label={t('installed.inBoxNotice')} side="top" portal openOnClick maxWidth={280}>
-            <span className="dsh_market_hint" tabIndex={0} aria-label={t('installed.inBoxNotice')}>
-              <IconInfoOutlineRegular size={14} />
-            </span>
-          </Tooltip>
+          <span className="dsh_market_categoryTag">
+            {t('installed.inBox')}
+            <Tooltip label={t('installed.inBoxNotice')} side="top" portal openOnClick maxWidth={280}>
+              <span className="dsh_market_hint" tabIndex={0} aria-label={t('installed.inBoxNotice')}>
+                <IconInfoOutlineRegular size={13} />
+              </span>
+            </Tooltip>
+          </span>
         )}
         {item.unregistered && (
-          <Tooltip label={t('installed.unregisteredNotice')} side="top" portal openOnClick maxWidth={280}>
-            <span className="dsh_market_hint" tabIndex={0} aria-label={t('installed.unregisteredNotice')}>
-              <IconInfoOutlineRegular size={14} />
-            </span>
+          <span className="dsh_market_categoryTag">
+            {t('installed.unregistered')}
+            <Tooltip label={t('installed.unregisteredNotice')} side="top" portal openOnClick maxWidth={280}>
+              <span className="dsh_market_hint" tabIndex={0} aria-label={t('installed.unregisteredNotice')}>
+                <IconInfoOutlineRegular size={13} />
+              </span>
+            </Tooltip>
+          </span>
+        )}
+        {/* The repository identity has already been reduced to owner/name by
+            the Host. Keep the link at the right end of the badge row instead
+            of spending a full action-button seat on it. */}
+        {repoSlug !== '' && (
+          <Tooltip label={`${t('repo')}: ${repoSlug}`} side="top" portal>
+            <a
+              className="dsh_market_repoIcon"
+              href={`https://github.com/${repoSlug}`}
+              target="_blank"
+              rel="noreferrer"
+              aria-label={`${t('repo')}: ${repoSlug}`}
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path fill="currentColor" d="M12 .7a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2.23c-3.22.7-3.9-1.37-3.9-1.37-.53-1.34-1.29-1.7-1.29-1.7-1.05-.72.08-.71.08-.71 1.17.08 1.78 1.2 1.78 1.2 1.04 1.77 2.72 1.26 3.38.96.1-.75.4-1.26.74-1.55-2.57-.29-5.27-1.28-5.27-5.68 0-1.26.45-2.28 1.19-3.08-.12-.29-.52-1.46.11-3.04 0 0 .97-.31 3.16 1.18A10.98 10.98 0 0 1 12 6.16c.98 0 1.94.13 2.86.38 2.2-1.49 3.16-1.18 3.16-1.18.63 1.58.23 2.75.11 3.04.74.8 1.19 1.82 1.19 3.08 0 4.41-2.71 5.38-5.29 5.67.42.36.79 1.06.79 2.14v3.26c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .7Z" />
+              </svg>
+            </a>
           </Tooltip>
         )}
-      </p>
-      {item.description !== '' && <p className="dsh_market_desc">{item.description}</p>}
+      </div>
+      {description !== '' && <p className="dsh_market_desc" title={description}>{description}</p>}
       {item.error !== '' && <p className="dsh_market_cardError">{t('installed.readFailed', { reason: item.error })}</p>}
       {item.heldDown && item.entries.length > 0
         && <p className="dsh_market_cardNotice">{t('installed.heldDown')}</p>}
@@ -675,19 +683,31 @@ function InstalledCards({ t, installed, needle, installedFilter, updatableCount,
   onClearFilters: () => void
 }): ReactElement {
   const { state, feedback, reload } = installed
-  const scoped = state.status === 'ready' && state.result.error === ''
-    ? (installedFilter === 'updatable'
-      ? state.result.packages.filter(item => Boolean(availableUpdates?.[item.packageName]))
-      : state.result.packages)
-    : []
+  const installedPackages = state.status === 'ready' && state.result.error === '' ? state.result.packages : []
+  const catalogByPackage = useMemo(
+    () => catalogIndexForInstalled(installedPackages, catalog?.items ?? []),
+    [installedPackages, catalog],
+  )
+  const scoped = installedFilter === 'updatable'
+    ? installedPackages.filter(item => Boolean(availableUpdates?.[item.packageName]))
+    : installedPackages
   const shown = needle === ''
     ? scoped
-    : scoped.filter(item => [
-      item.packageName,
-      shortName(item.packageName),
-      item.description,
-      item.repository,
-    ].some(text => text.toLocaleLowerCase().includes(needle)))
+    : scoped.filter(item => {
+      const matched = catalogByPackage.get(item.packageName)
+      return [
+        item.packageName,
+        shortName(item.packageName),
+        item.description,
+        item.repository,
+        matched?.titleZh ?? '',
+        matched?.titleEn ?? '',
+        matched?.description ?? '',
+        matched?.descriptionEn ?? '',
+        matched?.categoryZh ?? '',
+        matched?.categoryEn ?? '',
+      ].some(text => text.toLocaleLowerCase().includes(needle))
+    })
   const allMatchCount = useMemo(() => {
     if (catalog === null || shown.length > 0 || needle === '') return 0
     return allCatalogMatchCount(catalog.items, catalog.featured, needle, english)
@@ -774,7 +794,9 @@ function InstalledCards({ t, installed, needle, installedFilter, updatableCount,
             <InstalledCard
               key={item.packageName}
               t={t}
+              english={english}
               item={item}
+              matched={catalogByPackage.get(item.packageName)}
               installed={installed}
               snapshot={snapshot}
               card={cards[installedReviewCardKey(item.packageName)]}

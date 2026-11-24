@@ -55,15 +55,34 @@ export declare function findFeaturedSkillById(target: string): FeaturedSkill | u
 export declare function matchesFeaturedSkillOrigin(item: FeaturedSkill, filter: FeaturedSkillOriginFilter): boolean;
 /** Match a curated skill against category, official filter, and bilingual search query. */
 export declare function matchesFeaturedSkill(item: FeaturedSkill, rawQuery: string, category: FeaturedSkillCategory | 'all', originFilter?: FeaturedSkillOriginFilter): boolean;
+/** Exact lookup by canonical curated id (`owner/repo/skillId`), never falling back to bare names. */
+export declare function findFeaturedSkillByExactId(id: string): FeaturedSkill | undefined;
+/**
+ * Resolve a curated skill from verified GitHub provenance (`owner/repo` plus
+ * skill name and optional `SKILL.md` subpath from `.skill-lock.json`).
+ */
+export declare function findFeaturedSkillBySource(source: string, skillName: string, skillPath?: string): FeaturedSkill | undefined;
 /** Minimal shape of an installed local skill needed for featured matching. */
 export interface InstalledSkillLike {
     readonly name: string;
     readonly source?: string;
     readonly sourceDirectory?: string;
     readonly provider?: string;
+    /** Verified canonical curated id (`owner/repo/skillId`) resolved from on-disk provenance. */
+    readonly featuredId?: string;
 }
-/** Match a curated skill against the session's currently available skills. */
-export declare function findInstalledFeaturedSkill<T extends InstalledSkillLike>(item: Pick<FeaturedSkill, 'skillId' | 'name'>, installed: readonly T[]): T | null;
+/**
+ * Match a curated skill against the session's currently available skills.
+ *
+ * Requires verified provenance (`featuredId`) so a custom local skill that
+ * merely shares a generic name (e.g. `code-review`) is never misclaimed.
+ */
+export declare function findInstalledFeaturedSkill<T extends InstalledSkillLike>(item: Pick<FeaturedSkill, 'id'>, installed: readonly T[]): T | null;
+/**
+ * The curated catalog item an installed skill matches, if any: resolved
+ * strictly from verified provenance (`featuredId`), never by bare skill name.
+ */
+export declare function featuredForSkill(skill: Pick<InstalledSkillLike, 'featuredId'>): FeaturedSkill | undefined;
 /**
  * Pure check whether an installed skill directory path sits strictly inside a
  * user/project `.dsh/skills/` or `.agents/skills/` root and is safe to offer

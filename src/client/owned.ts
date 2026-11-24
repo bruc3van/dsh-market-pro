@@ -11,7 +11,7 @@
  */
 import { isSafeVersion } from '../shapes.ts'
 import type { MarketInstalledPackage } from '../contract.ts'
-export { hasRemainingTargets, ownedBy, ownedByTarget, ownedIndexOf, shortName } from '../ownedMatch.ts'
+export { catalogIndexForInstalled, hasRemainingTargets, ownedBy, ownedByTarget, ownedIndexOf, shortName } from '../ownedMatch.ts'
 
 /**
  * How the upgrade prompt names what is installed: `package version`, or the

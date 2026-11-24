@@ -35,3 +35,10 @@ export declare function ownedBy(index: ReadonlyMap<string, MarketInstalledPackag
  * Single-target cards never offer re-install once owned.
  */
 export declare function hasRemainingTargets(index: ReadonlyMap<string, MarketInstalledPackage>, item: MarketPlugin): boolean;
+/**
+ * Reverse lookup: for each installed package, the catalog card that best
+ * describes it (icon, localized title/category/description), using the same
+ * {@link ownedBy} rule as the catalog grid. Exact `packageName` matches win
+ * over repository-level matches; entries carrying an icon win ties.
+ */
+export declare function catalogIndexForInstalled(packages: readonly MarketInstalledPackage[], catalogItems: readonly MarketPlugin[]): ReadonlyMap<string, MarketPlugin>;

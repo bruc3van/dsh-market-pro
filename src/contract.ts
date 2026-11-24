@@ -135,6 +135,8 @@ export interface MarketSkill {
    * Host's own path opener re-verifies it before handing it to the desktop.
    */
   readonly sourcePath?: string
+  /** Verified curated catalog id (`owner/repo/skillId`) when provenance matches a featured skill. */
+  readonly featuredId?: string
   /** Whether the model may invoke it on its own. */
   readonly modelInvocable: boolean
   /** Whether the user may invoke it with `/name`. */
@@ -440,6 +442,7 @@ export const marketSkillSchema = z.object({
   instructionPath: z.string().min(1).max(4096).optional(),
   sourceDirectory: z.string().optional(),
   sourcePath: z.string().min(1).max(4096).optional(),
+  featuredId: z.string().min(1).max(160).optional(),
   modelInvocable: z.boolean(),
   userInvocable: z.boolean(),
 }).readonly()

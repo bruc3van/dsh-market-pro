@@ -5,6 +5,7 @@ import { en, zh, type SafeMarketLocaleKey } from '../src/client/locales.ts'
 import {
   FEATURED_SKILLS,
   FEATURED_SKILL_CATEGORIES,
+  featuredForSkill,
   featuredSkillGithubUrl,
   featuredSkillIconUrl,
   featuredSkillInstallCommand,
@@ -110,16 +111,30 @@ test('matchesFeaturedSkill filters by category, official badge, and bilingual se
   assert.equal(matchesFeaturedSkillOrigin(larkDoc, 'official'), false)
 })
 
-test('findInstalledFeaturedSkill matches local skills by skillId or name case-insensitively', () => {
+test('findInstalledFeaturedSkill requires verified featuredId provenance and ignores same-name custom skills', () => {
   const installed = [
-    { name: 'frontend-design', source: 'user-dsh', sourceDirectory: '~/.dsh/skills' },
-    { name: 'Lark-Doc', source: 'project-agents', sourceDirectory: '.agents/skills' },
+    { name: 'frontend-design', source: 'user-dsh', sourceDirectory: '~/.dsh/skills', featuredId: 'anthropics/skills/frontend-design' },
+    { name: 'Lark-Doc', source: 'project-agents', sourceDirectory: '.agents/skills', featuredId: 'Larksuite/CLI/Lark-Doc' },
+    // A manually copied local skill sharing a generic curated name without provenance must NOT match.
+    { name: 'code-review', source: 'user-dsh', sourceDirectory: '~/.dsh/skills' },
   ]
   const frontend = findFeaturedSkillById('anthropics/skills/frontend-design')!
   const larkDoc = findFeaturedSkillById('larksuite/cli/lark-doc')!
+  const codeReview = findFeaturedSkillById('mattpocock/skills/code-review')!
   const pdf = findFeaturedSkillById('anthropics/skills/pdf')!
 
   assert.equal(findInstalledFeaturedSkill(frontend, installed)?.name, 'frontend-design')
   assert.equal(findInstalledFeaturedSkill(larkDoc, installed)?.name, 'Lark-Doc')
+  assert.equal(findInstalledFeaturedSkill(codeReview, installed), null)
   assert.equal(findInstalledFeaturedSkill(pdf, installed), null)
+})
+
+test('featuredForSkill resolves curated catalog entries strictly from verified featuredId', () => {
+  assert.equal(featuredForSkill({ featuredId: 'anthropics/skills/frontend-design' })?.id, 'anthropics/skills/frontend-design')
+  assert.equal(featuredForSkill({ featuredId: '  Larksuite/CLI/Lark-Doc  ' })?.id, 'larksuite/cli/lark-doc')
+  // Bare skill names or unknown ids never resolve to curated metadata.
+  assert.equal(featuredForSkill({ featuredId: undefined }), undefined)
+  assert.equal(featuredForSkill({ featuredId: 'frontend-design' }), undefined)
+  assert.equal(featuredForSkill({ featuredId: 'my-custom-local-skill' }), undefined)
+  assert.equal(featuredForSkill({ featuredId: '   ' }), undefined)
 })

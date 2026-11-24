@@ -1,4 +1,4 @@
-import { IconCloseOutlineRegular, Modal, StateDot, TextShimmer } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconCloseOutlineRegular, IconInfoOutlineRegular, Modal, StateDot, TextShimmer, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import { MarketSelector } from './InstallModeSelector.tsx'
 import { MarketButton } from './MarketButton.tsx'
 import { PluginLogo } from './PluginLogo.tsx'
@@ -16,6 +16,7 @@ import type {
 import {
   FEATURED_SKILLS,
   FEATURED_SKILL_CATEGORIES,
+  featuredForSkill,
   featuredSkillGithubUrl,
   featuredSkillIconUrl,
   featuredSkillSkillsShUrl,
@@ -193,7 +194,17 @@ export function SkillsView({
     const group = groups[origins.indexOf(originOf(skill))]
     group.total += 1
     if (origin !== 'all' && origin !== group.id) continue
-    if (matchesSkill(skill, needle)) group.items.push(skill)
+    const featured = featuredForSkill(skill)
+    const extra = featured === undefined
+      ? []
+      : [
+          featured.source,
+          featured.descriptionZh,
+          featured.descriptionEn,
+          t(`skills.featured.category.${featured.category}`),
+          ...(featured.keywords ?? []),
+        ]
+    if (matchesSkill(skill, needle, extra)) group.items.push(skill)
   }
   const count = groups.reduce((sum, group) => sum + group.items.length, 0)
   const installedSkills = readyResult?.skills ?? []
@@ -498,58 +509,22 @@ export function SkillsView({
                   <span className="dsh_market_skillGroupCount">{group.items.length}</span>
                 </div>
                 <ul className="dsh_market_cards dsh_market_cardsUniform">
-                  {group.items.map(skill => {
-                    const { sourcePath } = skill
-                    const source = skill.sourceDirectory ?? skill.provider
-                    const rowKey = skillRowKey(skill)
-                    const deletingAny = deleteModal.status === 'deleting'
-                    const deletable = deleteInstalledSkill !== undefined && canDeleteInstalledSkill(skill)
-                    return (
-                      <li key={rowKey} className="dsh_market_card">
-                        <div className="dsh_market_head">
-                          <span className="dsh_market_name" title={skill.name}>{skill.name}</span>
-                          <span
-                            className="dsh_market_installedState"
-                            data-state={group.id === 'bundled' ? 'installed' : 'running'}
-                          >
-                            {t(`skills.origin.${group.id}`)}
-                          </span>
-                        </div>
-                        <p className="dsh_market_meta">
-                          {skill.modelInvocable && <span className="dsh_market_categoryTag">{t('skills.model')}</span>}
-                          {skill.userInvocable && <span className="dsh_market_categoryTag" title={'/' + skill.name}>{t('skills.user')}</span>}
-                          {!skill.modelInvocable && !skill.userInvocable && <span className="dsh_market_categoryTag">{t('skills.invocation.restricted')}</span>}
-                          <span className="dsh_market_skillSource" title={sourcePath ?? source}>{source}</span>
-                        </p>
-                        {skill.description && <p className="dsh_market_desc" title={skill.description}>{skill.description}</p>}
-                        {skill.whenToUse && <p className="dsh_market_meta">{skill.whenToUse}</p>}
-                        <div className="dsh_market_foot">
-                          {folderAvailable && sourcePath && (
-                            <MarketButton
-                              intent="secondary"
-                              disabled={deletingAny}
-                              title={sourcePath}
-                              onClick={() => { void openSkillFolder(sourcePath) }}
-                            >
-                              {t('skills.openFolder')}
-                            </MarketButton>
-                          )}
-                          {deletable && (
-                            <MarketButton
-                              intent="danger"
-                              disabled={deletingAny}
-                              onClick={() => {
-                                setDeleteFeedback({ status: 'none' })
-                                setDeleteModal({ status: 'confirming', skill })
-                              }}
-                            >
-                              {t('skills.delete')}
-                            </MarketButton>
-                          )}
-                        </div>
-                      </li>
-                    )
-                  })}
+                  {group.items.map(skill => (
+                    <InstalledSkillCard
+                      key={skillRowKey(skill)}
+                      t={t}
+                      skill={skill}
+                      originId={group.id}
+                      folderAvailable={folderAvailable}
+                      deletingAny={deleteModal.status === 'deleting'}
+                      deletable={deleteInstalledSkill !== undefined && canDeleteInstalledSkill(skill)}
+                      onOpenFolder={path => { void openSkillFolder(path) }}
+                      onDelete={() => {
+                        setDeleteFeedback({ status: 'none' })
+                        setDeleteModal({ status: 'confirming', skill })
+                      }}
+                    />
+                  ))}
                 </ul>
               </section>
             ))}
@@ -588,6 +563,124 @@ export function SkillsView({
         />
       )}
     </div>
+  )
+}
+
+function featuredSkillDescription(t: MarketLocale, featured: FeaturedSkill | undefined): string {
+  if (featured === undefined) return ''
+  return t('lang') === 'zh' ? featured.descriptionZh : featured.descriptionEn
+}
+
+function InstalledSkillCard({ t, skill, originId, folderAvailable, deletingAny, deletable, onOpenFolder, onDelete }: {
+  t: MarketLocale
+  skill: MarketSkill
+  originId: Origin
+  folderAvailable: boolean
+  deletingAny: boolean
+  deletable: boolean
+  onOpenFolder: (path: string) => void
+  onDelete: () => void
+}): ReactElement {
+  const { sourcePath } = skill
+  const source = skill.sourceDirectory ?? skill.provider
+  const featured = featuredForSkill(skill)
+  const subtitle = featured !== undefined ? featured.source : source
+  const subtitleTitle = featured !== undefined
+    ? (sourcePath ? `${featured.source} · ${sourcePath}` : featured.source)
+    : (sourcePath ?? source)
+  const description = featuredSkillDescription(t, featured)
+    || skill.description
+    || skill.whenToUse
+    || t('skills.card.desc.empty')
+  const details = [
+    description,
+    skill.description !== '' && skill.description !== description ? skill.description : '',
+    skill.whenToUse !== '' && skill.whenToUse !== description ? skill.whenToUse : '',
+  ].filter(part => part !== '').join('\n\n')
+  const hasExtraDetails = details !== description
+  const originTip = sourcePath ?? source
+  return (
+    <li className="dsh_market_card dsh_market_skillCard">
+      <div className="dsh_market_head">
+        <PluginLogo
+          src={featured !== undefined ? featuredSkillIconUrl(featured) : undefined}
+          name={skill.name}
+          fullName={featured?.source}
+        />
+        <div className="dsh_market_identity">
+          <span className="dsh_market_name" title={skill.name}>{skill.name}</span>
+          {subtitle !== '' && <span className="dsh_market_packageName" title={subtitleTitle}>{subtitle}</span>}
+        </div>
+        {originTip !== ''
+          ? (
+            <Tooltip label={originTip} side="top" portal openOnClick maxWidth={320}>
+              <span
+                className="dsh_market_installedState"
+                data-state={originId === 'bundled' ? 'installed' : 'running'}
+                tabIndex={0}
+                aria-label={`${t(`skills.origin.${originId}`)}: ${originTip}`}
+              >
+                {t(`skills.origin.${originId}`)}
+              </span>
+            </Tooltip>
+            )
+          : (
+            <span
+              className="dsh_market_installedState"
+              data-state={originId === 'bundled' ? 'installed' : 'running'}
+            >
+              {t(`skills.origin.${originId}`)}
+            </span>
+            )}
+      </div>
+      <div className="dsh_market_meta dsh_market_skillBadges">
+        {featured !== undefined && (
+          <span className="dsh_market_categoryTag">{t(`skills.featured.category.${featured.category}`)}</span>
+        )}
+        {skill.modelInvocable && <span className="dsh_market_categoryTag">{t('skills.model')}</span>}
+        {skill.userInvocable && (
+          <Tooltip label={'/' + skill.name} side="top" portal>
+            <span className="dsh_market_categoryTag">{t('skills.user')}</span>
+          </Tooltip>
+        )}
+        {!skill.modelInvocable && !skill.userInvocable && (
+          <span className="dsh_market_categoryTag">{t('skills.invocation.restricted')}</span>
+        )}
+        {hasExtraDetails && (
+          <span className="dsh_market_categoryTag">
+            {t('skills.card.details')}
+            <Tooltip label={details} side="top" portal openOnClick maxWidth={320}>
+              <span className="dsh_market_hint" tabIndex={0} aria-label={details}>
+                <IconInfoOutlineRegular size={13} />
+              </span>
+            </Tooltip>
+          </span>
+        )}
+      </div>
+      <p className="dsh_market_desc">{description}</p>
+      <div className="dsh_market_foot">
+        {folderAvailable && sourcePath && (
+          <Tooltip label={sourcePath} side="top" portal maxWidth={320}>
+            <MarketButton
+              intent="secondary"
+              disabled={deletingAny}
+              onClick={() => onOpenFolder(sourcePath)}
+            >
+              {t('skills.openFolder')}
+            </MarketButton>
+          </Tooltip>
+        )}
+        {deletable && (
+          <MarketButton
+            intent="danger"
+            disabled={deletingAny}
+            onClick={onDelete}
+          >
+            {t('skills.delete')}
+          </MarketButton>
+        )}
+      </div>
+    </li>
   )
 }
 

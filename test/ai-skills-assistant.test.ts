@@ -104,8 +104,18 @@ test('dsh_skills_pro tool lists installed skills, searches bilingual/CJK queries
         source: 'user-dsh',
         provider: 'filesystem',
         sourceDirectory: '~/.dsh/skills/frontend-design',
+        featuredId: 'anthropics/skills/frontend-design',
         description: 'Existing frontend design skill',
         modelInvocable: true,
+        userInvocable: true,
+      },
+      {
+        name: 'code-review',
+        source: 'user-dsh',
+        provider: 'filesystem',
+        sourceDirectory: '~/.dsh/skills/code-review',
+        description: 'Custom local strict review skill',
+        modelInvocable: false,
         userInvocable: true,
       },
     ],
@@ -132,7 +142,7 @@ test('dsh_skills_pro tool lists installed skills, searches bilingual/CJK queries
     cwd: string
     skills: { name: string }[]
   }
-  assert.equal(installedOut.total, 1)
+  assert.equal(installedOut.total, 2)
   assert.equal(installedOut.cwd, '/workspace/demo')
   assert.equal(installedOut.skills[0]?.name, 'frontend-design')
 
@@ -150,14 +160,16 @@ test('dsh_skills_pro tool lists installed skills, searches bilingual/CJK queries
   assert.ok(searchOut.items.some(item => item.id === 'larksuite/cli/lark-doc'))
   assert.equal(searchOut.items.find(item => item.id === 'larksuite/cli/lark-doc')?.path, 'skills/lark-doc')
 
-  // excludeInstalled filters out frontend-design
+  // excludeInstalled filters out verified featured frontend-design, but keeps mattpocock/skills/code-review
+  // because the local code-review skill has no curated provenance.
   const excludeOut = JSON.parse(await def.execute({
     action: 'search_featured',
-    query: 'frontend-design',
+    queries: ['frontend-design', 'code-review'],
     excludeInstalled: true,
     lang: 'en',
   })) as { items: { id: string }[] }
   assert.equal(excludeOut.items.some(item => item.id === 'anthropics/skills/frontend-design'), false)
+  assert.equal(excludeOut.items.some(item => item.id === 'mattpocock/skills/code-review'), true)
 
   // officialOnly returns only official skills
   const officialOut = JSON.parse(await def.execute({

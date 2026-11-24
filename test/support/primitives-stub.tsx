@@ -20,5 +20,6 @@ export const Tooltip = passthrough
 export const StateDot = icon
 export const TextShimmer = passthrough
 export const IconChevronDownOutlineRegular = icon
+export const IconChevronRightOutlineMedium = icon
 export const IconCloseOutlineRegular = icon
 export const IconInfoOutlineRegular = icon

@@ -12,6 +12,7 @@ import {
   SERVER_NAME_PATTERN, credentialRefsIn, credentialTemplate, isMcpStarting, isSecretField, isSecretUrl,
   malformedTemplate, maskArg, maskUrl, secretArgIndexes, suggestRef,
 } from '../mcpShapes.ts'
+import { normalizeMcpDescription } from './mcpDescriptions.ts'
 
 export { credentialTemplate, suggestRef }
 
@@ -284,6 +285,8 @@ export interface McpPendingSecret {
 /** The editor's working copy of one entry. */
 export interface McpDraft {
   readonly name: string
+  /** Optional local-only description note persisted by `dsh-market-pro` (never written to `dsh-mcp-manager` Settings). */
+  readonly description: string
   readonly transport: 'stdio' | 'streamable-http'
   readonly command: string
   readonly args: readonly string[]
@@ -311,6 +314,7 @@ export interface McpDraft {
 export function isDraftDirty(draft: McpDraft, baseline: McpDraft): boolean {
   if (
     draft.name !== baseline.name
+    || draft.description !== baseline.description
     || draft.transport !== baseline.transport
     || draft.command !== baseline.command
     || draft.cwd !== baseline.cwd
@@ -335,11 +339,32 @@ export function isDraftDirty(draft: McpDraft, baseline: McpDraft): boolean {
   return false
 }
 
-/** A fresh draft. New servers start switched off, so they can be probed first. */
+/** Whether a blank "Add MCP" draft has any user-entered content worth confirming on close. */
+export function hasDraftContent(draft: McpDraft): boolean {
+  return draft.name.trim() !== ''
+    || draft.description.trim() !== ''
+    || draft.command.trim() !== ''
+    || draft.args.some(arg => arg.trim() !== '')
+    || draft.cwd.trim() !== ''
+    || draft.url.trim() !== ''
+    || draft.env.some(pair => pair.key.trim() !== '' || pair.value.trim() !== '')
+    || draft.headers.some(pair => pair.key.trim() !== '' || pair.value.trim() !== '')
+    || !draft.enabled
+    || draft.startupTimeoutMs.trim() !== ''
+    || draft.toolCallTimeoutMs.trim() !== ''
+    || draft.closeTimeoutMs.trim() !== ''
+    || !draft.reconnectEnabled
+    || draft.initialDelayMs.trim() !== ''
+    || draft.maxDelayMs.trim() !== ''
+    || draft.maxAttempts.trim() !== ''
+    || draft.pending.length > 0
+}
+
+/** A fresh draft. New servers start enabled so saving connects them right away. */
 export function emptyDraft(): McpDraft {
   return {
-    name: '', transport: 'stdio', command: '', args: [], cwd: '', env: [], url: '', headers: [],
-    enabled: false, startupTimeoutMs: '', toolCallTimeoutMs: '', closeTimeoutMs: '',
+    name: '', description: '', transport: 'stdio', command: '', args: [], cwd: '', env: [], url: '', headers: [],
+    enabled: true, startupTimeoutMs: '', toolCallTimeoutMs: '', closeTimeoutMs: '',
     reconnectEnabled: true, initialDelayMs: '', maxDelayMs: '', maxAttempts: '', extra: {}, pending: [],
   }
 }
@@ -357,7 +382,7 @@ const numberText = (value: unknown, fallback?: number): string =>
   typeof value === 'number' && value !== fallback ? String(value) : ''
 
 /** A draft over an existing entry. */
-export function draftFromEntry(name: string, entry: McpEntry): McpDraft {
+export function draftFromEntry(name: string, entry: McpEntry, description = ''): McpDraft {
   const extra: Record<string, unknown> = {}
   const reconnect = entry.reconnect ?? {}
   const unknownReconnect = Object.fromEntries(Object.entries(reconnect)
@@ -365,6 +390,7 @@ export function draftFromEntry(name: string, entry: McpEntry): McpDraft {
   if (Object.keys(unknownReconnect).length > 0) extra.reconnect = unknownReconnect
   return {
     name,
+    description,
     transport: transportOf(entry) === 'streamable-http' ? 'streamable-http' : 'stdio',
     command: entry.command ?? '',
     args: [...(entry.args ?? [])],
@@ -576,4 +602,148 @@ export function summarize(rows: readonly McpRow[], unmanaged: number): { servers
     }
   }
   return { servers: rows.length + unmanaged, connected, tools }
+}
+
+/** One server definition parsed from a pasted MCP JSON snippet. */
+export interface ParsedMcpSnippet {
+  readonly rawName: string
+  readonly name: string
+  readonly description: string
+  readonly transport: 'stdio' | 'streamable-http'
+  readonly command: string
+  readonly args: readonly string[]
+  readonly cwd: string
+  readonly env: readonly McpPair[]
+  readonly url: string
+  readonly headers: readonly McpPair[]
+  readonly enabled?: boolean
+}
+
+export type ParseMcpJsonResult =
+  | { readonly ok: true; readonly entries: readonly ParsedMcpSnippet[] }
+  | { readonly ok: false; readonly code: 'empty' | 'invalid-json' | 'no-server' }
+
+/** Sanitize an arbitrary display name (e.g. `"IP location"`) into a valid MCP server id. */
+export function sanitizeServerName(raw: string): string {
+  const cleaned = raw
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/-{2,}/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 32)
+  return SERVER_NAME_PATTERN.test(cleaned) ? cleaned : ''
+}
+
+function pairsFromRecord(value: unknown): McpPair[] {
+  if (!isRecord(value)) return []
+  const pairs: McpPair[] = []
+  for (const [key, raw] of Object.entries(value)) {
+    const trimmed = key.trim()
+    if (trimmed === '') continue
+    if (typeof raw === 'string') pairs.push({ key: trimmed, value: raw })
+    else if (typeof raw === 'number' || typeof raw === 'boolean') pairs.push({ key: trimmed, value: String(raw) })
+  }
+  return pairs
+}
+
+function parseServerObject(rawName: string, obj: Record<string, unknown>): ParsedMcpSnippet | null {
+  const url = typeof obj.url === 'string' && obj.url.trim() !== ''
+    ? obj.url.trim()
+    : typeof obj.serverUrl === 'string' && obj.serverUrl.trim() !== ''
+      ? obj.serverUrl.trim()
+      : ''
+  const command = typeof obj.command === 'string' ? obj.command.trim() : ''
+  const rawType = typeof obj.type === 'string' ? obj.type.trim().toLowerCase()
+    : typeof obj.transport === 'string' ? obj.transport.trim().toLowerCase() : ''
+  const description = typeof obj.description === 'string' ? normalizeMcpDescription(obj.description) : ''
+  const explicitHttp = rawType === 'http' || rawType === 'sse' || rawType === 'streamablehttp' || rawType === 'streamable-http'
+  // Without an explicit HTTP type, a non-empty `command` wins over a companion `url` (e.g. a docs/homepage link).
+  const useHttp = url !== '' && (explicitHttp || (rawType !== 'stdio' && command === ''))
+  if (useHttp) {
+    return {
+      rawName,
+      name: sanitizeServerName(rawName),
+      description,
+      transport: 'streamable-http',
+      command: '',
+      args: [],
+      cwd: '',
+      env: [],
+      url,
+      headers: pairsFromRecord(obj.headers),
+      ...(typeof obj.enabled === 'boolean' ? { enabled: obj.enabled } : {}),
+    }
+  }
+  if (!explicitHttp && command !== '') {
+    const args = Array.isArray(obj.args)
+      ? obj.args.filter((item): item is string => typeof item === 'string')
+      : []
+    return {
+      rawName,
+      name: sanitizeServerName(rawName),
+      description,
+      transport: 'stdio',
+      command,
+      args,
+      cwd: typeof obj.cwd === 'string' ? obj.cwd.trim() : '',
+      env: pairsFromRecord(obj.env),
+      url: '',
+      headers: [],
+      ...(typeof obj.enabled === 'boolean' ? { enabled: obj.enabled } : {}),
+    }
+  }
+  return null
+}
+
+/** Whether a configured or static MCP card matches the search query across visible text and tool names. */
+export function matchesMcpSearch(
+  texts: readonly string[],
+  query: string,
+  toolNames: readonly string[] = [],
+): boolean {
+  const needle = query.trim().toLocaleLowerCase()
+  if (needle === '') return true
+  const haystack = [...texts, ...toolNames].join(' ').toLocaleLowerCase()
+  return needle.split(/\s+/).every(word => haystack.includes(word))
+}
+
+/**
+ * Parse a pasted MCP JSON snippet (Claude Desktop / Cursor `mcpServers`,
+ * DSH `servers`, keyed map `{ "name": { ... } }`, or a bare server object).
+ * Tolerates surrounding Markdown code fences.
+ */
+export function parseMcpJsonSnippet(raw: string): ParseMcpJsonResult {
+  const stripped = raw.trim().replace(/^```(?:json|jsonc)?\s*/i, '').replace(/\s*```$/, '').trim()
+  if (stripped === '') return { ok: false, code: 'empty' }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(stripped)
+  } catch {
+    return { ok: false, code: 'invalid-json' }
+  }
+  if (!isRecord(parsed)) return { ok: false, code: 'no-server' }
+
+  const entries: ParsedMcpSnippet[] = []
+  const container = isRecord(parsed.mcpServers) ? parsed.mcpServers
+    : isRecord(parsed.servers) ? parsed.servers : null
+  if (container !== null) {
+    for (const [key, value] of Object.entries(container)) {
+      if (!isRecord(value)) continue
+      const item = parseServerObject(key, value)
+      if (item !== null) entries.push(item)
+    }
+  } else {
+    const bare = parseServerObject(typeof parsed.name === 'string' ? parsed.name : '', parsed)
+    if (bare !== null) {
+      entries.push(bare)
+    } else {
+      for (const [key, value] of Object.entries(parsed)) {
+        if (!isRecord(value)) continue
+        const item = parseServerObject(key, value)
+        if (item !== null) entries.push(item)
+      }
+    }
+  }
+  return entries.length > 0 ? { ok: true, entries } : { ok: false, code: 'no-server' }
 }

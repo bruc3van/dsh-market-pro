@@ -85,6 +85,38 @@ export function findInstalledFeatured(
   return null
 }
 
+let featuredByIdentity: Map<string, FeaturedMcpServer> | undefined
+
+/**
+ * The curated catalog item a configured server runs, if any: the same
+ * identity rule {@link findInstalledFeatured} matches by, read the other way,
+ * so a configured card can show the item's icon and description. A row with
+ * no launch target (plugin-registered) falls back to its exact catalog id.
+ */
+export function featuredForServer(
+  target: Parameters<typeof mcpIdentityKey>[0] | undefined,
+  name = '',
+): FeaturedMcpServer | undefined {
+  featuredByIdentity ??= new Map(FEATURED_MCP_SERVERS.map(item => [mcpIdentityKey(item), item] as const)
+    .filter(([key]) => key !== ''))
+  const key = target === undefined ? '' : mcpIdentityKey(target)
+  const byKey = key === '' ? undefined : featuredByIdentity.get(key)
+  return byKey ?? (target === undefined && name !== '' ? findFeaturedMcpById(name) : undefined)
+}
+
+/** Searchable curated metadata shown on a configured or static MCP card. */
+export function featuredMcpSearchTexts(featured: FeaturedMcpServer | undefined, categoryLabel = ''): string[] {
+  if (featured === undefined) return []
+  return [
+    featured.title,
+    featured.publisher,
+    featured.repo ?? '',
+    featured.descriptionZh,
+    featured.descriptionEn,
+    categoryLabel,
+  ]
+}
+
 /** Validate the server name, required inputs, and credential template syntax before building a draft. */
 export function validateFeaturedValues(
   item: FeaturedMcpServer,

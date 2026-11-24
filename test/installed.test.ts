@@ -35,7 +35,7 @@ import {
 } from '../src/profile.ts'
 import { createInstalledManager, type PendingUninstall, type RemoveDependencyResult } from '../src/installed.ts'
 import { adoptDomainState, initialDomainState, safeMarketDomainState, type SafeMarketDomainState } from '../src/store.ts'
-import { describeInstalled, hasRemainingTargets, ownedBy, ownedByTarget, ownedIndexOf } from '../src/client/owned.ts'
+import { catalogIndexForInstalled, describeInstalled, hasRemainingTargets, ownedBy, ownedByTarget, ownedIndexOf } from '../src/client/owned.ts'
 import { MAX_REPO_DIRECTORY_LENGTH, normalizeRepoDirectory, parseGitHubInstallSpec } from '../src/installInfo.ts'
 import { isSafeVersion } from '../src/shapes.ts'
 import {
@@ -1408,6 +1408,41 @@ test('explicit #path: or npm targets never fall back to root repo, subRepo, or s
     },
   }
   assert.equal(ownedBy(ownedIndexOf([subA]), manualCard), undefined)
+})
+
+test('catalogIndexForInstalled maps installed packages back to their richest catalog card', () => {
+  const pkg = owned({ packageName: 'dsh-market-pro', repository: 'bruc3van/dsh-market-pro' })
+  const bareRepo: MarketPlugin = { ...row('bruc3van/dsh-market-pro') }
+  const curatedSub: MarketPlugin = {
+    ...row('bruc3van/dsh-market-pro'),
+    packageName: 'dsh-market-pro',
+    icon: 'https://cdn.example.com/icon.svg',
+    titleZh: '插件市场 Pro',
+    categoryZh: '效率工具',
+  }
+  const byPkg = catalogIndexForInstalled([pkg], [bareRepo, curatedSub])
+  assert.equal(byPkg.get('dsh-market-pro'), curatedSub)
+  assert.equal(catalogIndexForInstalled([pkg], [bareRepo]).get('dsh-market-pro'), bareRepo)
+  assert.equal(catalogIndexForInstalled([owned({ packageName: 'unlisted-pkg', repository: '' })], [curatedSub]).size, 0)
+
+  // Multi-target repository card maps every installed target, not just the first.
+  const monoA = owned({ packageName: '@mono/a', repository: 'owner/mono', repositoryDirectory: 'packages/a' })
+  const monoB = owned({ packageName: '@mono/b', repository: 'owner/mono', repositoryDirectory: 'packages/b' })
+  const multiCard: MarketPlugin = {
+    ...row('owner/mono'),
+    installStatus: 'command',
+    installInfo: {
+      mode: 'command',
+      targets: [
+        { install: 'https://github.com/owner/mono#path:/packages/a', profile: 'web', note: '' },
+        { install: 'https://github.com/owner/mono#path:/packages/b', profile: 'web', note: '' },
+      ],
+      tasks: [], requirements: [], note: '', manual: '',
+    },
+  }
+  const multi = catalogIndexForInstalled([monoA, monoB], [multiCard])
+  assert.equal(multi.get('@mono/a'), multiCard)
+  assert.equal(multi.get('@mono/b'), multiCard)
 })
 
 // ——— the desktop client's in-box seat: listed so it can be removed ———
