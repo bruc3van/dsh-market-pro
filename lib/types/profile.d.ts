@@ -168,6 +168,7 @@ export declare function collectEntryRows(patches: readonly PatchRow[]): {
 export declare function packageDirFromProfile(profileDir: string, packageName: string): string | undefined;
 /** One installed bundle's display facts plus the entry ids it introduces. */
 export interface BundleInfo {
+    icon?: string;
     version: string;
     description: string;
     /** `owner/name` when the manifest or install spec points at a GitHub repository; '' otherwise. */
@@ -179,6 +180,13 @@ export interface BundleInfo {
         name: string;
     }[];
 }
+/**
+ * Read a local package's own icon (`package.json#icon`, falling back to
+ * `package.json#exports["./icon"]`) as a base64 image data URL, mirroring DSH's
+ * own plugin metadata rules: relative paths only, realpath confined inside the
+ * package root, image extension allowlist, and a 256 KiB byte limit.
+ */
+export declare function readPackageIcon(packageDir: string, manifest: Record<string, unknown>): Promise<string | undefined>;
 /**
  * The GitHub `owner/name` a package manifest's `repository` field names.
  *

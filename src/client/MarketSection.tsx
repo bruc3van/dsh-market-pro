@@ -399,7 +399,7 @@ function InstalledCard({ t, english, item, matched, installed, snapshot, card, i
   return (
     <li className="dsh_market_card dsh_market_installedCard" data-confirming={confirmRow ? 'true' : undefined}>
       <div className="dsh_market_head">
-        <PluginLogo src={matched?.icon} name={displayName} fullName={repoSlug || undefined} />
+        <PluginLogo src={item.icon ?? matched?.icon} name={displayName} fullName={repoSlug || undefined} />
         <div className="dsh_market_identity">
           <span className="dsh_market_name" title={displayName}>{displayName}</span>
           <span className="dsh_market_packageName" title={item.packageName}>{item.packageName}</span>
@@ -684,10 +684,15 @@ function InstalledCards({ t, installed, needle, installedFilter, updatableCount,
 }): ReactElement {
   const { state, feedback, reload } = installed
   const installedPackages = state.status === 'ready' && state.result.error === '' ? state.result.packages : []
-  const catalogByPackage = useMemo(
-    () => catalogIndexForInstalled(installedPackages, catalog?.items ?? []),
-    [installedPackages, catalog],
-  )
+  const catalogByPackage = useMemo(() => {
+    if (catalog === null) return new Map<string, MarketPlugin>()
+    const candidates = [
+      ...catalog.items,
+      ...(catalog.featured?.entries.map(entry => entry.item) ?? []),
+      ...(catalog.subscription?.entries.map(entry => entry.item) ?? []),
+    ]
+    return catalogIndexForInstalled(installedPackages, candidates)
+  }, [installedPackages, catalog])
   const scoped = installedFilter === 'updatable'
     ? installedPackages.filter(item => Boolean(availableUpdates?.[item.packageName]))
     : installedPackages
@@ -1313,7 +1318,7 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
             return (
               <li key={marketKey(item)} className="dsh_market_card dsh_market_catalogCard">
                 <div className="dsh_market_head">
-                  <PluginLogo src={item.icon} name={item.name} fullName={item.fullName} />
+                  <PluginLogo src={item.icon ?? owned?.icon} name={item.name} fullName={item.fullName} />
                   <div className="dsh_market_identity">
                     <span className="dsh_market_name" title={(english ? item.titleEn : item.titleZh) || item.name}>{(english ? item.titleEn : item.titleZh) || item.name}</span>
                     <span className="dsh_market_packageName" title={item.packageName || item.fullName}>{item.packageName || item.fullName}</span>

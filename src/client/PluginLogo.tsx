@@ -10,13 +10,12 @@ import { iconCandidatesOf, noteIconLoaded } from './iconMirrors.ts'
  */
 export function PluginLogo({ src, name, fullName }: { src?: string; name: string; fullName?: string }) {
   const avatar = ownerAvatarUrl(fullName)
-  const { iconSources, sources, sourceKey } = useMemo(() => {
+  const { sources, sourceKey } = useMemo(() => {
     const primarySources = iconCandidatesOf(src)
     const combined = [...primarySources, avatar].filter(
       (value, index, all): value is string => typeof value === 'string' && value !== '' && all.indexOf(value) === index,
     )
     return {
-      iconSources: primarySources,
       sources: combined,
       sourceKey: `${typeof src === 'string' ? src.trim() : ''}\0${avatar ?? ''}`,
     }
@@ -25,11 +24,9 @@ export function PluginLogo({ src, name, fullName }: { src?: string; name: string
   const step = failure.key === sourceKey ? failure.step : 0
   const current = sources[step]
   const safeName = typeof name === 'string' ? name : ''
-  const isAvatar = current !== undefined && current === avatar && !iconSources.includes(current)
   return <span className="dsh_market_logo" aria-hidden="true">
     {current
       ? <img key={current} src={current} alt="" loading="lazy" decoding="async" draggable={false} referrerPolicy="no-referrer"
-          className={isAvatar ? 'dsh_market_logoAvatar' : undefined}
           onLoad={() => noteIconLoaded(src, current, step > 0)}
           onError={() => setFailure(previous => ({
             key: sourceKey,

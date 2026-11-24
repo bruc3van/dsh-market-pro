@@ -42,7 +42,7 @@ import type { ChangeResult } from '@deepseek-ai/dsh-plugin-manager/types'
 import { spawn } from 'node:child_process'
 import { mkdir, readFile, rm } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { PACKAGE_NAME_PATTERN } from './shapes.ts'
+import { isMarketIcon, PACKAGE_NAME_PATTERN } from './shapes.ts'
 import {
   type MarketInstalledEntry,
   type MarketInstalledPackage,
@@ -325,24 +325,30 @@ export function createInstalledManager(options: InstalledManagerOptions): Instal
     bundles: string[]
     unregistered: string[]
     seats: string[]
+    hostIcons: Map<string, string>
   }> => {
     const manifest = await readManifest(profileDir)
     const bundles = userBundles(manifest)
     const unregistered = unregisteredPlugins(manifest, profileDir)
     const seats = desktopSeatBundles(manifest, profileDir)
+    const hostIcons = new Map<string, string>()
     // A deselected dependency whose package can no longer be read declares no
     // bundle we can see, but the Host still lists it with its load error.
     // Keep it in the panel so the residue stays reachable for Uninstall.
+    // Also capture any package icon the Host already resolved for installed bundles.
     const host = options.pluginManager?.()
     if (typeof host?.listBundles === 'function') {
       const known = new Set([...bundles, ...unregistered, ...seats])
       const listed = await host.listBundles().catch(() => [])
       for (const row of listed) {
+        if (typeof row.meta?.icon === 'string' && row.meta.icon.length <= 400_000 && isMarketIcon(row.meta.icon)) {
+          hostIcons.set(row.name, row.meta.icon)
+        }
         if (row.installed && !row.enabled && !row.official && row.source !== undefined && row.error !== undefined
           && !known.has(row.name)) unregistered.push(row.name)
       }
     }
-    return { manifest, bundles, unregistered, seats }
+    return { manifest, bundles, unregistered, seats, hostIcons }
   }
 
   const assertInstalled = (bundles: readonly string[], packageName: string): void => {
@@ -383,8 +389,9 @@ export function createInstalledManager(options: InstalledManagerOptions): Instal
     let bundles: string[]
     let unregistered: string[]
     let seats: string[]
+    let hostIcons: Map<string, string>
     try {
-      ;({ manifest, bundles, unregistered, seats } = await readUserBundles())
+      ;({ manifest, bundles, unregistered, seats, hostIcons } = await readUserBundles())
     } catch (error) {
       return { packages: [], profile: options.profile, error: messageOf(error) }
     }
@@ -408,6 +415,7 @@ export function createInstalledManager(options: InstalledManagerOptions): Instal
         : undefined
       try {
         const info = await readBundleInfo(profileDir, packageName, dependencySpec)
+        const icon = hostIcons.get(packageName) ?? info.icon
         const entries: MarketInstalledEntry[] = info.entries.map(({ id, name }) => {
           const entry = findLive(live, id)
           return {
@@ -421,6 +429,7 @@ export function createInstalledManager(options: InstalledManagerOptions): Instal
         const liveEnabled = entries.some(entry => entry.enabled)
         packages.push({
           packageName,
+          ...(icon !== undefined ? { icon } : {}),
           version: info.version,
           description: info.description,
           repository: info.repository,
@@ -441,8 +450,9 @@ export function createInstalledManager(options: InstalledManagerOptions): Instal
         // uninstall the residue.
         // Under the Host its selection is still the truth, and a selected
         // one can be switched off without reading the package.
+        const icon = hostIcons.get(packageName)
         packages.push({
-          packageName, version: '', description: '', repository: '', self,
+          packageName, ...(icon !== undefined ? { icon } : {}), version: '', description: '', repository: '', self,
           inBox: flags.inBox, unregistered: flags.unregistered && bundleEnabled === undefined,
           ...(bundleEnabled === undefined ? {} : { bundleEnabled }),
           enabled: bundleEnabled ?? false, entries: [],

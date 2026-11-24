@@ -20,6 +20,8 @@ import { PluginManager } from '@deepseek-ai/dsh-plugin-manager'
 import {
   bundlePatchFiles,
   collectEntryRows,
+  readBundleInfo,
+  readPackageIcon,
   readPatchList,
   readManifest,
   removeBundle,
@@ -1670,4 +1672,88 @@ test('an unreadable sibling profile prevents shared seat deletion', async () => 
     assert.match(result.notice ?? '', /seat directory:/)
     assert.equal((await readManifest(profileDir)).dsh?.profile?.bundles?.includes('shared-seat'), false)
   } finally { await rm(home, { recursive: true, force: true }) }
+})
+
+test('readPackageIcon and InstalledManager.list surface local manifest/exported icons safely and honor host meta.icon', async () => {
+  const { home, profileDir } = await makeHome()
+  try {
+    const svgBody = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"></svg>'
+    const expectedSvgDataUrl = `data:image/svg+xml;base64,${Buffer.from(svgBody).toString('base64')}`
+
+    // 1. manifest.icon relative file inside package directory
+    const demoDir = join(profileDir, 'node_modules', 'demo-plugin')
+    await mkdir(join(demoDir, 'assets'), { recursive: true })
+    await writeFile(join(demoDir, 'assets', 'logo.svg'), svgBody)
+    await writeFile(join(demoDir, 'package.json'), JSON.stringify({
+      name: 'demo-plugin',
+      version: '1.2.3',
+      description: 'demo with manifest icon',
+      icon: './assets/logo.svg',
+      repository: 'demo-org/demo-plugin',
+      dsh: { bundle: { patch: './cordis.patch.yml' } },
+    }, undefined, 2))
+    await writeFile(join(demoDir, 'cordis.patch.yml'), '- insert:\n  - id: demo\n    name: demo-plugin\n')
+
+    const info = await readBundleInfo(profileDir, 'demo-plugin')
+    assert.equal(info.icon, expectedSvgDataUrl)
+
+    // 2. exports["./icon"] fallback when manifest.icon is absent
+    const exportedDir = join(profileDir, 'node_modules', 'exported-icon-plugin')
+    await mkdir(join(exportedDir, 'assets'), { recursive: true })
+    await writeFile(join(exportedDir, 'assets', 'mark.svg'), svgBody)
+    assert.equal(
+      await readPackageIcon(exportedDir, { exports: { './icon': { default: './assets/mark.svg' } } }),
+      expectedSvgDataUrl,
+    )
+
+    // 3. Rejects traversal, absolute/URI paths, disallowed extensions, and oversized files (> 256 KiB)
+    await writeFile(join(profileDir, 'outside.svg'), svgBody)
+    await writeFile(join(demoDir, 'assets', 'notes.txt'), 'not an image')
+    await writeFile(join(demoDir, 'assets', 'huge.png'), Buffer.alloc(256 * 1024 + 1, 1))
+    assert.equal(await readPackageIcon(demoDir, { icon: '../../outside.svg' }), undefined)
+    assert.equal(await readPackageIcon(demoDir, { icon: '/etc/passwd' }), undefined)
+    assert.equal(await readPackageIcon(demoDir, { icon: 'https://example.com/logo.svg' }), undefined)
+    assert.equal(await readPackageIcon(demoDir, { icon: './assets/notes.txt' }), undefined)
+    assert.equal(await readPackageIcon(demoDir, { icon: './assets/huge.png' }), undefined)
+
+    // 4. InstalledManager.list carries the local icon and validates against the wire schema
+    const { loader } = stubLoader([{ id: 'include:demo', fiberState: 2 }])
+    const localListed = await createInstalledManager({
+      profile: 'web',
+      profileDir,
+      home,
+      loader,
+      selfName: 'dsh-market-pro',
+    }).list()
+    assert.equal(marketInstalledResultSchema.parse(localListed).packages[0]?.icon, expectedSvgDataUrl)
+
+    // 5. Host pluginManager.listBundles() meta.icon is honored when valid
+    const hostPng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='
+    const hostListed = await createInstalledManager({
+      profile: 'web',
+      profileDir,
+      home,
+      loader,
+      selfName: 'dsh-market-pro',
+      pluginManager: () => ({
+        listBundles: async () => [{
+          name: 'demo-plugin',
+          official: false,
+          availability: 'profile',
+          enabled: true,
+          installed: true,
+          optional: false,
+          removable: true,
+          rows: [],
+          overrides: [],
+          meta: { icon: hostPng },
+        }],
+        setBundleEnabled: async () => { throw new Error('unused') },
+        removeBundle: async () => { throw new Error('unused') },
+      }),
+    }).list()
+    assert.equal(marketInstalledResultSchema.parse(hostListed).packages[0]?.icon, hostPng)
+  } finally {
+    await rm(home, { recursive: true, force: true })
+  }
 })

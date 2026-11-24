@@ -261,6 +261,7 @@ export interface MarketInstalledEntry {
 /** One user-installed plugin package, with the live state of its entries. */
 export interface MarketInstalledPackage {
     readonly packageName: string;
+    readonly icon?: string;
     readonly version: string;
     readonly description: string;
     /**
@@ -920,6 +921,7 @@ export declare const marketInstalledEntrySchema: z.ZodReadonly<z.ZodObject<{
 /** Strict wire codec for one installed package. */
 export declare const marketInstalledPackageSchema: z.ZodReadonly<z.ZodObject<{
     packageName: z.ZodString;
+    icon: z.ZodOptional<z.ZodString>;
     version: z.ZodString;
     description: z.ZodString;
     repository: z.ZodUnion<readonly [z.ZodString, z.ZodLiteral<"">]>;
@@ -950,6 +952,7 @@ export declare const marketInstalledPackageSchema: z.ZodReadonly<z.ZodObject<{
 export declare const marketInstalledResultSchema: z.ZodReadonly<z.ZodObject<{
     packages: z.ZodReadonly<z.ZodArray<z.ZodReadonly<z.ZodObject<{
         packageName: z.ZodString;
+        icon: z.ZodOptional<z.ZodString>;
         version: z.ZodString;
         description: z.ZodString;
         repository: z.ZodUnion<readonly [z.ZodString, z.ZodLiteral<"">]>;

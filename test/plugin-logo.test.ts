@@ -73,6 +73,7 @@ function sameDeps(prev: readonly unknown[] | undefined, next: readonly unknown[]
 
 function createTestRenderer() {
   const hookStore = new Map<string, HookSlot[]>()
+  const pendingEffects: (() => void)[] = []
   let idCounter = 0
 
   function renderComponent(fn: (props: any) => ReactNode, props: any, path: string): ReactNode {
@@ -111,10 +112,22 @@ function createTestRenderer() {
         slots[index] = { value, deps }
         return value
       },
-      useCallback<T>(callback: T) {
+      useCallback<T>(callback: T, deps?: readonly unknown[]) {
+        const index = cursor++
+        const existing = slots[index]
+        if (existing !== undefined && sameDeps(existing.deps, deps)) {
+          return existing.value as T
+        }
+        slots[index] = { value: callback, deps }
         return callback
       },
-      useEffect() {},
+      useEffect(effect: () => void | (() => void), deps?: readonly unknown[]) {
+        const index = cursor++
+        const existing = slots[index]
+        if (existing !== undefined && deps !== undefined && sameDeps(existing.deps, deps)) return
+        slots[index] = { value: effect, deps }
+        pendingEffects.push(() => { effect() })
+      },
       useLayoutEffect() {},
       useId() {
         return nextSlot(() => `:r${String(idCounter++)}:`).value
@@ -168,6 +181,11 @@ function createTestRenderer() {
   return {
     render(element: ReactElement): RenderedNode[] {
       return expand(element)
+    },
+    flushEffects(): void {
+      while (pendingEffects.length > 0) {
+        pendingEffects.shift()!()
+      }
     },
   }
 }
@@ -355,7 +373,7 @@ test('PluginLogo renders data URI and HTTPS URLs format-agnostically, fails over
     step1Img.props.onError()
     const avatarImg = findAll(repoRenderer.render(React.createElement(PluginLogo, repoProps)), node => node.type === 'img')[0]!
     assert.equal(avatarImg.props.src, 'https://avatars.githubusercontent.com/demo-org?s=96')
-    assert.equal(avatarImg.props.className, 'dsh_market_logoAvatar')
+    assert.equal(avatarImg.props.className, undefined, 'avatar fallback keeps tile framing without circular crop')
 
     avatarImg.props.onError()
     const placeholderTree = repoRenderer.render(React.createElement(PluginLogo, repoProps))
@@ -517,4 +535,63 @@ test('detail view (DirectInstallPanel) renders both base64 data URI and jsDelivr
   } finally {
     resetPreferredJsDelivrHost()
   }
+})
+
+test('installed view prefers each installed package own local icon and falls back to featured catalog entries', async () => {
+  const catalog = mockCatalog({ alpha: DATA_SVG_ICON, beta: DATA_PNG_ICON })
+  const installedPackages = [
+    {
+      packageName: 'dsh-market-pro',
+      icon: DATA_SVG_ICON,
+      version: '1.15.1',
+      description: 'Market Pro',
+      repository: 'bruc3van/dsh-market-pro',
+      self: true,
+      inBox: false,
+      unregistered: false,
+      enabled: true,
+      entries: [{ id: 'market', name: 'dsh-market-pro', present: true, enabled: true, phase: 'active' as const }],
+      error: '',
+      heldDown: false,
+    },
+    {
+      packageName: 'beta-npm-only',
+      version: '2.0.0',
+      description: 'Beta local description',
+      repository: '',
+      self: false,
+      inBox: false,
+      unregistered: false,
+      enabled: true,
+      entries: [{ id: 'beta', name: 'beta-npm-only', present: true, enabled: true, phase: 'active' as const }],
+      error: '',
+      heldDown: false,
+    },
+  ]
+  const baseProps = makeMarketSectionProps(catalog)
+  const props = {
+    ...baseProps,
+    listInstalled: async () => ({ packages: installedPackages, profile: 'web', error: '' }),
+  }
+  const renderer = createTestRenderer()
+  const initialTree = renderer.render(React.createElement(MarketSection, props))
+  renderer.flushEffects()
+  await new Promise(resolve => setImmediate(resolve))
+  const loadedTree = renderer.render(React.createElement(MarketSection, props))
+  const installedTab = findAll(loadedTree, node => node.type === 'button' && textOf(node).includes(zh['installed.chip']))[0]!
+  installedTab.props.onClick()
+  const installedTree = renderer.render(React.createElement(MarketSection, props))
+  const cards = findAll(installedTree, node => node.type === 'li' && String(node.props.className ?? '').includes('dsh_market_installedCard'))
+  assert.equal(cards.length, 2)
+  assert.equal(
+    findAll([cards[0]!], node => node.type === 'img')[0]?.props.src,
+    DATA_SVG_ICON,
+    'installed card must render local package icon instead of degrading to GitHub owner avatar',
+  )
+  assert.equal(
+    findAll([cards[1]!], node => node.type === 'img')[0]?.props.src,
+    DATA_PNG_ICON,
+    'installed card without local icon must match featured/subscription catalog icon',
+  )
+  assert.ok(initialTree.length > 0)
 })

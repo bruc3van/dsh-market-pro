@@ -1106,8 +1106,6 @@ export const cssText = `
 }
 .dsh_market_logo img { display: block; width: 100%; height: 100%; object-fit: contain; }
 .dsh_market_logoPlaceholder { font-size: 18px; line-height: 1; font-weight: 500; }
-/* Owner avatar fallback: round, so it reads as the author rather than the plugin's own logo. */
-.dsh_market_logo img.dsh_market_logoAvatar { border-radius: 50%; corner-shape: round; }
 .dsh_market_identity { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .dsh_market_catalogCard { gap: 12px; padding: 16px; }
 .dsh_market_catalogCard .dsh_market_head { align-items: center; gap: 10px; }

@@ -283,6 +283,7 @@ export interface MarketInstalledEntry {
 /** One user-installed plugin package, with the live state of its entries. */
 export interface MarketInstalledPackage {
   readonly packageName: string
+  readonly icon?: string
   readonly version: string
   readonly description: string
   /**
@@ -519,6 +520,7 @@ export const marketInstalledEntrySchema = z.object({
 /** Strict wire codec for one installed package. */
 export const marketInstalledPackageSchema = z.object({
   packageName: packageNameSchema,
+  icon: z.string().refine(isMarketIcon).optional(),
   version: z.string(),
   description: z.string(),
   // Either a slug the Host already shape-checked, or nothing. A manifest

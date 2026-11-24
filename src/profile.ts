@@ -19,11 +19,12 @@
  */
 import { createRequire } from 'node:module'
 import { existsSync, readFileSync } from 'node:fs'
-import { readFile, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises'
+import { readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { extname, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path'
 import { isMap, isScalar, isSeq, parse, parseDocument, type ScalarTag } from 'yaml'
 import { normalizeRepoDirectory, parseGitHubInstallSpec, parseGitHubRepoSlug, type GitHubLocator } from './installInfo.ts'
+import { isMarketIcon } from './shapes.ts'
 
 /** Environment variable overriding the default harness home. */
 export const DSH_HOME_ENV = 'DSH_HOME'
@@ -437,6 +438,7 @@ export function packageDirFromProfile(profileDir: string, packageName: string): 
 
 /** One installed bundle's display facts plus the entry ids it introduces. */
 export interface BundleInfo {
+  icon?: string
   version: string
   description: string
   /** `owner/name` when the manifest or install spec points at a GitHub repository; '' otherwise. */
@@ -444,6 +446,89 @@ export interface BundleInfo {
   /** Normalized subdirectory inside `repository` (e.g. `packages/dsh-plugin`), or `''` for repo root. */
   repositoryDirectory: string
   entries: { id: string; name: string }[]
+}
+
+/** Maximum raw icon bytes admitted for an installed package, matching DSH Host's 256 KiB cap. */
+const MAX_LOCAL_ICON_BYTES = 256 * 1024
+
+const LOCAL_ICON_MEDIA_TYPES: ReadonlyMap<string, string> = new Map([
+  ['.svg', 'image/svg+xml'],
+  ['.png', 'image/png'],
+  ['.jpg', 'image/jpeg'],
+  ['.jpeg', 'image/jpeg'],
+  ['.webp', 'image/webp'],
+  ['.gif', 'image/gif'],
+  ['.avif', 'image/avif'],
+  ['.ico', 'image/x-icon'],
+])
+
+function exportTargetPath(target: unknown): string | undefined {
+  if (typeof target === 'string') return target.trim() !== '' ? target : undefined
+  if (Array.isArray(target)) {
+    for (const item of target) {
+      const found = exportTargetPath(item)
+      if (found !== undefined) return found
+    }
+    return undefined
+  }
+  if (target !== null && typeof target === 'object') {
+    const record = target as Record<string, unknown>
+    if ('default' in record) {
+      const found = exportTargetPath(record.default)
+      if (found !== undefined) return found
+    }
+    for (const value of Object.values(record)) {
+      const found = exportTargetPath(value)
+      if (found !== undefined) return found
+    }
+  }
+  return undefined
+}
+
+/**
+ * Read a local package's own icon (`package.json#icon`, falling back to
+ * `package.json#exports["./icon"]`) as a base64 image data URL, mirroring DSH's
+ * own plugin metadata rules: relative paths only, realpath confined inside the
+ * package root, image extension allowlist, and a 256 KiB byte limit.
+ */
+export async function readPackageIcon(packageDir: string, manifest: Record<string, unknown>): Promise<string | undefined> {
+  const candidates: string[] = []
+  if (typeof manifest.icon === 'string' && manifest.icon.trim() !== '') {
+    candidates.push(manifest.icon.trim())
+  }
+  const exportsField = manifest.exports
+  if (exportsField !== null && typeof exportsField === 'object' && !Array.isArray(exportsField)) {
+    const exported = exportTargetPath((exportsField as Record<string, unknown>)['./icon'])
+    if (exported !== undefined && !candidates.includes(exported)) {
+      candidates.push(exported)
+    }
+  }
+  if (candidates.length === 0) return undefined
+  let root: string
+  try {
+    root = await realpath(packageDir)
+  } catch {
+    return undefined
+  }
+  for (const rel of candidates) {
+    if (isAbsolute(rel) || win32.isAbsolute(rel) || /^[A-Za-z][A-Za-z\d+.-]*:/u.test(rel)) continue
+    try {
+      const file = await realpath(resolve(root, rel))
+      const local = relative(root, file)
+      if (local === '' || local === '..' || local.startsWith(`..${sep}`) || isAbsolute(local)) continue
+      const mediaType = LOCAL_ICON_MEDIA_TYPES.get(extname(file).toLowerCase())
+      if (mediaType === undefined) continue
+      const info = await stat(file)
+      if (!info.isFile() || info.size === 0 || info.size > MAX_LOCAL_ICON_BYTES) continue
+      const bytes = await readFile(file)
+      if (bytes.length === 0 || bytes.length > MAX_LOCAL_ICON_BYTES) continue
+      const dataUrl = `data:${mediaType};base64,${bytes.toString('base64')}`
+      if (isMarketIcon(dataUrl)) return dataUrl
+    } catch {
+      continue
+    }
+  }
+  return undefined
 }
 
 function githubSlugFromUrl(url: string): string {
@@ -536,7 +621,9 @@ export async function readBundleInfo(
   const seen = new Set<string>()
   const entries = collectEntryRows(patches).filter(entry => !seen.has(entry.id) && seen.add(entry.id))
   const locator = repositoryLocatorOf(manifest, dependencySpec)
+  const icon = await readPackageIcon(dir, manifest)
   return {
+    ...(icon !== undefined ? { icon } : {}),
     version: typeof (manifest as { version?: unknown }).version === 'string' ? (manifest as { version: string }).version : '',
     description: typeof manifest.description === 'string' ? manifest.description : '',
     repository: locator.repository,
