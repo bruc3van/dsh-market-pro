@@ -57,8 +57,9 @@ const SCHEMA_VERSION = 2
  * 6 — up to 100 editorial picks with their own category totals;
  * 7 — schema-4 compact feed support, subscription icon/keyword hydration, and npmmirror failover.
  * 8 — the editorial pick cap grows from 100 to 1000.
+ * 9 — `publishedAt`, the feed's own publish stamp used for cross-mirror freshness comparison.
  */
-export const CATALOG_FORMAT = 8
+export const CATALOG_FORMAT = 9
 
 /** The editorial list is capped. Published subscription packages are not. */
 const FEATURED_LIMIT = 1000
@@ -282,7 +283,7 @@ function deriveFeatured(value: unknown, declared: unknown, rows: ReadonlyMap<str
 export function deriveMarket(body: unknown, marketSize: number): MarketCatalog {
   const envelope = body as {
     schema_version?: unknown; entries?: unknown; category_table?: unknown; source_fetched_at?: unknown; source_repo_count?: unknown; featured?: unknown; featured_count?: unknown
-    subscription?: unknown; subscription_updated_at?: unknown
+    subscription?: unknown; subscription_updated_at?: unknown; published_at?: unknown
   }
   const schema = envelope.schema_version
   if (schema !== SCHEMA_VERSION && schema !== 3 && schema !== 4) {
@@ -458,6 +459,7 @@ export function deriveMarket(body: unknown, marketSize: number): MarketCatalog {
     ...(featured === undefined ? {} : { featured }),
     ...(subscription === undefined ? {} : { subscription }),
     fetchedAt: text(envelope.source_fetched_at, 40),
+    ...(text(envelope.published_at, 40) === '' ? {} : { publishedAt: text(envelope.published_at, 40) }),
     refreshedAt: new Date().toISOString(),
     scanned: count(envelope.source_repo_count) || rows.length,
   }
@@ -620,6 +622,18 @@ function isStaleMirrorSnapshot(candidateFetchedAt: string, currentFetchedAt: str
   if (!Number.isFinite(candidateMs) || !Number.isFinite(currentMs)) return false
   const lagMs = currentMs - candidateMs
   return lagMs > 0 && lagMs <= STALE_MIRROR_WINDOW_MS
+}
+
+/**
+ * The stamp that orders two publishes for cross-mirror comparison. The feed's
+ * own publish time (`publishedAt`) leads because it moves on every publish;
+ * the crawl snapshot time (`fetchedAt`) is only the fallback for feeds that
+ * predate the stamp — two publishes sharing one snapshot are indistinguishable
+ * on it, which is exactly how a lagging mirror used to overwrite newer data
+ * that carried the same snapshot untouched.
+ */
+function freshnessStampOf(catalog: MarketCatalog): string {
+  return catalog.publishedAt || catalog.fetchedAt
 }
 
 interface PackageManifest {
@@ -831,7 +845,7 @@ export function createCatalogSource(options: CatalogOptions): CatalogSource {
     if (bases.length === 1) {
       return commitOutcome(await attempt(bases[0]!, options.disposeSignal))
     }
-    const baselineFetchedAt = snapshot.status === 'loaded' ? snapshot.catalog.fetchedAt : ''
+    const baselineStamp = snapshot.status === 'loaded' ? freshnessStampOf(snapshot.catalog) : ''
     const baselineActiveBase = snapshot.status === 'loaded' ? snapshot.activeBase : ''
     const baselineEffectiveBase = baselineActiveBase === '' ? primary : baselineActiveBase
     return await new Promise<MarketCatalog>((resolve, reject) => {
@@ -915,9 +929,9 @@ export function createCatalogSource(options: CatalogOptions): CatalogSource {
             // rollbacks or prior future timestamps can never lock the cache.
             if (
               outcome.kind === 'fresh'
-              && baselineFetchedAt !== ''
+              && baselineStamp !== ''
               && outcome.activeBase !== baselineEffectiveBase
-              && isStaleMirrorSnapshot(outcome.catalog.fetchedAt, baselineFetchedAt)
+              && isStaleMirrorSnapshot(freshnessStampOf(outcome.catalog), baselineStamp)
             ) {
               sawOlderSnapshot = true
               race = { ...race, active: race.active - 1 }

@@ -135,6 +135,13 @@ test('deriveMarket carries the source counts from the envelope', () => {
   assert.equal(fallback.scanned, 1)
 })
 
+test('deriveMarket carries the feed publish stamp when the envelope has one', () => {
+  const stamped = market([entry()], { published_at: '2026-11-25T06:16:40Z' })
+  assert.equal(stamped.publishedAt, '2026-11-25T06:16:40Z')
+  const unstamped = market([entry()])
+  assert.equal(unstamped.publishedAt, undefined, 'feeds that predate the stamp parse without it')
+})
+
 test('deriveMarket reduces an unsafe default_branch to main (M2)', () => {
   const cases: Array<[unknown, string]> = [
     ['main', 'main'],
@@ -1498,6 +1505,79 @@ test('cross-mirror stale guard blocks lagging @latest mirrors without locking ou
     const healed = await recoveredFuture
     assert.equal(healed.error, '')
     assert.equal(healed.catalog?.items[0]?.fullName, 'normal/after-skew', 'backward jump beyond 7-day window heals clock skew')
+  } finally {
+    fetch.restore()
+  }
+})
+
+test('cross-mirror freshness orders publishes of the same snapshot by published_at, and a stale publish never overwrites the cache', async () => {
+  // The 2026-11-25 incident shape: feeds 0.20261125.3 and .4 shared one crawl
+  // snapshot — identical source_fetched_at — and differed only in editorial
+  // order. Ordered by fetchedAt they are indistinguishable, so a lagging
+  // mirror's older publish is accepted over (or even overwrites) the newer one.
+  const fetch = stubFetch()
+  try {
+    const seat = stubCache()
+    // The cache holds the .4-equivalent publish: snapshot 2026-11-24T23:28, published 2026-11-25T06:16.
+    seat.set({
+      catalog: {
+        ...makeCatalog([plugin({ fullName: 'cached/newest' })], 7),
+        fetchedAt: '2026-11-24T23:28:00Z',
+        publishedAt: '2026-11-25T06:16:00Z',
+      },
+      marketEtag: '"m-cn"',
+      activeBase: CN_MIRROR_CATALOG_BASE,
+    })
+    const source = createCatalogSource({ base: DEFAULT_CATALOG_BASE, marketSize: 200, cache: seat.cache, hedgeDelayMs: 5_000 })
+    const first = source.read(true)
+    assert.equal(fetch.calls[0]!.url, CN_MIRROR_CATALOG_BASE)
+    fetch.parked[0]!.reject(new Error('cn temporary error'))
+    await tick()
+    assert.equal(fetch.calls[1]!.url, DEFAULT_CATALOG_BASE)
+    // Same snapshot stamp, older publish stamp: the .3-equivalent. fetchedAt
+    // ties with the cache, so only published_at can order it — and it loses.
+    fetch.parked[1]!.resolve(jsonResponse(
+      { schema_version: 2, source_fetched_at: '2026-11-24T23:28:00Z', published_at: '2026-11-25T01:21:00Z', entries: [entry({ full_name: 'stale/republish' })] },
+      '"m-stale"',
+    ))
+    await tick()
+    assert.equal(fetch.calls.length, 3, 'an older publish of the same snapshot still advances to the next mirror')
+    assert.equal(fetch.calls[2]!.url, MIRROR_CATALOG_BASE)
+    fetch.parked[2]!.resolve(jsonResponse(
+      { schema_version: 2, source_fetched_at: '2026-11-24T23:28:00Z', published_at: '2026-11-25T06:20:00Z', entries: [entry({ full_name: 'fresh/republish' })] },
+      '"m-fresh"',
+    ))
+    const upgraded = await first
+    assert.equal(upgraded.error, '')
+    assert.equal(upgraded.catalog?.items[0]?.fullName, 'fresh/republish')
+    assert.equal(upgraded.catalog?.publishedAt, '2026-11-25T06:20:00Z')
+
+    // The regression vector in reverse: every reachable mirror serves the older
+    // publish of the same snapshot — the newer cache must survive untouched.
+    const staleSeat = stubCache()
+    staleSeat.set({
+      catalog: {
+        ...makeCatalog([plugin({ fullName: 'cached/newest' })], 7),
+        fetchedAt: '2026-11-24T23:28:00Z',
+        publishedAt: '2026-11-25T06:16:00Z',
+      },
+      marketEtag: '"m-cn"',
+      activeBase: CN_MIRROR_CATALOG_BASE,
+    })
+    const guarded = createCatalogSource({ base: DEFAULT_CATALOG_BASE, marketSize: 200, cache: staleSeat.cache, hedgeDelayMs: 5_000 })
+    const second = guarded.read(true)
+    fetch.parked[3]!.reject(new Error('cn down'))
+    await tick()
+    fetch.parked[4]!.resolve(jsonResponse(
+      { schema_version: 2, source_fetched_at: '2026-11-24T23:28:00Z', published_at: '2026-11-25T01:21:00Z', entries: [entry({ full_name: 'stale/republish' })] },
+      '"m-stale"',
+    ))
+    await tick()
+    fetch.parked[5]!.reject(new Error('unpkg down'))
+    const preserved = await second
+    assert.equal(preserved.error, '')
+    assert.equal(preserved.catalog?.items[0]?.fullName, 'cached/newest', 'an all-stale mirror round preserves the newer cache')
+    assert.equal(preserved.catalog?.publishedAt, '2026-11-25T06:16:00Z')
   } finally {
     fetch.restore()
   }

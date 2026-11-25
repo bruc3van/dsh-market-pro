@@ -184,6 +184,7 @@ export declare const safeMarketDomainState: z.ZodObject<{
             }, z.core.$strip>>>>;
         }, z.core.$strip>>>;
         fetchedAt: z.ZodString;
+        publishedAt: z.ZodOptional<z.ZodString>;
         refreshedAt: z.ZodString;
         scanned: z.ZodNumber;
     }, z.core.$strip>>, z.ZodNull]>;
@@ -387,6 +388,7 @@ export declare const safeMarketDomainSpec: {
                     }, z.core.$strip>>>>;
                 }, z.core.$strip>>>;
                 fetchedAt: z.ZodString;
+                publishedAt: z.ZodOptional<z.ZodString>;
                 refreshedAt: z.ZodString;
                 scanned: z.ZodNumber;
             }, z.core.$strip>>, z.ZodNull]>;
@@ -553,6 +555,7 @@ export declare const safeMarketDomainSpec: {
                         count: number;
                     }>[] | undefined;
                 }> | undefined;
+                publishedAt?: string | undefined;
             }> | null;
             marketEtag: string;
             activeBase: string;

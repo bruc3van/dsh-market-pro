@@ -93,6 +93,13 @@ export interface MarketCatalog {
     readonly subscription?: MarketFeatured;
     /** When the upstream crawl ran (the snapshot's own timestamp). */
     readonly fetchedAt: string;
+    /**
+     * When the feed package itself was published (`published_at` in the feed
+     * envelope). Absent on feeds published before the stamp existed — and
+     * unlike `fetchedAt` it moves on every publish, so two publishes sharing
+     * one crawl snapshot still order correctly when mirrors are compared.
+     */
+    readonly publishedAt?: string;
     /** When this Host last read the snapshot. */
     readonly refreshedAt: string;
     /** How many repositories the crawl saw, before curation and the top cut. */
@@ -615,6 +622,7 @@ export declare const marketCatalogSchema: z.ZodReadonly<z.ZodObject<{
         }, z.core.$strip>>>>;
     }, z.core.$strip>>>;
     fetchedAt: z.ZodString;
+    publishedAt: z.ZodOptional<z.ZodString>;
     refreshedAt: z.ZodString;
     scanned: z.ZodNumber;
 }, z.core.$strip>>;
@@ -787,6 +795,7 @@ export declare const marketCatalogResultSchema: z.ZodReadonly<z.ZodObject<{
             }, z.core.$strip>>>>;
         }, z.core.$strip>>>;
         fetchedAt: z.ZodString;
+        publishedAt: z.ZodOptional<z.ZodString>;
         refreshedAt: z.ZodString;
         scanned: z.ZodNumber;
     }, z.core.$strip>>, z.ZodNull]>;
