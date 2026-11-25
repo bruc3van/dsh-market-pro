@@ -440,7 +440,7 @@ test('persisted built-in v2 and v3 URLs migrate to the compact v4 catalog', asyn
       const legacyUrl = `https://registry.npmmirror.com/awesome-dsh-plugin-feed/latest/files/data/${legacyFile}`
       const source = createCatalogSource({ base: legacyUrl, marketSize: 1000 })
       const pending = source.read(false)
-      assert.equal(fetch.calls.at(-1)?.url, CN_MIRROR_CATALOG_BASE)
+      assert.equal(fetch.calls.at(-1)?.url, CN_MIRROR_CATALOG_BASE + '?cache=0')
       fetch.parked.at(-1)!.resolve(jsonResponse({ schema_version: 2, entries: [entry()] }, '"migrated"'))
       assert.equal((await pending).error, '')
     }
@@ -709,7 +709,7 @@ test('the default base fails over to npmmirror (China) then unpkg on network fai
     fetch.parked[0]!.reject(new Error('The operation was aborted due to timeout'))
     await tick()
     assert.equal(fetch.calls.length, 2, 'the timeout moves the read to npmmirror first')
-    assert.equal(fetch.calls[1]!.url, CN_MIRROR_CATALOG_BASE)
+    assert.equal(fetch.calls[1]!.url, CN_MIRROR_CATALOG_BASE + '?cache=0')
     fetch.parked[1]!.resolve(jsonResponse(
       { schema_version: 2, source_fetched_at: '2026-08-16', entries: [entry({ full_name: 'mirror/row' })] },
       '"m-mirror"',
@@ -740,7 +740,7 @@ test('after a failover the mirror is sticky: the next read goes straight to it',
     // first attempt, and the ETag it issued is the conditional's.
     const second = source.read(true)
     assert.equal(fetch.calls.length, 3)
-    assert.equal(fetch.calls[2]!.url, CN_MIRROR_CATALOG_BASE)
+    assert.equal(fetch.calls[2]!.url, CN_MIRROR_CATALOG_BASE + '?cache=0')
     const headers = fetch.calls[2]!.init?.headers as Record<string, string> | undefined
     assert.equal(headers?.['if-none-match'], '"m-g"')
     fetch.parked[2]!.resolve(NOT_MODIFIED())
@@ -918,7 +918,7 @@ test('an unpkg @latest 302 is followed to the pinned version', async () => {
     const pending = source.read(false)
     fetch.parked[0]!.reject(new Error('primary down'))
     await tick()
-    assert.equal(fetch.calls[1]!.url, CN_MIRROR_CATALOG_BASE)
+    assert.equal(fetch.calls[1]!.url, CN_MIRROR_CATALOG_BASE + '?cache=0')
     fetch.parked[1]!.reject(new Error('cn mirror down'))
     await tick()
     assert.equal(fetch.calls[2]!.url, MIRROR_CATALOG_BASE)
@@ -1107,7 +1107,7 @@ test('npmmirror streams only the v4 catalog entry from the tarball, cancels the 
 
     const pending = source.read(false)
     assert.equal(fetch.calls.length, 1)
-    assert.equal(fetch.calls[0]!.url, CN_MIRROR_CATALOG_BASE)
+    assert.equal(fetch.calls[0]!.url, CN_MIRROR_CATALOG_BASE + '?cache=0')
     const tarballUrl = 'https://cdn.npmmirror.com/packages/awesome-dsh-plugin-feed/0.20261120.1/awesome-dsh-plugin-feed-0.20261120.1.tgz'
     fetch.parked[0]!.resolve(new Response(JSON.stringify({
       version: '0.20261120.1',
@@ -1137,7 +1137,7 @@ test('npmmirror streams only the v4 catalog entry from the tarball, cancels the 
     // Revalidating when /latest reports the same version/integrity skips downloading the tarball completely.
     const recheck = source.read(true)
     assert.equal(fetch.calls.length, 3)
-    assert.equal(fetch.calls[2]!.url, CN_MIRROR_CATALOG_BASE)
+    assert.equal(fetch.calls[2]!.url, CN_MIRROR_CATALOG_BASE + '?cache=0')
     fetch.parked[2]!.resolve(new Response(JSON.stringify({
       version: '0.20261120.1',
       dist: { tarball: tarballUrl, integrity: 'sha512-abc' },
@@ -1296,7 +1296,7 @@ test('hedged failover starts the next mirror when the primary stalls and aborts 
       await new Promise(resolve => setTimeout(resolve, 10))
     }
     assert.equal(fetch.calls.length, 2, 'second mirror launches concurrently after hedgeDelayMs')
-    assert.equal(fetch.calls[1]!.url, CN_MIRROR_CATALOG_BASE)
+    assert.equal(fetch.calls[1]!.url, CN_MIRROR_CATALOG_BASE + '?cache=0')
     assert.equal(fetch.parked[0]!.signal?.aborted, false)
 
     // The mirror answers first and wins the race; the stalled primary is aborted immediately.
@@ -1362,7 +1362,7 @@ test('TTFB-aware hedging extends grace once valid headers arrive and only hedges
       await new Promise(resolve => setTimeout(resolve, 15))
     }
     assert.equal(fetch.calls.length, 3, 'a stalled body past bodyHedgeDelayMs still fails over to the next mirror')
-    assert.equal(fetch.calls[2]!.url, CN_MIRROR_CATALOG_BASE)
+    assert.equal(fetch.calls[2]!.url, CN_MIRROR_CATALOG_BASE + '?cache=0')
     const secondPayload = Buffer.from(JSON.stringify({
       schema_version: 2,
       source_fetched_at: '2026-11-22',
@@ -1407,7 +1407,7 @@ test('per-attempt body grace applies to the second mirror too so the third mirro
       bodyHedgeDelayMs: 240,
     })
     const pending = source.read(true)
-    assert.equal(fetch.calls[0]!.url, CN_MIRROR_CATALOG_BASE)
+    assert.equal(fetch.calls[0]!.url, CN_MIRROR_CATALOG_BASE + '?cache=0')
     // First attempt (CN_MIRROR) fails immediately -> second attempt (DEFAULT_CATALOG_BASE) launches.
     fetch.parked[0]!.reject(new Error('cn down'))
     await tick()
@@ -1452,7 +1452,7 @@ test('cross-mirror stale guard blocks lagging @latest mirrors without locking ou
     const source = createCatalogSource({ base: DEFAULT_CATALOG_BASE, marketSize: 200, cache: seat.cache, hedgeDelayMs: 5_000 })
 
     const first = source.read(true)
-    assert.equal(fetch.calls[0]!.url, CN_MIRROR_CATALOG_BASE)
+    assert.equal(fetch.calls[0]!.url, CN_MIRROR_CATALOG_BASE + '?cache=0')
     fetch.parked[0]!.reject(new Error('cn temporary error'))
     await tick()
     assert.equal(fetch.calls[1]!.url, DEFAULT_CATALOG_BASE)
@@ -1530,7 +1530,7 @@ test('cross-mirror freshness orders publishes of the same snapshot by published_
     })
     const source = createCatalogSource({ base: DEFAULT_CATALOG_BASE, marketSize: 200, cache: seat.cache, hedgeDelayMs: 5_000 })
     const first = source.read(true)
-    assert.equal(fetch.calls[0]!.url, CN_MIRROR_CATALOG_BASE)
+    assert.equal(fetch.calls[0]!.url, CN_MIRROR_CATALOG_BASE + '?cache=0')
     fetch.parked[0]!.reject(new Error('cn temporary error'))
     await tick()
     assert.equal(fetch.calls[1]!.url, DEFAULT_CATALOG_BASE)

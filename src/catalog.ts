@@ -760,7 +760,14 @@ export function createCatalogSource(options: CatalogOptions): CatalogSource {
     const conditional = current !== null && current.marketEtag !== ''
       && (current.activeBase === '' ? base === primary : current.activeBase === base)
     const wireEtag = conditional && !current.marketEtag.startsWith(NPMMIRROR_ETAG_PREFIX) ? current.marketEtag : ''
-    const response = await fetchFollowing(base, wireEtag, abortSignal)
+    // npmmirror's /latest answer sits behind a CDN edge cache that keeps
+    // serving the previous version for one TTL after the origin syncs —
+    // observed still stale 5 minutes after the sync task completed on
+    // 2026-11-25. The manifest is a few kilobytes (the heavy tarball rides an
+    // immutable per-version URL and is unaffected), so bypass the edge with
+    // cnpmcore's own cache-bypass directive, the same one its sync worker uses.
+    const probeUrl = base === CN_MIRROR_CATALOG_BASE ? `${base}?cache=0` : base
+    const response = await fetchFollowing(probeUrl, wireEtag, abortSignal)
     if (response.status === 304) {
       if (current === null) throw new Error('catalog HTTP 304')
       onHeaders?.()
