@@ -1,14 +1,21 @@
 # DSH Market Pro
 
-<img src="./assets/logo.svg" alt="DSH Market Pro Logo" width="96" height="96" />
+<img src="https://raw.githubusercontent.com/bruc3van/dsh-market-pro/master/assets/logo.svg" alt="DSH Market Pro Logo" width="96" height="96" />
 
-**面向 Agent 的 DSH 插件、技能与 MCP 市场：内置 AI 选型技能与工具、100 个精选技能与 100 个精选 MCP 目录，一站式管理插件、技能、MCP 服务器与安装后安全审查。**
+[![Website](https://img.shields.io/badge/Website-dsh--market--pro.com-0f172a?style=flat-square)](https://dsh-market-pro.com)
+[![npm version](https://img.shields.io/npm/v/dsh-market-pro?style=flat-square)](https://www.npmjs.com/package/dsh-market-pro)
+[![npm downloads](https://img.shields.io/npm/dw/dsh-market-pro?style=flat-square)](https://www.npmjs.com/package/dsh-market-pro)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue?style=flat-square)](https://github.com/bruc3van/dsh-market-pro/blob/master/LICENSE)
 
-中文 | [English](./README_EN.md)
+**面向 Agent 的 DSH 插件、技能与 MCP 市场：29,000+ 已核实插件、100 个精选技能与 100 个精选 MCP 目录，内置 `/market-pro` AI 选型助手、一键批量更新与安装后安全审查。**
 
-DeepSeek Harness（DSH）的 AI 原生第三方插件市场。基于经过核实的社区目录 [awesome-dsh-plugin-pro](https://github.com/bruc3van/awesome-dsh-plugin-pro)、内置 100 个精选 Agent 技能与 100 个精选 MCP 目录，不仅让你在一个界面里完成插件浏览与安装、版本更新、精选技能零依赖直装与删除管理、精选 MCP 一键添加、MCP 服务器托管配置与测试连接弹窗诊断、安装后 AI 审查，更直接赋予 **DSH Agent 对话内查市场、选插件、挑技能、配 MCP、给方案与安全安装** 的原生能力——告别人工翻找。
+中文 | [English](https://github.com/bruc3van/dsh-market-pro/blob/master/README_EN.md) | [官网与全量目录](https://dsh-market-pro.com) | [GitHub](https://github.com/bruc3van/dsh-market-pro) | [npm](https://www.npmjs.com/package/dsh-market-pro)
 
-![插件市场主界面](./assets/screenshots/marketplace.png)
+> **DSH Market Pro** is an AI-native plugin, Agent Skills, and MCP marketplace for **DeepSeek Harness (DSH)** — featuring 29,000+ verified plugins, 100 curated skills, 100 curated MCP servers, and the built-in `/market-pro` AI discovery assistant. Browse the full directory online at [dsh-market-pro.com](https://dsh-market-pro.com/en/) or read the [English README](https://github.com/bruc3van/dsh-market-pro/blob/master/README_EN.md).
+
+DeepSeek Harness（DSH）的 AI 原生第三方插件市场（官网与在线目录：[dsh-market-pro.com](https://dsh-market-pro.com)）。基于每日核实的社区目录 [awesome-dsh-plugin-pro](https://github.com/bruc3van/awesome-dsh-plugin-pro)（覆盖 29,000+ 社区插件）、内置 100 个精选 Agent 技能与 100 个精选 MCP 目录，不仅让你在一个界面里完成插件浏览与安装、版本更新、精选技能零依赖直装与删除管理、精选 MCP 一键添加、MCP 服务器托管配置与测试连接弹窗诊断、安装后 AI 审查，更直接赋予 **DSH Agent 对话内查市场、选插件、挑技能、配 MCP、给方案与安全安装** 的原生能力——告别人工翻找。
+
+![插件市场主界面](https://raw.githubusercontent.com/bruc3van/dsh-market-pro/master/assets/screenshots/marketplace.png)
 
 ## 主要功能
 
@@ -78,7 +85,7 @@ Agent 会通过 `dsh_market_pro` 自动完成以下流程：
 2. **精选与全量检索**（`featured` / `search` / `detail`）：优先检索编辑精选与可直装插件，按需扩展至数万社区仓库并核对安装目标与前置依赖。
 3. **对比建议与安全安装**：给出 2–4 个候选对比；在你确认后，调用官方 `plugin_manager` 安装（保留宿主原生审批与脚本授权），并可继续执行只读安全审查。
 
-![对话内 AI 原生选插件](./assets/screenshots/marketplace-ai-chat.png)
+![对话内 AI 原生选插件](https://raw.githubusercontent.com/bruc3van/dsh-market-pro/master/assets/screenshots/marketplace-ai-chat.png)
 
 ### 2. 检查与一键批量更新插件（`/market-pro`）
 
@@ -107,7 +114,7 @@ Agent 会通过 `dsh_mcp_pro` 完成端到端安全闭环：
 2. **宿主原生审批写入**（`install_featured` / `install_custom` / `set_enabled`）：经你在对话确认后发起 DSH 原生审批，完整展示实际命令、端点、工作目录、环境变量与请求头，拒绝即止。
 3. **全程零明文密钥**：需要 API Key 的服务器自动绑定 `${credential:REF}` 凭据模板，不要求在对话中粘贴密钥；保存后直接引导你前往 **插件市场Pro → MCP → 已配置** 点击 **填写** 安全存入凭据库。
 
-![对话内 AI 原生选配与安全安装 MCP](./assets/screenshots/marketplace-ai-mcp-chat.png)
+![对话内 AI 原生选配与安全安装 MCP](https://raw.githubusercontent.com/bruc3van/dsh-market-pro/master/assets/screenshots/marketplace-ai-mcp-chat.png)
 
 ### 4. 选配与原生审批直装 Agent 技能（`/market-pro`）
 
@@ -130,59 +137,59 @@ Agent 会通过 `dsh_skills_pro` 完成安全闭环：
 
 在 **设置** 页签中一键管理 **AI 选型助手（插件 · 技能 · MCP）** 与 **社区插件目录**，即时生效并随当前 profile 持久化，也可以直接点击按钮在对话中试用 AI 选型。
 
-![市场设置页](./assets/screenshots/marketplace-settings.png)
+![市场设置页](https://raw.githubusercontent.com/bruc3van/dsh-market-pro/master/assets/screenshots/marketplace-settings.png)
 
 ### 全量目录与排序
 
 切换到 **全部** 浏览完整收录目录，按分类筛选并自由切换 **活跃热门**、**Star 最多**、**最近更新** 排序方式。
 
-![全量目录与排序](./assets/screenshots/marketplace-all.png)
+![全量目录与排序](https://raw.githubusercontent.com/bruc3van/dsh-market-pro/master/assets/screenshots/marketplace-all.png)
 
 ### MCP 精选目录、JSON 粘贴导入、托管管理与弹窗诊断
 
 在 **MCP** 页签的页签工具栏右侧即可一键 **打开设置文件**、唤起 **AI 帮我选 MCP** 或 **添加 MCP**；先通过 **精选** 子页签浏览内置的 100 个精选 MCP 服务器（与插件统一按功能分类，支持分类与接入方式双下拉筛选、关键词检索、已添加与实时状态识别，以及弹窗内直达密钥获取页与原生状态点实时跟踪安装连接），再切至 **已配置** 集中管理托管与静态 MCP 服务器：卡片自动匹配精选 Logo、发布者与简介并支持自定义本地备注，点击右上角状态芯片即可打开 **工具弹窗** 搜索全部工具，点击 **测试连接** 弹出独立诊断弹窗实时反馈握手与工具列表，在 **添加 MCP** 弹窗中还支持直接粘贴 Claude / Cursor 风格的 `mcpServers` JSON 一键解析填入。
 
-![MCP 精选目录](./assets/screenshots/marketplace-mcp-featured.png)
+![MCP 精选目录](https://raw.githubusercontent.com/bruc3van/dsh-market-pro/master/assets/screenshots/marketplace-mcp-featured.png)
 
-![MCP 已配置与托管管理](./assets/screenshots/marketplace-mcp.png)
+![MCP 已配置与托管管理](https://raw.githubusercontent.com/bruc3van/dsh-market-pro/master/assets/screenshots/marketplace-mcp.png)
 
-![添加 MCP 与 JSON 粘贴导入](./assets/screenshots/marketplace-mcp-add.png)
+![添加 MCP 与 JSON 粘贴导入](https://raw.githubusercontent.com/bruc3van/dsh-market-pro/master/assets/screenshots/marketplace-mcp-add.png)
 
-![MCP 测试连接诊断弹窗](./assets/screenshots/marketplace-mcp-probe.png)
+![MCP 测试连接诊断弹窗](https://raw.githubusercontent.com/bruc3van/dsh-market-pro/master/assets/screenshots/marketplace-mcp-probe.png)
 
-![MCP 工具列表弹窗](./assets/screenshots/marketplace-mcp-tools.png)
+![MCP 工具列表弹窗](https://raw.githubusercontent.com/bruc3van/dsh-market-pro/master/assets/screenshots/marketplace-mcp-tools.png)
 
 ### 侧边栏快捷入口
 
 除了左侧主导航外，也可以在任意对话中展开右侧边栏，快速打开 **插件市场Pro**。
 
-![右侧栏入口](./assets/screenshots/marketplace-sidebar.png)
+![右侧栏入口](https://raw.githubusercontent.com/bruc3van/dsh-market-pro/master/assets/screenshots/marketplace-sidebar.png)
 
 ### 已安装管理、筛选与一键更新
 
 在 **已安装** 页面管理当前环境中的插件，支持按 **全部状态 / 有新版** 筛选、随时启停或卸载、单插件多版本选择升级，以及点击 **一键更新** 确认清单后按顺序批量升级（失败自动跳过并支持重试失败项）；当本插件有新版本时，主面板右上角也会直接展示快捷更新按钮。
 
-![已安装面板](./assets/screenshots/marketplace-installed.png)
+![已安装面板](https://raw.githubusercontent.com/bruc3van/dsh-market-pro/master/assets/screenshots/marketplace-installed.png)
 
-![批量更新确认清单](./assets/screenshots/marketplace-batch-update.png)
+![批量更新确认清单](https://raw.githubusercontent.com/bruc3van/dsh-market-pro/master/assets/screenshots/marketplace-batch-update.png)
 
 ### 安装后 AI 安全审查
 
 在安装完成弹窗或已安装插件卡片上点击 **AI 审查**，自动在会话输入框中准备审查提示词草稿，由你发送给 AI 进行只读检查。
 
-![AI 审查草稿](./assets/screenshots/marketplace-sec-check.png)
+![AI 审查草稿](https://raw.githubusercontent.com/bruc3van/dsh-market-pro/master/assets/screenshots/marketplace-sec-check.png)
 
 ### 技能页、精选直装与分组管理
 
 在市场顶部的 **技能** 页签中，可先通过 **精选** 子页签浏览内置的 100 个 skills.sh All Time 精选技能（展示真实品牌 Logo，支持功能分类与来源下拉筛选、查看仓库子路径，以及在弹窗中免 `npx` 一键直装到 **DSH 全局目录 `~/.dsh/skills`**、**通用 Agent 目录 `~/.agents/skills`** 或 **指定项目级 `.dsh/skills` 目录**，并自动支持国内 jsDelivr 回退与「交由 AI 核实」）；切换至 **已安装** 或打开对话标题下方的 **技能** 入口，可按来源分组（**用户 / 项目 / 随包提供**）查看当前会话可用的全部技能、打开目录或通过确认弹窗安全删除本地用户/项目技能。
 
-![全局技能精选页](./assets/screenshots/marketplace-skills.png)
+![全局技能精选页](https://raw.githubusercontent.com/bruc3van/dsh-market-pro/master/assets/screenshots/marketplace-skills.png)
 
-![精选技能直装弹窗](./assets/screenshots/marketplace-skills-install.png)
+![精选技能直装弹窗](https://raw.githubusercontent.com/bruc3van/dsh-market-pro/master/assets/screenshots/marketplace-skills-install.png)
 
-![已安装技能分组与管理](./assets/screenshots/marketplace-skills-installed.png)
+![已安装技能分组与管理](https://raw.githubusercontent.com/bruc3van/dsh-market-pro/master/assets/screenshots/marketplace-skills-installed.png)
 
-![对话内技能页](./assets/screenshots/conversation-skills.png)
+![对话内技能页](https://raw.githubusercontent.com/bruc3van/dsh-market-pro/master/assets/screenshots/conversation-skills.png)
 
 ## 使用提示
 
@@ -200,4 +207,4 @@ Agent 会通过 `dsh_skills_pro` 完成安全闭环：
 
 ## 许可证
 
-[MIT](./LICENSE)
+[MIT](https://github.com/bruc3van/dsh-market-pro/blob/master/LICENSE)

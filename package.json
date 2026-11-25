@@ -1,12 +1,16 @@
 {
   "name": "dsh-market-pro",
-  "description": "DSH 插件市场Pro：面向 Agent 的 AI 原生插件市场，内置统一 /market-pro 技能与插件/技能/MCP 三大工具，一站式管理插件、精选技能、MCP 服务器、一键批量更新与安全审查。",
+  "description": "DSH 插件市场Pro — AI-native plugin, Agent skills & MCP marketplace for DeepSeek Harness (DSH) with 29,000+ plugins, 100 curated skills & MCPs, and /market-pro AI discovery.",
   "version": "1.15.2",
+  "author": {
+    "name": "bruc3van",
+    "url": "https://dsh-market-pro.com"
+  },
   "license": "MIT",
   "icon": "./assets/logo.svg",
   "type": "module",
   "main": "lib/index.js",
-  "homepage": "https://github.com/bruc3van/dsh-market-pro#readme",
+  "homepage": "https://dsh-market-pro.com",
   "bugs": {
     "url": "https://github.com/bruc3van/dsh-market-pro/issues"
   },
@@ -16,12 +20,22 @@
   },
   "keywords": [
     "dsh",
+    "dsh-plugin",
     "deepseek",
     "deepseek-harness",
+    "deepseek-harness-plugin",
     "plugin",
+    "plugin-manager",
     "marketplace",
+    "plugin-marketplace",
     "skills",
-    "mcp"
+    "agent-skills",
+    "mcp",
+    "mcp-server",
+    "mcp-manager",
+    "model-context-protocol",
+    "ai-agent",
+    "cordis"
   ],
   "publishConfig": {
     "access": "public"

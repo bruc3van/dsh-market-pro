@@ -1,14 +1,19 @@
 # DSH Market Pro
 
-<img src="./assets/logo.svg" alt="DSH Market Pro logo" width="96" height="96" />
+<img src="https://raw.githubusercontent.com/bruc3van/dsh-market-pro/master/assets/logo.svg" alt="DSH Market Pro logo" width="96" height="96" />
 
-**An agent-native plugin, skills & MCP marketplace for DSH: built-in AI discovery skills & tools, 100 curated skills, and 100 curated MCP servers — plus management and security review in one place.**
+[![Website](https://img.shields.io/badge/Website-dsh--market--pro.com-0f172a?style=flat-square)](https://dsh-market-pro.com/en/)
+[![npm version](https://img.shields.io/npm/v/dsh-market-pro?style=flat-square)](https://www.npmjs.com/package/dsh-market-pro)
+[![npm downloads](https://img.shields.io/npm/dw/dsh-market-pro?style=flat-square)](https://www.npmjs.com/package/dsh-market-pro)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue?style=flat-square)](https://github.com/bruc3van/dsh-market-pro/blob/master/LICENSE)
 
-[中文](./README.md) | English
+**An agent-native plugin, skills & MCP marketplace for DeepSeek Harness (DSH): 29,000+ verified plugins, 100 curated skills, 100 curated MCP servers, built-in `/market-pro` AI discovery, batch updates, and security review in one place.**
 
-An AI-native third-party plugin marketplace for DeepSeek Harness (DSH), powered by the verified community catalog [awesome-dsh-plugin-pro](https://github.com/bruc3van/awesome-dsh-plugin-pro), 100 built-in curated Agent Skills, and 100 curated MCP servers. In addition to visual browsing, one-click installation, version updates, zero-CLI skill direct install & removal, curated MCP discovery, managed MCP configuration & connection-test diagnostics, and post-install AI security review, it equips your **DSH Agent to search catalogs, compare options, inspect installed capabilities, and safely install plugins, skills & MCP servers right inside chat** — no manual sifting required.
+[中文](https://github.com/bruc3van/dsh-market-pro/blob/master/README.md) | English | [Web Directory](https://dsh-market-pro.com/en/) | [GitHub](https://github.com/bruc3van/dsh-market-pro) | [npm](https://www.npmjs.com/package/dsh-market-pro)
 
-![Marketplace main view](./assets/screenshots/marketplace.png)
+An AI-native third-party plugin marketplace for DeepSeek Harness (DSH) (web directory: [dsh-market-pro.com](https://dsh-market-pro.com/en/)), powered by the daily-verified community catalog [awesome-dsh-plugin-pro](https://github.com/bruc3van/awesome-dsh-plugin-pro) (29,000+ plugins), 100 built-in curated Agent Skills, and 100 curated MCP servers. In addition to visual browsing, one-click installation, version updates, zero-CLI skill direct install & removal, curated MCP discovery, managed MCP configuration & connection-test diagnostics, and post-install AI security review, it equips your **DSH Agent to search catalogs, compare options, inspect installed capabilities, and safely install plugins, skills & MCP servers right inside chat** — no manual sifting required.
+
+![Marketplace main view](https://raw.githubusercontent.com/bruc3van/dsh-market-pro/master/assets/screenshots/marketplace.png)
 
 ## Key Features
 
@@ -78,7 +83,7 @@ Your agent uses `dsh_market_pro` to:
 2. **Search curated & full catalogs** (`featured` / `search` / `detail`) to verify install targets, activity, and prerequisites.
 3. **Compare and install safely** — presenting 2–4 tailored options and invoking the official `plugin_manager` only after your confirmation, followed by an optional read-only security review.
 
-![Chat-native AI plugin discovery](./assets/screenshots/marketplace-ai-chat.png)
+![Chat-native AI plugin discovery](https://raw.githubusercontent.com/bruc3van/dsh-market-pro/master/assets/screenshots/marketplace-ai-chat.png)
 
 ### 2. Check & Batch-Update Installed Plugins (`/market-pro`)
 
@@ -107,7 +112,7 @@ Your agent uses `dsh_mcp_pro` to complete a safe end-to-end flow:
 2. **Native approval-gated writes** (`install_featured` / `install_custom` / `set_enabled`): after you confirm in chat, every mutation triggers DSH's native approval prompt displaying the exact command/URL, working directory, env vars, and headers — failing closed if declined.
 3. **Zero plaintext secrets**: servers requiring API keys automatically bind `${credential:REF}` templates without ever asking you to paste secrets into chat; after saving, your agent directs you to **DSH Market Pro → MCP → Configured** to click **Set** and store credentials securely.
 
-![Chat-native AI MCP discovery and approval-gated installation](./assets/screenshots/marketplace-ai-mcp-chat.png)
+![Chat-native AI MCP discovery and approval-gated installation](https://raw.githubusercontent.com/bruc3van/dsh-market-pro/master/assets/screenshots/marketplace-ai-mcp-chat.png)
 
 ### 4. Discover & Directly Install Agent Skills (`/market-pro`)
 
@@ -130,59 +135,59 @@ Your agent uses `dsh_skills_pro` to complete a safe end-to-end flow:
 
 Toggle **AI Discovery Assistant (Plugins, Skills & MCP)** and **Community Plugin Catalog** from the **Settings** tab with immediate effect and per-profile persistence, or jump straight into chat to try AI discovery.
 
-![Marketplace settings view](./assets/screenshots/marketplace-settings.png)
+![Marketplace settings view](https://raw.githubusercontent.com/bruc3van/dsh-market-pro/master/assets/screenshots/marketplace-settings.png)
 
 ### Full Catalog & Sorting
 
 Switch to **All** to explore the full verified catalog with category filters and **Active & popular**, **Most stars**, or **Recently updated** sorting.
 
-![Full catalog and sorting](./assets/screenshots/marketplace-all.png)
+![Full catalog and sorting](https://raw.githubusercontent.com/bruc3van/dsh-market-pro/master/assets/screenshots/marketplace-all.png)
 
 ### Curated MCP Catalog, JSON Paste Import, Management & Probe Dialogs
 
 Access **Open settings file**, **Ask AI to pick MCP**, and **Add MCP** directly from the **MCP** tab toolbar. Browse the 100 built-in curated MCP servers under **MCP → Featured** (aligned with Plugin functional categories, with category & runtime/no-key dropdown filters, search, live connection status badges, direct key-page shortcuts, and native `StateDot` / `TextShimmer` startup tracking), then switch to **Configured** to manage both managed and static MCP servers: cards automatically display curated logos, publishers, descriptions, or your own local notes, clicking the connected status pill opens the **Tools dialog** directly, **Test connection** opens a dedicated diagnostic modal, and **Add MCP** supports pasting Claude / Cursor `mcpServers` JSON snippets to auto-fill every field.
 
-![Curated MCP catalog](./assets/screenshots/marketplace-mcp-featured.png)
+![Curated MCP catalog](https://raw.githubusercontent.com/bruc3van/dsh-market-pro/master/assets/screenshots/marketplace-mcp-featured.png)
 
-![MCP configured servers management view](./assets/screenshots/marketplace-mcp.png)
+![MCP configured servers management view](https://raw.githubusercontent.com/bruc3van/dsh-market-pro/master/assets/screenshots/marketplace-mcp.png)
 
-![Add MCP modal with JSON paste import](./assets/screenshots/marketplace-mcp-add.png)
+![Add MCP modal with JSON paste import](https://raw.githubusercontent.com/bruc3van/dsh-market-pro/master/assets/screenshots/marketplace-mcp-add.png)
 
-![MCP connection test diagnostic modal](./assets/screenshots/marketplace-mcp-probe.png)
+![MCP connection test diagnostic modal](https://raw.githubusercontent.com/bruc3van/dsh-market-pro/master/assets/screenshots/marketplace-mcp-probe.png)
 
-![MCP tools dialog](./assets/screenshots/marketplace-mcp-tools.png)
+![MCP tools dialog](https://raw.githubusercontent.com/bruc3van/dsh-market-pro/master/assets/screenshots/marketplace-mcp-tools.png)
 
 ### Right Sidebar Shortcut
 
 In addition to the main navigation bar, you can open **DSH Market Pro** directly from the right sidebar inside any session.
 
-![Right sidebar entry](./assets/screenshots/marketplace-sidebar.png)
+![Right sidebar entry](https://raw.githubusercontent.com/bruc3van/dsh-market-pro/master/assets/screenshots/marketplace-sidebar.png)
 
 ### Installed Plugins, Filtering & Batch Updates
 
 Manage your installed plugins under the **Installed** tab: filter by **All installed / Updates available**, toggle enable/disable states live, uninstall, pick from scrollable version lists per plugin, or click **Update all** to confirm and sequentially upgrade plugins (skipping failures with one-click retry). When `dsh-market-pro` itself has an update, a quick update button also appears in the top-right header.
 
-![Installed panel](./assets/screenshots/marketplace-installed.png)
+![Installed panel](https://raw.githubusercontent.com/bruc3van/dsh-market-pro/master/assets/screenshots/marketplace-installed.png)
 
-![Batch update confirmation](./assets/screenshots/marketplace-batch-update.png)
+![Batch update confirmation](https://raw.githubusercontent.com/bruc3van/dsh-market-pro/master/assets/screenshots/marketplace-batch-update.png)
 
 ### Post-Install AI Review
 
 Click **AI review** after installation or on any installed plugin card to prepare a read-only security review prompt in your conversation input box.
 
-![AI review draft](./assets/screenshots/marketplace-sec-check.png)
+![AI review draft](https://raw.githubusercontent.com/bruc3van/dsh-market-pro/master/assets/screenshots/marketplace-sec-check.png)
 
 ### Skills Page, Direct Install & Grouped Management
 
 Browse the 100 curated All Time skills from skills.sh under **Skills → Featured** (displaying real brand logos, category and source dropdown filters, verified repo subpaths, and zero-CLI one-click direct installation with automatic jsDelivr mirror fallback into **DSH global `~/.dsh/skills`**, **shared `~/.agents/skills`**, or a **project-level `.dsh/skills`** directory — plus Ask AI review with approval-gated chat install). Switch to **Installed** or open the **Skills** tab below the conversation title to view skills grouped by source (**User / Project / Bundled**), open folders, or safely delete local user/project skills via a confirmation modal.
 
-![Global Skills Featured page](./assets/screenshots/marketplace-skills.png)
+![Global Skills Featured page](https://raw.githubusercontent.com/bruc3van/dsh-market-pro/master/assets/screenshots/marketplace-skills.png)
 
-![Curated Skill direct install modal](./assets/screenshots/marketplace-skills-install.png)
+![Curated Skill direct install modal](https://raw.githubusercontent.com/bruc3van/dsh-market-pro/master/assets/screenshots/marketplace-skills-install.png)
 
-![Installed Skills grouped management](./assets/screenshots/marketplace-skills-installed.png)
+![Installed Skills grouped management](https://raw.githubusercontent.com/bruc3van/dsh-market-pro/master/assets/screenshots/marketplace-skills-installed.png)
 
-![Conversation Skills tab](./assets/screenshots/conversation-skills.png)
+![Conversation Skills tab](https://raw.githubusercontent.com/bruc3van/dsh-market-pro/master/assets/screenshots/conversation-skills.png)
 
 ## Usage Notes
 
@@ -200,4 +205,4 @@ Browse the 100 curated All Time skills from skills.sh under **Skills → Feature
 
 ## License
 
-[MIT](./LICENSE)
+[MIT](https://github.com/bruc3van/dsh-market-pro/blob/master/LICENSE)
