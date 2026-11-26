@@ -912,6 +912,9 @@ function storedState(overrides: Partial<SafeMarketDomainState> = {}): SafeMarket
     marketSize: 100,
     catalogBase: 'https://example.test/data',
     pendingUninstall: [],
+    telemetryId: '',
+    telemetryLastPingDay: '',
+    telemetryLastPingKind: '',
     ...overrides,
   }
 }
@@ -974,6 +977,64 @@ test('adopting a legacy stored catalog strips redundant subscription and returns
   assert.notEqual(adoptedLegacy.catalog, legacy.catalog, 'compacted catalog returns a new object so boot flushes it to disk')
   assert.equal(adoptedLegacy.catalog?.subscription, undefined)
   assert.equal(adoptedLegacy.catalog?.categories.some(entry => entry.key === 'dsh:subscription'), false)
+})
+
+test('adoption merges telemetry fields by default and clears them when clearTelemetry is set', () => {
+  const usable = (candidate: SafeMarketDomainState): boolean =>
+    candidate.catalog !== null && candidate.marketSize === 100 && candidate.catalogBase === 'https://example.test/data'
+
+  const fromDisk = adoptDomainState(
+    initialDomainState,
+    storedState({
+      telemetryId: '550e8400-e29b-41d4-a716-446655440000',
+      telemetryLastPingDay: '2026-11-25',
+      telemetryLastPingKind: 'desktop',
+    }),
+    usable,
+  )
+  assert.equal(fromDisk.telemetryId, '550e8400-e29b-41d4-a716-446655440000')
+  assert.equal(fromDisk.telemetryLastPingDay, '2026-11-25')
+  assert.equal(fromDisk.telemetryLastPingKind, 'desktop')
+
+  const keptMemory = adoptDomainState(
+    {
+      ...initialDomainState,
+      telemetryId: '11111111-1111-4111-8111-111111111111',
+      telemetryLastPingDay: '2026-11-26',
+      telemetryLastPingKind: 'web',
+    },
+    storedState({
+      telemetryId: '550e8400-e29b-41d4-a716-446655440000',
+      telemetryLastPingDay: '2026-11-25',
+      telemetryLastPingKind: 'desktop',
+    }),
+    usable,
+  )
+  assert.equal(keptMemory.telemetryId, '11111111-1111-4111-8111-111111111111')
+  assert.equal(keptMemory.telemetryLastPingDay, '2026-11-26')
+  assert.equal(keptMemory.telemetryLastPingKind, 'web')
+
+  const cleared = adoptDomainState(
+    {
+      ...initialDomainState,
+      telemetryId: '11111111-1111-4111-8111-111111111111',
+      telemetryLastPingDay: '2026-11-26',
+      telemetryLastPingKind: 'web',
+    },
+    storedState({
+      pendingUninstall: [{ packageName: 'x', entryIds: ['x'], at: '2026-01-01T00:00:00Z' }],
+      telemetryId: '550e8400-e29b-41d4-a716-446655440000',
+      telemetryLastPingDay: '2026-11-25',
+      telemetryLastPingKind: 'desktop',
+    }),
+    usable,
+    { clearTelemetry: true },
+  )
+  assert.equal(cleared.telemetryId, '')
+  assert.equal(cleared.telemetryLastPingDay, '')
+  assert.equal(cleared.telemetryLastPingKind, '')
+  assert.equal(usable(cleared), true)
+  assert.deepEqual(cleared.pendingUninstall, [{ packageName: 'x', entryIds: ['x'], at: '2026-01-01T00:00:00Z' }])
 })
 
 // ——— the wire codecs ———

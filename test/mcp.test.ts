@@ -837,3 +837,60 @@ test('DSH JSON import reports invalid timeouts and retains values at the accepte
   assert.equal(result.entries[0]!.timing.startupTimeoutMs, '1')
   assert.equal(result.entries[0]!.timing.closeTimeoutMs, '2147483647')
 })
+
+test('MCP controller save omits onSaveOutcome on local validation errors and reports real save outcomes', async () => {
+  const outcomes: Array<{ ok: boolean; message: string }> = []
+  let failMutate = false
+  const { hosts } = fakeHosts({
+    mutate: (_ns, _ops, revision) => failMutate
+      ? { ok: false, error: { code: 'write-failed', message: 'disk full' } }
+      : { ok: true, value: { ...settingsView, revision: (revision ?? 0) + 1 } },
+  })
+  const controller = createMcpController({
+    ...hosts,
+    onSaveOutcome: ({ ok, message }) => { outcomes.push({ ok, message }) },
+  }, { debounceMs: 1 })
+
+  // Unattached -> settings-unavailable (local preflight): must not report.
+  const noSettings = await controller.save({ ...emptyDraft(), name: 'new-srv', command: 'npx', args: ['srv'] })
+  assert.equal(noSettings.ok, false)
+  assert.equal(noSettings.message, 'settings-unavailable')
+  assert.equal(outcomes.length, 0)
+
+  const detach = controller.attach()
+  await settle()
+
+  // Name conflict (local validation): must not report.
+  const conflict = await controller.save({ ...emptyDraft(), name: 'mine', command: 'npx', args: ['srv'] })
+  assert.equal(conflict.ok, false)
+  assert.equal(conflict.message, 'name-conflict')
+  assert.equal(outcomes.length, 0)
+
+  // Plaintext secret check (local validation): must not report.
+  const plaintext = await controller.save({
+    ...emptyDraft(),
+    name: 'fresh-srv',
+    command: 'npx',
+    args: ['srv'],
+    env: [{ key: 'API_KEY', value: 'sk-live-secret' }],
+  })
+  assert.equal(plaintext.ok, false)
+  assert.equal(plaintext.message, 'plaintext-secrets')
+  assert.equal(outcomes.length, 0)
+
+  // Real save failure reports once.
+  failMutate = true
+  const saveFailed = await controller.save({ ...emptyDraft(), name: 'fresh-srv', command: 'npx', args: ['srv'] })
+  assert.equal(saveFailed.ok, false)
+  assert.equal(outcomes.length, 1)
+  assert.deepEqual(outcomes[0], { ok: false, message: 'write-failed: disk full' })
+
+  // Real save success reports once.
+  failMutate = false
+  const saveOk = await controller.save({ ...emptyDraft(), name: 'fresh-srv', command: 'npx', args: ['srv'] })
+  assert.equal(saveOk.ok, true)
+  assert.equal(outcomes.length, 2)
+  assert.deepEqual(outcomes[1], { ok: true, message: '' })
+
+  detach()
+})

@@ -13,6 +13,17 @@ export const DEFAULT_CATALOG_BASE = 'https://cdn.jsdelivr.net/npm/awesome-dsh-pl
 export const CN_MIRROR_CATALOG_BASE = 'https://registry.npmmirror.com/awesome-dsh-plugin-feed/latest'
 export const MIRROR_CATALOG_BASE = 'https://unpkg.com/awesome-dsh-plugin-feed@latest/data/market-catalog-v4.json'
 
+const OFFICIAL_CATALOG_BASES = new Set([
+  DEFAULT_CATALOG_BASE,
+  CN_MIRROR_CATALOG_BASE,
+  MIRROR_CATALOG_BASE,
+])
+
+/** Whether `base` points to an official public catalog source (never a custom/private feed). */
+export function isOfficialCatalogBase(base: string): boolean {
+  return OFFICIAL_CATALOG_BASES.has(base.trim())
+}
+
 const LEGACY_CN_MIRROR_FILES_PREFIX = 'https://registry.npmmirror.com/awesome-dsh-plugin-feed/latest/files/data/'
 const TARBALL_CATALOG_PATHS = ['package/data/market-catalog-v4.json', 'package/data/market-catalog.json'] as const
 const NPMMIRROR_ETAG_PREFIX = 'npmmirror:'

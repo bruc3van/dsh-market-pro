@@ -1791,6 +1791,8 @@ button.dsh_market_dangerButton { color: var(--dsw-alias-state-error-primary); }
 .dsh_market_settingCopy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; padding-right: 48px; }
 .dsh_market_settingName { margin: 0; font-size: 14px; font-weight: 400; line-height: 22px; color: var(--dsw-alias-label-primary); }
 .dsh_market_settingBody { margin: 0; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-tertiary); }
+.dsh_market_settingLink { width: fit-content; font-size: 12px; line-height: 18px; color: var(--dsw-alias-state-business-primary); text-decoration: none; }
+@media (hover: hover) { .dsh_market_settingLink:hover { text-decoration: underline; } }
 .dsh_market_settingWarn { margin: 0; font-size: 12px; line-height: 18px; color: var(--dsw-alias-state-warn-primary); }
 .dsh_market_settingActions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .dsh_market_aiPick svg { fill: currentColor; }

@@ -8,6 +8,7 @@ export interface SettingsViewProps {
   readonly t: MarketLocale
   readonly settings: SafeMarketSettings
   readonly settingsReady: boolean
+  readonly telemetrySuppressedByEnv?: boolean
   readonly updateSettings?: (update: SafeMarketSettingsUpdate) => Promise<SafeMarketSettings>
   readonly onTryAssistant?: () => void
   readonly tryBusy?: boolean
@@ -24,6 +25,7 @@ export function SettingsView({
   t,
   settings,
   settingsReady,
+  telemetrySuppressedByEnv = false,
   updateSettings,
   onTryAssistant,
   tryBusy = false,
@@ -120,14 +122,25 @@ export function SettingsView({
           <div className="dsh_market_settingCopy">
             <h4 id={telemetryHeadingId} className="dsh_market_settingName">{t('settings.telemetry.title')}</h4>
             <p className="dsh_market_settingBody">{t('settings.telemetry.desc')}</p>
+            <a
+              className="dsh_market_settingLink"
+              href="https://github.com/bruc3van/dsh-market-pro/blob/master/PRIVACY.md"
+              target="_blank"
+              rel="noreferrer"
+            >
+              {t('settings.telemetry.privacyLink')}
+            </a>
           </div>
           <Switch
-            checked={settings.telemetryEnabled}
+            checked={telemetrySuppressedByEnv ? false : settings.telemetryEnabled}
             label={t('settings.telemetry.title')}
-            disabled={controlsDisabled}
+            disabled={controlsDisabled || telemetrySuppressedByEnv}
             onChange={next => toggle('telemetryEnabled', next)}
           />
         </div>
+        {telemetrySuppressedByEnv && (
+          <p className="dsh_market_settingBody">{t('settings.telemetry.envSuppressed')}</p>
+        )}
       </section>
     </div>
   )

@@ -1,15 +1,17 @@
 /**
- * Minimal, anonymous, opt-out telemetry for DSH Market Pro.
+ * Minimal, opt-out usage & install telemetry for DSH Market Pro.
  *
  * Design invariants:
- * - Strictly anonymous: uses a random per-install UUID persisted in the local
- *   storage domain, never hardware IDs, usernames, paths, prompts, or secrets.
+ * - Local random install ID: uses a random per-install UUIDv4 persisted in
+ *   the local storage domain (never tied to hardware IDs, accounts, usernames,
+ *   paths, prompts, or secrets) and cleared immediately when opted out.
  * - Strictly low-frequency: at most one daily heartbeat per UTC+8 day (plus a
  *   single refinement ping if the UI attaches after a headless boot and adds
- *   exact `desktop`/`web` + locale context).
- * - Public targets only: plugin/MCP install feedback is sanitized against
- *   known public catalog entries and built-in curated MCP IDs; anything else
- *   is collapsed to `"custom"`.
+ *   exact `desktop`/`web` + locale context), with daily backoff on failure.
+ * - Public targets only: plugin/MCP install feedback is checked against known
+ *   official public catalog entries and built-in curated MCP IDs; anything else
+ *   (including private/custom servers or custom catalog feeds) is dropped
+ *   without sending any network request.
  * - Fail-silent & non-blocking: every request has a short timeout and swallows
  *   network failures without touching the marketplace UI or console error logs.
  */
@@ -93,7 +95,7 @@ export function telemetryDay(now: Date = new Date()): string {
 export function isTelemetryEnvSuppressed(env: Readonly<Record<string, string | undefined>> = process.env): boolean {
   if ((env.DSH_TELEMETRY_DISABLED ?? '').trim() !== '') return true
   const dnt = (env.DO_NOT_TRACK ?? '').trim().toLowerCase()
-  if (dnt === '1' || dnt === 'true') return true
+  if (dnt !== '' && dnt !== '0' && dnt !== 'false' && dnt !== 'off' && dnt !== 'no') return true
   const opt = (env.DSH_MARKET_TELEMETRY ?? '').trim().toLowerCase()
   if (opt === '0' || opt === 'false' || opt === 'off') return true
   const ci = (env.CI ?? '').trim().toLowerCase()
@@ -196,6 +198,10 @@ export function createTelemetryReporter(options: TelemetryOptions): TelemetryRep
   let bootTimer: ReturnType<typeof setTimeout> | undefined
   let pingInFlight = false
   let pingRecheckRequested = false
+  let pingFailedDay = ''
+  let feedbackFailureDay = ''
+  let feedbackFailuresToday = 0
+  const MAX_DAILY_FEEDBACK_FAILURES = 3
 
   const canSend = (): boolean =>
     !disposed
@@ -248,6 +254,7 @@ export function createTelemetryReporter(options: TelemetryOptions): TelemetryRep
         }
         if (!canSend()) return
         const today = telemetryDay(now())
+        if (pingFailedDay === today) return
         const state = options.storage.read()
         const pingHostKind = observedHostKind
         const pingLocale = observedLocale
@@ -267,8 +274,12 @@ export function createTelemetryReporter(options: TelemetryOptions): TelemetryRep
           os,
           locale: pingLocale,
         })
-        if (!ok) break
-        if (!disposed) {
+        if (!ok) {
+          pingFailedDay = today
+          break
+        }
+        pingFailedDay = ''
+        if (canSend() && options.storage.read().telemetryId === id) {
           options.storage.write({
             telemetryId: id,
             telemetryLastPingDay: today,
@@ -292,8 +303,14 @@ export function createTelemetryReporter(options: TelemetryOptions): TelemetryRep
       await options.storage.ready.catch(() => undefined)
     }
     if (!canSend()) return
+    const today = telemetryDay(now())
+    if (feedbackFailureDay !== today) {
+      feedbackFailureDay = today
+      feedbackFailuresToday = 0
+    }
+    if (feedbackFailuresToday >= MAX_DAILY_FEEDBACK_FAILURES) return
     const id = ensureInstallId()
-    await post({
+    const ok = await post({
       v: 1,
       event,
       id,
@@ -307,6 +324,8 @@ export function createTelemetryReporter(options: TelemetryOptions): TelemetryRep
       result,
       ...(result === 'failed' ? { errorCode: errorCode ?? 'unknown' } : {}),
     })
+    if (ok) feedbackFailuresToday = 0
+    else feedbackFailuresToday += 1
   }
 
   return {
@@ -332,25 +351,27 @@ export function createTelemetryReporter(options: TelemetryOptions): TelemetryRep
       }
       if (event.kind === 'plugin_install') {
         const cleanTarget = sanitizePluginTarget(event.target, options.isPublicPluginTarget)
+        if (cleanTarget === 'custom') return
         void sendFeedback('plugin_install', cleanTarget, event.mode, event.result, event.errorCode)
         return
       }
       if (event.kind === 'mcp_install') {
         const cleanTarget = sanitizeMcpTarget(event.target)
-        const mode = cleanTarget === 'custom' ? 'custom' : event.mode
-        void sendFeedback('mcp_install', cleanTarget, mode, event.result, event.errorCode)
+        if (cleanTarget === 'custom') return
+        void sendFeedback('mcp_install', cleanTarget, event.mode, event.result, event.errorCode)
       }
     },
 
     reportPluginInstall(input) {
       const cleanTarget = sanitizePluginTarget(input.target, options.isPublicPluginTarget)
+      if (cleanTarget === 'custom') return
       void sendFeedback('plugin_install', cleanTarget, input.mode, input.result, input.errorCode)
     },
 
     reportMcpInstall(input) {
       const cleanTarget = sanitizeMcpTarget(input.target)
-      const mode = cleanTarget === 'custom' ? 'custom' : input.mode
-      void sendFeedback('mcp_install', cleanTarget, mode, input.result, input.errorCode)
+      if (cleanTarget === 'custom') return
+      void sendFeedback('mcp_install', cleanTarget, input.mode, input.result, input.errorCode)
     },
 
     dispose() {

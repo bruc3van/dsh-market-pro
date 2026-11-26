@@ -195,7 +195,7 @@ Agent 会通过 `dsh_skills_pro` 完成安全闭环：
 
 - **安全提醒**：目录收录仅核实项目是否为 DSH 插件，不代表安全背书。安装前请留意插件来源与权限要求。
 - **关于 AI 审查**：AI 审查是在插件安装后对本地文件进行的辅助检查，供你评估风险参考，无法阻止或撤销插件安装时已经发生的执行。
-- **匿名使用统计**：默认开启，每天向 [dsh-market-pro.com](https://dsh-market-pro.com) 发送匿名活跃心跳（随机安装 ID、插件与 DSH 版本、运行形态、操作系统与语言）以及公开插件/精选 MCP 的安装成功或失败结果，用于统计安装规模与改进兼容性。绝不采集对话、文件路径、密钥或私有插件名称；可在市场 **设置 → 匿名使用统计** 一键关闭，或设置环境变量 `DO_NOT_TRACK=1` / `DSH_MARKET_TELEMETRY=0` / `DSH_TELEMETRY_DISABLED=1`。
+- **匿名使用统计**：默认开启，每天向 [dsh-market-pro.com](https://dsh-market-pro.com) 发送活跃心跳（本地随机安装 ID、插件与 DSH 版本、运行形态、操作系统与语言）以及官方公开目录插件/精选 MCP 的安装成功或失败结果，用于统计安装规模与改进兼容性。绝不采集对话、文件路径、密钥、私有插件或自定义 MCP（非公开目标直接丢弃不上报）；可在市场 **设置 → 匿名使用统计** 一键关闭（立即停发并清除本地 ID），或设置环境变量 `DO_NOT_TRACK=1` / `DSH_MARKET_TELEMETRY=0` / `DSH_TELEMETRY_DISABLED=1`。详情与报文样例见 [PRIVACY.md](https://github.com/bruc3van/dsh-market-pro/blob/master/PRIVACY.md)。
 
 ## 相关项目
 

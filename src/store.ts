@@ -135,17 +135,27 @@ export const safeMarketDomainSpec = defineDomain({
  * @param isUsable - whether a candidate state answers the current config.
  * @returns the merged state the plugin runs with.
  */
+export interface AdoptDomainOptions {
+  /**
+   * Drop telemetry identity/heartbeat fields instead of adopting them from
+   * disk (when telemetry is disabled or was cleared while opening).
+   */
+  readonly clearTelemetry?: boolean
+}
+
 export function adoptDomainState(
   current: SafeMarketDomainState,
   stored: SafeMarketDomainState,
   isUsable: (candidate: SafeMarketDomainState) => boolean,
+  options?: AdoptDomainOptions,
 ): SafeMarketDomainState {
+  const clearTelemetry = options?.clearTelemetry === true
   const next: SafeMarketDomainState = {
     ...current,
     pendingUninstall: stored.pendingUninstall ?? current.pendingUninstall,
-    telemetryId: current.telemetryId || stored.telemetryId || '',
-    telemetryLastPingDay: current.telemetryLastPingDay || stored.telemetryLastPingDay || '',
-    telemetryLastPingKind: current.telemetryLastPingKind || stored.telemetryLastPingKind || '',
+    telemetryId: clearTelemetry ? '' : (current.telemetryId || stored.telemetryId || ''),
+    telemetryLastPingDay: clearTelemetry ? '' : (current.telemetryLastPingDay || stored.telemetryLastPingDay || ''),
+    telemetryLastPingKind: clearTelemetry ? '' : (current.telemetryLastPingKind || stored.telemetryLastPingKind || ''),
   }
   if (current.catalog !== null) return next
   if (!isUsable(stored)) return next

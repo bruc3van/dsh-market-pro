@@ -201,6 +201,8 @@ export interface MarketEnvironment {
      * not be read.
      */
     readonly version: string;
+    /** True when Host/process environment variables suppress telemetry. */
+    readonly telemetrySuppressedByEnv?: boolean;
 }
 /** The marketplace's live configuration fields exposed to the browser. */
 export interface SafeMarketSettings {
@@ -840,6 +842,7 @@ export declare const marketSkillsResultSchema: z.ZodReadonly<z.ZodObject<{
 export declare const marketEnvironmentSchema: z.ZodReadonly<z.ZodObject<{
     profile: z.ZodString;
     version: z.ZodString;
+    telemetrySuppressedByEnv: z.ZodOptional<z.ZodBoolean>;
 }, z.core.$strip>>;
 /** Strict wire codec for the resolved settings section. */
 export declare const safeMarketSettingsSchema: z.ZodReadonly<z.ZodObject<{

@@ -203,7 +203,13 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-market-pro: dictionaries')
   const t = ctx.locale.bind(NS)
 
-  const scope = createMarketStore({ value: defaultSettings(), settingsReady: false, profile: null as string | null, version: '' })
+  const scope = createMarketStore({
+    value: defaultSettings(),
+    settingsReady: false,
+    profile: null as string | null,
+    version: '',
+    telemetrySuppressedByEnv: false,
+  })
   let settingsGeneration = 0
 
   const workspaces = ctx.get('workspaces') as MarketWorkspaces
@@ -278,7 +284,12 @@ export function apply(ctx: ClientContext): void {
         reportError('describe', result.error)
         return
       }
-      scope.set({ ...scope.getSnapshot(), profile: result.value.profile, version: result.value.version })
+      scope.set({
+        ...scope.getSnapshot(),
+        profile: result.value.profile,
+        version: result.value.version,
+        telemetrySuppressedByEnv: result.value.telemetrySuppressedByEnv === true,
+      })
     } catch (error) {
       if (market === remote) reportError('describe', error)
     }
@@ -286,6 +297,8 @@ export function apply(ctx: ClientContext): void {
 
   const sendTelemetry = (event: TelemetryClientEvent): void => {
     try {
+      const snap = scope.getSnapshot()
+      if (!snap.settingsReady || !snap.value.telemetryEnabled || snap.telemetrySuppressedByEnv) return
       const remote = market
       if (remote?.reportTelemetry === undefined) return
       void remote.reportTelemetry(event).catch(() => undefined)
@@ -324,9 +337,9 @@ export function apply(ctx: ClientContext): void {
   ctx.on('connection/reset', () => {
     directoryBrowser.reset()
     catalogCache.invalidate()
-    void loadSettings()
-    void loadEnvironment()
-    sendClientHello()
+    void Promise.all([loadSettings(), loadEnvironment()]).then(() => {
+      sendClientHello()
+    })
   })
 
   // Invalidate both entry points when installed providers change.
@@ -643,10 +656,11 @@ export function apply(ctx: ClientContext): void {
         args: draft.args,
       })
       const featuredId = identity !== '' ? FEATURED_MCP_BY_IDENTITY.get(identity) : undefined
+      if (featuredId === undefined) return
       sendTelemetry({
         kind: 'mcp_install',
-        target: featuredId ?? 'custom',
-        mode: featuredId !== undefined ? 'featured' : 'custom',
+        target: featuredId,
+        mode: 'featured',
         result: ok ? 'ok' : 'failed',
         ...(!ok ? { errorCode: classifyInstallError(message) } : {}),
       })

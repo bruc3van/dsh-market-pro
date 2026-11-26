@@ -3,6 +3,8 @@ import type { MarketCatalog } from './contract.ts';
 export declare const DEFAULT_CATALOG_BASE = "https://cdn.jsdelivr.net/npm/awesome-dsh-plugin-feed@latest/data/market-catalog-v4.json";
 export declare const CN_MIRROR_CATALOG_BASE = "https://registry.npmmirror.com/awesome-dsh-plugin-feed/latest";
 export declare const MIRROR_CATALOG_BASE = "https://unpkg.com/awesome-dsh-plugin-feed@latest/data/market-catalog-v4.json";
+/** Whether `base` points to an official public catalog source (never a custom/private feed). */
+export declare function isOfficialCatalogBase(base: string): boolean;
 /**
  * The shape {@link deriveMarket} produces. A stored catalog records the
  * format it was derived under, and the cache gate refuses any other: a

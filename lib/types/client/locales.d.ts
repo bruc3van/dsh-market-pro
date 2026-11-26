@@ -140,7 +140,9 @@ export declare const zh: {
     readonly 'settings.catalog.title': "社区插件目录";
     readonly 'settings.catalog.desc': "联网同步社区精选与全量插件；关闭后仍可管理已安装插件、技能和 MCP。";
     readonly 'settings.telemetry.title': "匿名使用统计";
-    readonly 'settings.telemetry.desc': "仅向 dsh-market-pro.com 发送每日匿名心跳（随机 ID 与运行环境）及公开插件/精选 MCP 安装结果，用于统计安装量与优化体验；不采集对话、路径、密钥或私有插件，关闭后立即停止。";
+    readonly 'settings.telemetry.desc': "仅向 dsh-market-pro.com 发送每日心跳（本地随机安装 ID 与基本运行环境）及公开目录插件/精选 MCP 安装结果，用于统计安装量与改进兼容性。绝不采集对话、路径、密钥、私有插件或自定义 MCP；关闭后立即停发并清除本地 ID。";
+    readonly 'settings.telemetry.privacyLink': "查看遥测字段与隐私说明";
+    readonly 'settings.telemetry.envSuppressed': "当前已由环境变量（DO_NOT_TRACK / DSH_TELEMETRY_DISABLED / DSH_MARKET_TELEMETRY / CI）禁用，不会发送任何数据。";
     readonly search: "搜索插件名称、包名、功能或分类";
     readonly all: "全部";
     readonly 'featured.chip': "精选";

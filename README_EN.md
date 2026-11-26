@@ -193,7 +193,7 @@ Browse the 100 curated All Time skills from skills.sh under **Skills → Feature
 
 - **Security reminder**: Catalog inclusion verifies that a project is a DSH plugin, not that it is safe. Always review a plugin's source and requested permissions before installing.
 - **About AI review**: AI review is an optional post-install check on local plugin files to help you assess risk; it cannot prevent or undo code that has already executed during installation.
-- **Anonymous telemetry**: Enabled by default, sending an anonymous daily heartbeat (random install ID, plugin & DSH version, host type, OS, locale) and public plugin / curated MCP install outcomes to [dsh-market-pro.com](https://dsh-market-pro.com) to measure adoption and improve install reliability. It never collects chats, file paths, secrets, or private plugin names. Turn it off anytime under **Settings → Anonymous Usage Telemetry** or via `DO_NOT_TRACK=1` / `DSH_MARKET_TELEMETRY=0` / `DSH_TELEMETRY_DISABLED=1`.
+- **Anonymous telemetry**: Enabled by default, sending a daily heartbeat (local random install ID, plugin & DSH version, host type, OS, locale) and official-catalog public plugin / curated MCP install outcomes to [dsh-market-pro.com](https://dsh-market-pro.com) to measure adoption and improve install reliability. It never collects chats, file paths, secrets, private plugins, or custom MCPs (non-public targets are dropped without sending). Turn it off anytime under **Settings → Anonymous Usage Telemetry** (stops immediately and clears the local ID) or via `DO_NOT_TRACK=1` / `DSH_MARKET_TELEMETRY=0` / `DSH_TELEMETRY_DISABLED=1`. See [PRIVACY.md](https://github.com/bruc3van/dsh-market-pro/blob/master/PRIVACY.md) for exact payload examples.
 
 ## Related Projects
 

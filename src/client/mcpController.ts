@@ -542,19 +542,19 @@ export function createMcpController(hosts: McpHosts, options: McpControllerOptio
         return outcome
       }
       const view = state.settings
-      if (view === null) return report({ ok: false, message: 'settings-unavailable', conflict: false })
+      if (view === null) return { ok: false, message: 'settings-unavailable', conflict: false }
       const current = serversOf(view.value)
       const name = draft.name.trim()
       if (edit !== undefined && (edit.revision !== view.revision || !Object.hasOwn(current, edit.name))) {
-        return report({ ok: false, message: 'settings-conflict', conflict: true })
+        return { ok: false, message: 'settings-conflict', conflict: true }
       }
       if (name !== original && (Object.hasOwn(current, name) || state.rows.some(row => row.name === name)
         || state.host?.unmanaged.some(server => server.serverName === name))) {
-        return report({ ok: false, message: 'name-conflict', conflict: false })
+        return { ok: false, message: 'name-conflict', conflict: false }
       }
       const previous = name === original ? serversOf(view.user)[name] : undefined
       if (newDraftPlaintext(draft, previous).length > 0) {
-        return report({ ok: false, message: 'plaintext-secrets', conflict: false })
+        return { ok: false, message: 'plaintext-secrets', conflict: false }
       }
       // Secrets first: an entry that names a credential the store does not
       // hold would land straight in `waiting-credentials`. If a store fails,
@@ -562,7 +562,7 @@ export function createMcpController(hosts: McpHosts, options: McpControllerOptio
       const secrets = pendingToStore(draft)
       if (secrets.length > 0) {
         const remote = hosts.credentials()
-        if (remote === undefined) return report({ ok: false, message: 'credentials-unavailable', conflict: false })
+        if (remote === undefined) return { ok: false, message: 'credentials-unavailable', conflict: false }
         for (const secret of secrets) {
           try {
             const reply = await remote.set(secret.ref, secret.value)

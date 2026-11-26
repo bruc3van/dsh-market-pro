@@ -30,7 +30,7 @@ import type {} from '@deepseek-ai/dsh-settings'
 import type {} from '@deepseek-ai/dsh-storage-domain'
 // Type-only: brings the `ctx.loader` Context merge in.
 import type {} from '@deepseek-ai/cordis-plugin-loader'
-import { CATALOG_FORMAT, createCatalogSource, type CatalogCache } from './catalog.ts'
+import { CATALOG_FORMAT, createCatalogSource, isOfficialCatalogBase, type CatalogCache } from './catalog.ts'
 import { createInstalledManager } from './installed.ts'
 import { SafeMarketRuntime } from './runtime.ts'
 import { registerSafeMarketSettings } from './settings.ts'
@@ -42,7 +42,7 @@ import { registerMarketAiTool, type HostPluginManagerUpdateFace, type HostPlugin
 import { registerMarketAiMcpTool } from './aiMcpTools.ts'
 import { registerMarketAiSkillsTool } from './aiSkillsTools.ts'
 import { adoptDomainState, initialDomainState, safeMarketDomainSpec, type SafeMarketDomainState } from './store.ts'
-import { createTelemetryReporter } from './telemetry.ts'
+import { createTelemetryReporter, isTelemetryEnvSuppressed } from './telemetry.ts'
 import { TYPERT_MANIFEST } from './typert.ts'
 import type { SafeMarketSettingsUpdate } from './contract.ts'
 import { PACKAGE_NAME } from './shapes.ts'
@@ -91,6 +91,15 @@ export function applyMarket(ctx: Context, resolved: Config): () => void {
     const next = settings.get()
     syncAiAssistant?.()
     if (update.field === 'enabled' && next.enabled) catalog.warmup()
+    if (update.field === 'telemetryEnabled' && !next.telemetryEnabled) {
+      if (seat.status === 'opening') telemetryClearedWhileOpening = true
+      updateSeatData({
+        ...seat.data,
+        telemetryId: '',
+        telemetryLastPingDay: '',
+        telemetryLastPingKind: '',
+      })
+    }
     return next
   }
 
@@ -110,6 +119,7 @@ export function applyMarket(ctx: Context, resolved: Config): () => void {
     | { readonly status: 'disposed'; readonly data: SafeMarketDomainState }
 
   let seat: StorageSeatState = { status: 'opening', data: initialDomainState }
+  let telemetryClearedWhileOpening = false
   const disposeController = new AbortController()
   let resolveDomainReady!: () => void
   const domainReady = new Promise<void>((resolve) => { resolveDomainReady = resolve })
@@ -121,7 +131,10 @@ export function applyMarket(ctx: Context, resolved: Config): () => void {
 
   const selfVersion = readSelfVersion()
   const hostTelemetryDisabled = (ctx.get('profileContext')?.telemetryDisabledEnv ?? '').trim() !== ''
+  const telemetrySuppressedByEnv = hostTelemetryDisabled || isTelemetryEnvSuppressed()
   const isPublicPluginTarget = (candidate: string): boolean => {
+    if (!isOfficialCatalogBase(resolved.catalogBase)) return false
+    if (seat.data.catalogBase !== '' && !isOfficialCatalogBase(seat.data.catalogBase)) return false
     const cached = seat.data.catalog
     if (cached === null) return false
     const needle = candidate.toLowerCase()
@@ -233,13 +246,23 @@ export function applyMarket(ctx: Context, resolved: Config): () => void {
       }
       const stored = domain.global.get()
       const hadMemoryCatalog = seat.data.catalog !== null
-      const adopted = adoptDomainState(seat.data, stored, usable)
+      const clearTelemetry = !readSettings().telemetryEnabled || telemetryClearedWhileOpening
+      const adopted = adoptDomainState(seat.data, stored, usable, { clearTelemetry })
+      const telemetryChanged =
+        adopted.telemetryId !== stored.telemetryId
+        || adopted.telemetryLastPingDay !== stored.telemetryLastPingDay
+        || adopted.telemetryLastPingKind !== stored.telemetryLastPingKind
       seat = { status: 'durable', data: adopted, persist, close: () => domain.close() }
       resolveDomainReady()
-      if (hadMemoryCatalog || (adopted.catalog !== null && stored.catalog !== null && adopted.catalog !== stored.catalog)) {
-        // A read landed while the domain was opening, or the adopted disk
-        // catalog was compacted (legacy subscription stripped): flush now
-        // instead of keeping stale or bloated data on disk.
+      if (
+        hadMemoryCatalog
+        || telemetryChanged
+        || (adopted.catalog !== null && stored.catalog !== null && adopted.catalog !== stored.catalog)
+      ) {
+        // A read landed while the domain was opening, stored telemetry state was
+        // cleared/updated, or the adopted disk catalog was compacted (legacy
+        // subscription stripped): flush now instead of keeping stale or bloated
+        // data on disk.
         persist(adopted)
       }
       legacyPending = adopted.pendingUninstall
@@ -330,7 +353,7 @@ export function applyMarket(ctx: Context, resolved: Config): () => void {
     readSettings,
     writeSettings,
     (sessionId, signal) => readSkills(ctx, sessionId, signal),
-    { profile: profile.name, version: selfVersion },
+    { profile: profile.name, version: selfVersion, telemetrySuppressedByEnv },
     installed,
     readMcp,
     (name, signal) => probeManagedMcp(ctx, ctx.loader.entries() as Iterable<McpLoaderEntry>, name, signal),

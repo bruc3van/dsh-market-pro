@@ -145,7 +145,9 @@ export const zh = {
   'settings.catalog.title': '社区插件目录',
   'settings.catalog.desc': '联网同步社区精选与全量插件；关闭后仍可管理已安装插件、技能和 MCP。',
   'settings.telemetry.title': '匿名使用统计',
-  'settings.telemetry.desc': '仅向 dsh-market-pro.com 发送每日匿名心跳（随机 ID 与运行环境）及公开插件/精选 MCP 安装结果，用于统计安装量与优化体验；不采集对话、路径、密钥或私有插件，关闭后立即停止。',
+  'settings.telemetry.desc': '仅向 dsh-market-pro.com 发送每日心跳（本地随机安装 ID 与基本运行环境）及公开目录插件/精选 MCP 安装结果，用于统计安装量与改进兼容性。绝不采集对话、路径、密钥、私有插件或自定义 MCP；关闭后立即停发并清除本地 ID。',
+  'settings.telemetry.privacyLink': '查看遥测字段与隐私说明',
+  'settings.telemetry.envSuppressed': '当前已由环境变量（DO_NOT_TRACK / DSH_TELEMETRY_DISABLED / DSH_MARKET_TELEMETRY / CI）禁用，不会发送任何数据。',
 
   'search': '搜索插件名称、包名、功能或分类',
   'all': '全部',
@@ -849,7 +851,9 @@ export const en: Record<SafeMarketLocaleKey, string> = {
   'settings.catalog.title': 'Community Plugin Catalog',
   'settings.catalog.desc': 'Sync curated picks and the community catalog online. Turning it off keeps Installed, Skills, and MCP management available.',
   'settings.telemetry.title': 'Anonymous Usage Telemetry',
-  'settings.telemetry.desc': 'Sends a daily anonymous heartbeat (random ID and basic runtime info) and public plugin/curated MCP install outcomes to dsh-market-pro.com to track installs and improve reliability. Never collects chats, paths, secrets, or private plugins; stops immediately when turned off.',
+  'settings.telemetry.desc': 'Sends a daily heartbeat (local random install ID and basic runtime info) and official-catalog public plugin / curated MCP install outcomes to dsh-market-pro.com to track installs and improve reliability. Never collects chats, paths, secrets, private plugins, or custom MCPs; turning it off stops immediately and clears the local ID.',
+  'settings.telemetry.privacyLink': 'View telemetry fields & privacy notice',
+  'settings.telemetry.envSuppressed': 'Currently disabled by environment variable (DO_NOT_TRACK / DSH_TELEMETRY_DISABLED / DSH_MARKET_TELEMETRY / CI); no data is sent.',
 
   'search': 'Search plugins by name, package, task, or category',
   'all': 'All',

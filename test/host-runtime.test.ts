@@ -86,6 +86,7 @@ test('built market boots, registers RPCs, and persists settings and plugin toggl
     assert.equal((await first.skills.list()).some(skill => skill.name === 'market-pro'), true)
     assert.deepEqual([...first.mountedTools].sort(), ['dsh_market_pro', 'dsh_mcp_pro', 'dsh_skills_pro'])
     assert.equal(market.describe().profile, 'test')
+    assert.equal(market.describe().telemetrySuppressedByEnv, true)
     assert.equal(first.settings.describe().find(row => row.ns === 'renamed-market').autoGenerate, false)
     for (const descriptor of SAFE_MARKET_INVOCATIONS) {
       const registered = first.typert.local.get(`dshMarketPro/${descriptor.method}`)
@@ -155,6 +156,130 @@ test('built market boots, registers RPCs, and persists settings and plugin toggl
     const third = await start()
     assert.equal(third.get('marketTestDemo'), true, 'the plugin must stay enabled after restart')
     assert.deepEqual(third.get('dshMarketPro').getSettings(), { enabled: false, aiAssistantEnabled: true, telemetryEnabled: true })
+  } finally {
+    for (const ctx of contexts.reverse()) await ctx.fiber.dispose()
+    if (previousHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = previousHome
+    if (previousTelemetry === undefined) delete process.env.DSH_MARKET_TELEMETRY
+    else process.env.DSH_MARKET_TELEMETRY = previousTelemetry
+    await rm(home, { recursive: true, force: true })
+  }
+})
+
+test('disabling telemetry clears persisted telemetryId immediately, across the domain-open window, and on boot', async () => {
+  const home = await realpath(await mkdtemp(join(tmpdir(), 'safe-market-telemetry-clear-')))
+  const previousHome = process.env.DSH_HOME
+  const previousTelemetry = process.env.DSH_MARKET_TELEMETRY
+  process.env.DSH_HOME = home
+  process.env.DSH_MARKET_TELEMETRY = '0'
+  const contexts: Array<{ fiber: { dispose(): Promise<void> } }> = []
+  try {
+    const dir = join(home, 'application-profile', 'test')
+    initProfile(dir, ['test-market-bundle'])
+    const bundle = join(dir, 'node_modules', 'test-market-bundle')
+    await mkdir(bundle, { recursive: true })
+    await writeFile(join(home, 'package.json'), '{"name":"market-test"}\n')
+    await writeFile(join(bundle, 'package.json'), JSON.stringify({
+      name: 'test-market-bundle', version: '1.0.0', dsh: { bundle: { patch: 'cordis.patch.yml' } },
+    }))
+    await writeFile(join(bundle, 'cordis.patch.yml'), JSON.stringify([{ insert: [
+      { id: 'config-editor', name: 'cordis:editor' },
+      { id: 'settings', name: 'cordis:settings' },
+      { id: 'skills', name: 'cordis:skills' },
+      { id: 'typert', name: 'cordis:typert' },
+      { id: 'market', name: 'cordis:market', config: { profile: 'web' } },
+    ] }]))
+    await writeFile(join(dir, 'cordis.yml'), '[]\n')
+    const profile = {
+      name: 'test', startedBundles: ['test-market-bundle'], dir, patchPath: join(dir, 'cordis.patch.yml'),
+      installAnchor: join(home, 'package.json'), cwd: home, home, overlays: [], telemetryDisabledEnv: undefined,
+    }
+
+    const seededDomain = () => ({
+      ...initialDomainState,
+      telemetryId: '550e8400-e29b-41d4-a716-446655440000',
+      telemetryLastPingDay: '2026-11-25',
+      telemetryLastPingKind: 'desktop',
+    })
+
+    const startWithDomain = async (openFn: () => Promise<{ global: { get: () => typeof initialDomainState; set: (next: typeof initialDomainState) => Promise<void> }; close: () => Promise<void> }>) => {
+      const ctx = await boot('test', join(dir, 'cordis.yml'), readProfilePatches('test', profile), ctx => {
+        ctx.provide('profileContext', profile)
+        ctx.provide('appReady', { onReady: listener => { listener(); return () => {} } })
+        ctx.provide('tools', { register: () => () => {} })
+        ctx.provide('storageDomain', { open: openFn })
+        Object.assign(ctx.loader.builtins, {
+          editor: ConfigEditor, settings: Settings, skills: SkillRegistry, typert: TypertRegistry, market: Market,
+        })
+      })
+      contexts.push(ctx)
+      await ctx.loader.await()
+      return ctx
+    }
+
+    // 1. Immediate opt-out clear on an already-open durable domain.
+    let diskState = seededDomain()
+    const writes1: Array<typeof initialDomainState> = []
+    const first = await startWithDomain(async () => ({
+      global: {
+        get: () => diskState,
+        set: async (next) => { diskState = next; writes1.push(next) },
+      },
+      close: async () => {},
+    }))
+    await new Promise(resolve => setTimeout(resolve, 20))
+    const market1 = first.get('dshMarketPro')
+    assert.deepEqual(await market1.updateSettings({ field: 'telemetryEnabled', value: false }), {
+      enabled: true, aiAssistantEnabled: true, telemetryEnabled: false,
+    })
+    assert.ok(writes1.length >= 1)
+    assert.equal(diskState.telemetryId, '')
+    assert.equal(diskState.telemetryLastPingDay, '')
+    assert.equal(diskState.telemetryLastPingKind, '')
+    await first.fiber.dispose()
+
+    // 2. Retroactive boot clear when starting with telemetryEnabled=false and stale disk telemetry fields.
+    diskState = seededDomain()
+    const writes2: Array<typeof initialDomainState> = []
+    const second = await startWithDomain(async () => ({
+      global: {
+        get: () => diskState,
+        set: async (next) => { diskState = next; writes2.push(next) },
+      },
+      close: async () => {},
+    }))
+    await new Promise(resolve => setTimeout(resolve, 20))
+    assert.ok(writes2.length >= 1)
+    assert.equal(diskState.telemetryId, '')
+    assert.equal(diskState.telemetryLastPingDay, '')
+    assert.equal(diskState.telemetryLastPingKind, '')
+
+    // Re-enable telemetry for the opening-window test.
+    await second.get('dshMarketPro').updateSettings({ field: 'telemetryEnabled', value: true })
+    await second.fiber.dispose()
+
+    // 3. Opting out while storageDomain.open is still pending must not let adoptDomainState resurrect stale disk ID.
+    diskState = seededDomain()
+    const writes3: Array<typeof initialDomainState> = []
+    let releaseOpen!: () => void
+    const openGate = new Promise<void>(resolve => { releaseOpen = resolve })
+    const third = await startWithDomain(async () => {
+      await openGate
+      return {
+        global: {
+          get: () => diskState,
+          set: async (next) => { diskState = next; writes3.push(next) },
+        },
+        close: async () => {},
+      }
+    })
+    await third.get('dshMarketPro').updateSettings({ field: 'telemetryEnabled', value: false })
+    releaseOpen()
+    await new Promise(resolve => setTimeout(resolve, 20))
+    assert.ok(writes3.length >= 1)
+    assert.equal(diskState.telemetryId, '')
+    assert.equal(diskState.telemetryLastPingDay, '')
+    assert.equal(diskState.telemetryLastPingKind, '')
   } finally {
     for (const ctx of contexts.reverse()) await ctx.fiber.dispose()
     if (previousHome === undefined) delete process.env.DSH_HOME

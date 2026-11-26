@@ -28,6 +28,8 @@ export interface SafeMarketSnapshot {
     readonly profile: string | null;
     /** The market's own version, from the same `describe`; '' until it answers. */
     readonly version: string;
+    /** True when Host/process environment variables suppress telemetry. */
+    readonly telemetrySuppressedByEnv?: boolean;
 }
 export type SafeMarketSource = ObservableSnapshot<SafeMarketSnapshot>;
 /** What the review hand-off reports back to the card that asked for it. */

@@ -220,6 +220,8 @@ export interface MarketEnvironment {
    * not be read.
    */
   readonly version: string
+  /** True when Host/process environment variables suppress telemetry. */
+  readonly telemetrySuppressedByEnv?: boolean
 }
 
 /** The marketplace's live configuration fields exposed to the browser. */
@@ -469,6 +471,7 @@ export const marketSkillsResultSchema = z.object({
 export const marketEnvironmentSchema = z.object({
   profile: z.string(),
   version: z.string(),
+  telemetrySuppressedByEnv: z.boolean().optional(),
 }).readonly()
 
 /** Strict wire codec for the resolved settings section. */

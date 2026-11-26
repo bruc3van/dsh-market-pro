@@ -589,4 +589,11 @@ export declare const safeMarketDomainSpec: {
  * @param isUsable - whether a candidate state answers the current config.
  * @returns the merged state the plugin runs with.
  */
-export declare function adoptDomainState(current: SafeMarketDomainState, stored: SafeMarketDomainState, isUsable: (candidate: SafeMarketDomainState) => boolean): SafeMarketDomainState;
+export interface AdoptDomainOptions {
+    /**
+     * Drop telemetry identity/heartbeat fields instead of adopting them from
+     * disk (when telemetry is disabled or was cleared while opening).
+     */
+    readonly clearTelemetry?: boolean;
+}
+export declare function adoptDomainState(current: SafeMarketDomainState, stored: SafeMarketDomainState, isUsable: (candidate: SafeMarketDomainState) => boolean, options?: AdoptDomainOptions): SafeMarketDomainState;
