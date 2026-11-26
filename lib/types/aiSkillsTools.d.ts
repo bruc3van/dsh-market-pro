@@ -52,6 +52,7 @@ export interface MarketAiSkillsToolDeps {
     readonly readInstalledSkills: (agent: unknown, signal?: AbortSignal) => Promise<LiveSkillsSnapshot>;
     readonly getApprover?: () => MarketApprovalServiceFace | undefined;
     readonly installSkill?: (request: InstallFeaturedSkillRequest, signal: AbortSignal) => Promise<InstallFeaturedSkillResult>;
+    readonly onInstallOutcome?: (result: InstallFeaturedSkillResult) => void;
     readonly homeDir?: string;
 }
 /** Build the registry-ready `dsh_skills_pro` tool definition. */
@@ -69,6 +70,7 @@ export declare function readLiveSessionSkills(ctx: Context, agent: unknown, sign
 export declare function registerMarketAiSkillsTool(ctx: Context, deps: {
     readonly profile: string;
     readonly readSettings: () => SafeMarketSettings;
+    readonly onInstallOutcome?: (result: InstallFeaturedSkillResult) => void;
 }): {
     sync(): void;
 };

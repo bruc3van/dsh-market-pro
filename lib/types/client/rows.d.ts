@@ -15,6 +15,8 @@ import type { MarketFeatured, MarketFeaturedEntry, MarketInstalledPackage, Marke
  * carrying a colon cannot collide with one.
  */
 export declare const INSTALLED_FILTER = "dsh:installed";
+/** The category chip that selects DSH's built-in official/experimental bundles. */
+export declare const OFFICIAL_EXPERIMENTAL_FILTER = "dsh:official-experimental";
 /** Card-state key for a review launched from the shared installation result panel. */
 export declare const SELF_CARD_KEY = "dsh:self";
 /** Card-state key for a review launched from the installed-package view. */

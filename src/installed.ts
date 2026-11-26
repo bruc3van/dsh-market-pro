@@ -64,8 +64,43 @@ import {
   unregisteredPlugins,
   userBundles,
   writeManifest,
+  type BundleLocaleMeta,
   type ProfileManifest,
 } from './profile.ts'
+
+function pickLocalizedText(value: unknown, keys: readonly string[]): string | undefined {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const entries = Object.entries(value as Record<string, unknown>)
+  const byLower = new Map<string, string>()
+  for (const [key, raw] of entries) {
+    if (typeof raw === 'string' && raw.trim() !== '') {
+      const lower = key.toLowerCase()
+      if (!byLower.has(lower)) byLower.set(lower, raw.trim())
+    }
+  }
+  for (const key of keys) {
+    const found = byLower.get(key.toLowerCase())
+    if (found !== undefined) return found
+  }
+  return undefined
+}
+
+function hostLocaleMetaOf(meta: { readonly title?: unknown; readonly description?: unknown } | undefined): BundleLocaleMeta | undefined {
+  if (meta === undefined) return undefined
+  const titleZh = pickLocalizedText(meta.title, ['zh', 'zh-cn', 'zh-hans'])
+  const titleEn = pickLocalizedText(meta.title, ['en', 'en-us'])
+  const descriptionZh = pickLocalizedText(meta.description, ['zh', 'zh-cn', 'zh-hans'])
+  const descriptionEn = pickLocalizedText(meta.description, ['en', 'en-us'])
+  if (titleZh === undefined && titleEn === undefined && descriptionZh === undefined && descriptionEn === undefined) {
+    return undefined
+  }
+  return {
+    ...(titleZh !== undefined ? { titleZh } : {}),
+    ...(titleEn !== undefined ? { titleEn } : {}),
+    ...(descriptionZh !== undefined ? { descriptionZh } : {}),
+    ...(descriptionEn !== undefined ? { descriptionEn } : {}),
+  }
+}
 
 /** Fiber state names, indexed by the cordis `FiberState` enum's numeric values. */
 const FIBER_PHASE = ['pending', 'loading', 'active', 'failed', 'disposed', 'unloading'] as const
@@ -326,16 +361,18 @@ export function createInstalledManager(options: InstalledManagerOptions): Instal
     unregistered: string[]
     seats: string[]
     hostIcons: Map<string, string>
+    hostMeta: Map<string, BundleLocaleMeta>
   }> => {
     const manifest = await readManifest(profileDir)
     const bundles = userBundles(manifest)
     const unregistered = unregisteredPlugins(manifest, profileDir)
     const seats = desktopSeatBundles(manifest, profileDir)
     const hostIcons = new Map<string, string>()
+    const hostMeta = new Map<string, BundleLocaleMeta>()
     // A deselected dependency whose package can no longer be read declares no
     // bundle we can see, but the Host still lists it with its load error.
     // Keep it in the panel so the residue stays reachable for Uninstall.
-    // Also capture any package icon the Host already resolved for installed bundles.
+    // Also capture any package icon and localized display text the Host already resolved for installed bundles.
     const host = options.pluginManager?.()
     if (typeof host?.listBundles === 'function') {
       const known = new Set([...bundles, ...unregistered, ...seats])
@@ -344,11 +381,13 @@ export function createInstalledManager(options: InstalledManagerOptions): Instal
         if (typeof row.meta?.icon === 'string' && row.meta.icon.length <= 400_000 && isMarketIcon(row.meta.icon)) {
           hostIcons.set(row.name, row.meta.icon)
         }
+        const localized = hostLocaleMetaOf(row.meta)
+        if (localized !== undefined) hostMeta.set(row.name, localized)
         if (row.installed && !row.enabled && !row.official && row.source !== undefined && row.error !== undefined
           && !known.has(row.name)) unregistered.push(row.name)
       }
     }
-    return { manifest, bundles, unregistered, seats, hostIcons }
+    return { manifest, bundles, unregistered, seats, hostIcons, hostMeta }
   }
 
   const assertInstalled = (bundles: readonly string[], packageName: string): void => {
@@ -390,8 +429,9 @@ export function createInstalledManager(options: InstalledManagerOptions): Instal
     let unregistered: string[]
     let seats: string[]
     let hostIcons: Map<string, string>
+    let hostMeta: Map<string, BundleLocaleMeta>
     try {
-      ;({ manifest, bundles, unregistered, seats, hostIcons } = await readUserBundles())
+      ;({ manifest, bundles, unregistered, seats, hostIcons, hostMeta } = await readUserBundles())
     } catch (error) {
       return { packages: [], profile: options.profile, error: messageOf(error) }
     }
@@ -416,6 +456,11 @@ export function createInstalledManager(options: InstalledManagerOptions): Instal
       try {
         const info = await readBundleInfo(profileDir, packageName, dependencySpec)
         const icon = hostIcons.get(packageName) ?? info.icon
+        const localized = hostMeta.get(packageName)
+        const titleZh = localized?.titleZh ?? info.titleZh
+        const titleEn = localized?.titleEn ?? info.titleEn
+        const descriptionZh = localized?.descriptionZh ?? info.descriptionZh
+        const descriptionEn = localized?.descriptionEn ?? info.descriptionEn
         const entries: MarketInstalledEntry[] = info.entries.map(({ id, name }) => {
           const entry = findLive(live, id)
           return {
@@ -431,7 +476,11 @@ export function createInstalledManager(options: InstalledManagerOptions): Instal
           packageName,
           ...(icon !== undefined ? { icon } : {}),
           version: info.version,
+          ...(titleZh !== undefined ? { titleZh } : {}),
+          ...(titleEn !== undefined ? { titleEn } : {}),
           description: info.description,
+          ...(descriptionZh !== undefined ? { descriptionZh } : {}),
+          ...(descriptionEn !== undefined ? { descriptionEn } : {}),
           repository: info.repository,
           ...(info.repositoryDirectory !== '' ? { repositoryDirectory: info.repositoryDirectory } : {}),
           self,
@@ -451,8 +500,9 @@ export function createInstalledManager(options: InstalledManagerOptions): Instal
         // Under the Host its selection is still the truth, and a selected
         // one can be switched off without reading the package.
         const icon = hostIcons.get(packageName)
+        const localized = hostMeta.get(packageName)
         packages.push({
-          packageName, ...(icon !== undefined ? { icon } : {}), version: '', description: '', repository: '', self,
+          packageName, ...(icon !== undefined ? { icon } : {}), ...(localized ?? {}), version: '', description: '', repository: '', self,
           inBox: flags.inBox, unregistered: flags.unregistered && bundleEnabled === undefined,
           ...(bundleEnabled === undefined ? {} : { bundleEnabled }),
           enabled: bundleEnabled ?? false, entries: [],

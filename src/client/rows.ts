@@ -17,6 +17,9 @@ import type { MarketFeatured, MarketFeaturedEntry, MarketInstalledPackage, Marke
  */
 export const INSTALLED_FILTER = 'dsh:installed'
 
+/** The category chip that selects DSH's built-in official/experimental bundles. */
+export const OFFICIAL_EXPERIMENTAL_FILTER = 'dsh:official-experimental'
+
 /** Card-state key for a review launched from the shared installation result panel. */
 export const SELF_CARD_KEY = 'dsh:self'
 

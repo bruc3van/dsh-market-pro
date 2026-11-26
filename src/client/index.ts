@@ -37,9 +37,11 @@ import type {
   TelemetryLocale,
 } from '../contract.ts'
 import { FEATURED_MCP_SERVERS, mcpIdentityKey } from '../mcpFeatured.ts'
+import { isInstallSpec } from '../installInfo.ts'
 import { classifyInstallError } from '../telemetryError.ts'
 import { createClientCatalogCache } from './catalogCache.ts'
 import { createDirectInstaller, type InstallHost } from './directInstall.ts'
+import { createOfficialBundlesController, type OfficialBundleHost } from './officialBundles.ts'
 import { createDirectoryBrowser } from './directoryBrowser.ts'
 import {
   createMcpController, type McpCredentialsFace, type McpManagerFace, type McpPluginsFace, type McpSettingsFace,
@@ -526,15 +528,29 @@ export function apply(ctx: ClientContext): void {
   const directInstaller = createDirectInstaller(
     () => ctx.reflect.get('remote.pluginManager') as InstallHost | undefined,
     (outcome) => {
+      if (outcome.manual && !isInstallSpec(outcome.spec)) return
       sendTelemetry({
         kind: 'plugin_install',
         target: outcome.spec.slice(0, 200),
         mode: 'direct',
         result: outcome.result,
-        ...(outcome.result === 'failed' ? { errorCode: classifyInstallError(outcome.message) } : {}),
+        ...(outcome.result === 'failed' ? { errorCode: classifyInstallError(outcome.message, outcome) } : {}),
       })
     },
   )
+  const officialBundles = createOfficialBundlesController({
+    host: () => ctx.reflect.get('remote.pluginManager') as OfficialBundleHost | undefined,
+  })
+  ctx.effect(() => {
+    const onChanged = () => { void officialBundles.refresh() }
+    const offChanged = ctx.remote.$on('plugin-manager/changed', onChanged)
+    const offReset = ctx.on('connection/reset', onChanged)
+    return () => {
+      offChanged()
+      offReset()
+      officialBundles.dispose()
+    }
+  }, 'dsh-market-pro: official bundles sync')
   const pluginUpdater = createPluginUpdater(
     () => ctx.reflect.get('remote.pluginManager') as UpdateHost | undefined,
     () => ctx.reflect.get('remote.pluginMarket') as UpdateMarketHost | undefined,
@@ -682,6 +698,7 @@ export function apply(ctx: ClientContext): void {
     hooks: { scope },
     updateSettings,
     directInstaller,
+    officialBundles,
     pluginUpdater,
     loadCatalog,
     peekCatalog,

@@ -166,8 +166,15 @@ export declare function collectEntryRows(patches: readonly PatchRow[]): {
  * the result matches what the Loader imports.
  */
 export declare function packageDirFromProfile(profileDir: string, packageName: string): string | undefined;
+/** Localized display title and description read from a package's DSH locale files. */
+export interface BundleLocaleMeta {
+    readonly titleZh?: string;
+    readonly titleEn?: string;
+    readonly descriptionZh?: string;
+    readonly descriptionEn?: string;
+}
 /** One installed bundle's display facts plus the entry ids it introduces. */
-export interface BundleInfo {
+export interface BundleInfo extends BundleLocaleMeta {
     icon?: string;
     version: string;
     description: string;
@@ -187,6 +194,11 @@ export interface BundleInfo {
  * package root, image extension allowlist, and a 256 KiB byte limit.
  */
 export declare function readPackageIcon(packageDir: string, manifest: Record<string, unknown>): Promise<string | undefined>;
+/**
+ * Read localized `meta.title` / `meta.description` from a package's exported
+ * DSH locale JSON files (`./locale/zh.json` and `./locale/en.json`).
+ */
+export declare function readPackageLocaleMeta(packageDir: string, manifest: Record<string, unknown>): Promise<BundleLocaleMeta>;
 /**
  * The GitHub `owner/name` a package manifest's `repository` field names.
  *

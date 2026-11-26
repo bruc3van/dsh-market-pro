@@ -13,6 +13,7 @@ import {
   isTelemetryEnvSuppressed,
   sanitizeMcpTarget,
   sanitizePluginTarget,
+  sanitizeSkillTarget,
 } from '../src/telemetry.ts'
 
 test('isTelemetryEnvSuppressed honors DSH_TELEMETRY_DISABLED, DO_NOT_TRACK, DSH_MARKET_TELEMETRY and CI', () => {
@@ -62,9 +63,23 @@ test('sanitizePluginTarget and sanitizeMcpTarget never leak private targets', ()
 
   assert.equal(sanitizeMcpTarget('context7'), 'context7')
   assert.equal(sanitizeMcpTarget('my-private-internal-mcp'), 'custom')
+
+  const resolveCanonical = (candidate: string): string | null => {
+    const map: Record<string, string> = {
+      'dsh-better-sidebar': 'omdsh-dev/DSH-better-sidebar',
+      '@anionex/dsh-vision-toolkit': 'Anionex/dsh-vision-toolkit',
+    }
+    return map[candidate.toLowerCase()] ?? null
+  }
+  assert.equal(sanitizePluginTarget('dsh-better-sidebar@0.33.0', resolveCanonical), 'omdsh-dev/DSH-better-sidebar')
+  assert.equal(sanitizePluginTarget('@anionex/dsh-vision-toolkit@0.1.53', resolveCanonical), 'Anionex/dsh-vision-toolkit')
+  assert.equal(sanitizePluginTarget('@corp/private@1.0.0', resolveCanonical), 'custom')
+
+  assert.equal(sanitizeSkillTarget('vercel-labs/skills/find-skills'), 'vercel-labs/skills/find-skills')
+  assert.equal(sanitizeSkillTarget('private/internal/skill'), 'custom')
 })
 
-test('classifyInstallError maps arbitrary error strings to closed safe enums', () => {
+test('classifyInstallError maps arbitrary error strings and structured hints to closed safe enums', () => {
   assert.equal(classifyInstallError('Incompatible engines.dsh peer requirement'), 'compat')
   assert.equal(classifyInstallError('Request timed out after 30s'), 'timeout')
   assert.equal(classifyInstallError('npm error version 10.9.0\nRequest timed out while fetching metadata'), 'timeout')
@@ -76,6 +91,20 @@ test('classifyInstallError maps arbitrary error strings to closed safe enums', (
   assert.equal(classifyInstallError('Write refused: readonly profile'), 'refused')
   assert.equal(classifyInstallError('name-conflict'), 'refused')
   assert.equal(classifyInstallError('Unexpected crash at /Users/alice/secret.ts'), 'unknown')
+
+  // Structured hints take precedence and resolve previously opaque errors cleanly.
+  assert.equal(classifyInstallError('failed', { inspectProblem: 'not-a-bundle' }), 'not_bundle')
+  assert.equal(classifyInstallError('failed', { inspectProblem: 'shipped' }), 'already_installed')
+  assert.equal(classifyInstallError('failed', { errorCode: 'incompatible-version' }), 'compat')
+  assert.equal(classifyInstallError('failed', { errorCode: 'unsupported-platform' }), 'unsupported_platform')
+  assert.equal(classifyInstallError('failed', { errorCode: 'operation-error', packageKind: 'pnpm-missing' }), 'pnpm_missing')
+  assert.equal(classifyInstallError('failed', { errorCode: 'operation-error', packageKind: 'disk-full' }), 'disk_full')
+  assert.equal(classifyInstallError('failed', { errorCode: 'operation-error', timedOut: true }), 'timeout')
+  assert.equal(classifyInstallError('failed', { errorCode: 'operation-error' }), 'operation_error')
+  assert.equal(classifyInstallError('HTTP 404 from codeload.github.com', { skillErrorCode: 'download-failed' }), 'not_found')
+  assert.equal(classifyInstallError('network down', { skillErrorCode: 'download-failed' }), 'network')
+  assert.equal(classifyInstallError('EACCES: permission denied', { skillErrorCode: 'write-failed' }), 'permission')
+  assert.equal(classifyInstallError('rename failed', { skillErrorCode: 'write-failed' }), 'write_failed')
 })
 
 test('createTelemetryReporter sends at most one daily ping, respects toggle, and reports sanitized feedback', async () => {
@@ -118,22 +147,26 @@ test('createTelemetryReporter sends at most one daily ping, respects toggle, and
   await new Promise(resolve => setTimeout(resolve, 20))
   assert.equal(sent.length, 1)
 
-  // Public plugin and curated MCP install feedback are kept; private/custom targets are dropped completely.
+  // Public plugin, curated skill, and curated MCP install feedback are kept; private/custom targets are dropped completely.
   reporter.handleClientEvent({ kind: 'plugin_install', target: 'dsh-better-sidebar@0.32.1', mode: 'direct', result: 'ok' })
   reporter.handleClientEvent({ kind: 'plugin_install', target: '@acme/private-tool', mode: 'direct', result: 'failed', errorCode: 'compat' })
   reporter.handleClientEvent({ kind: 'mcp_install', target: 'playwright', mode: 'featured', result: 'ok' })
   reporter.handleClientEvent({ kind: 'mcp_install', target: 'my-private-mcp', mode: 'custom', result: 'ok' })
+  reporter.reportSkillInstall({ target: 'vercel-labs/skills/find-skills', mode: 'featured', result: 'ok' })
+  reporter.reportSkillInstall({ target: 'private/repo/secret-skill', mode: 'ai', result: 'failed', errorCode: 'network' })
   await new Promise(resolve => setTimeout(resolve, 20))
-  assert.equal(sent.length, 3)
+  assert.equal(sent.length, 4)
   assert.equal(sent[1]?.target, 'dsh-better-sidebar')
   assert.equal(sent[2]?.event, 'mcp_install')
   assert.equal(sent[2]?.target, 'playwright')
+  assert.equal(sent[3]?.event, 'skill_install')
+  assert.equal(sent[3]?.target, 'vercel-labs/skills/find-skills')
 
   // Turning telemetry off immediately suppresses all outgoing events.
   enabled = false
   reporter.handleClientEvent({ kind: 'mcp_install', target: 'context7', mode: 'featured', result: 'ok' })
   await new Promise(resolve => setTimeout(resolve, 20))
-  assert.equal(sent.length, 3)
+  assert.equal(sent.length, 4)
 
   reporter.dispose()
 })

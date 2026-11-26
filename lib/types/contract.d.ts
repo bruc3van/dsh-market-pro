@@ -236,7 +236,7 @@ export type SafeMarketSettingsUpdate = {
 export type TelemetryHostKind = 'desktop' | 'web' | 'other';
 export type TelemetryOs = 'darwin' | 'win32' | 'linux' | 'other';
 export type TelemetryLocale = 'zh' | 'en' | 'other';
-export type TelemetryErrorCode = 'compat' | 'network' | 'timeout' | 'refused' | 'cancelled' | 'unknown';
+export type TelemetryErrorCode = 'compat' | 'unsupported_platform' | 'not_bundle' | 'already_installed' | 'not_found' | 'pnpm_missing' | 'build_blocked' | 'permission' | 'disk_full' | 'integrity' | 'invalid_spec' | 'network' | 'timeout' | 'refused' | 'cancelled' | 'write_failed' | 'operation_error' | 'unknown';
 export type TelemetryClientEvent = {
     readonly kind: 'client_hello';
     readonly hostKind: TelemetryHostKind;
@@ -251,6 +251,12 @@ export type TelemetryClientEvent = {
     readonly kind: 'mcp_install';
     readonly target: string;
     readonly mode: 'featured' | 'custom';
+    readonly result: 'ok' | 'failed';
+    readonly errorCode?: TelemetryErrorCode;
+} | {
+    readonly kind: 'skill_install';
+    readonly target: string;
+    readonly mode: 'featured' | 'ai';
     readonly result: 'ok' | 'failed';
     readonly errorCode?: TelemetryErrorCode;
 };
@@ -272,7 +278,11 @@ export interface MarketInstalledPackage {
     readonly packageName: string;
     readonly icon?: string;
     readonly version: string;
+    readonly titleZh?: string;
+    readonly titleEn?: string;
     readonly description: string;
+    readonly descriptionZh?: string;
+    readonly descriptionEn?: string;
     /**
      * The `owner/name` this package's manifest points its `repository` field
      * at, when that field names a GitHub repository in a shape matching
@@ -888,9 +898,21 @@ export declare const telemetryClientEventSchema: z.ZodDiscriminatedUnion<[z.ZodR
     errorCode: z.ZodOptional<z.ZodEnum<{
         cancelled: "cancelled";
         compat: "compat";
+        unsupported_platform: "unsupported_platform";
+        not_bundle: "not_bundle";
+        already_installed: "already_installed";
+        not_found: "not_found";
+        pnpm_missing: "pnpm_missing";
+        build_blocked: "build_blocked";
+        permission: "permission";
+        disk_full: "disk_full";
+        integrity: "integrity";
+        invalid_spec: "invalid_spec";
         network: "network";
         timeout: "timeout";
         refused: "refused";
+        write_failed: "write_failed";
+        operation_error: "operation_error";
         unknown: "unknown";
     }>>;
 }, z.core.$strip>>, z.ZodReadonly<z.ZodObject<{
@@ -907,9 +929,52 @@ export declare const telemetryClientEventSchema: z.ZodDiscriminatedUnion<[z.ZodR
     errorCode: z.ZodOptional<z.ZodEnum<{
         cancelled: "cancelled";
         compat: "compat";
+        unsupported_platform: "unsupported_platform";
+        not_bundle: "not_bundle";
+        already_installed: "already_installed";
+        not_found: "not_found";
+        pnpm_missing: "pnpm_missing";
+        build_blocked: "build_blocked";
+        permission: "permission";
+        disk_full: "disk_full";
+        integrity: "integrity";
+        invalid_spec: "invalid_spec";
         network: "network";
         timeout: "timeout";
         refused: "refused";
+        write_failed: "write_failed";
+        operation_error: "operation_error";
+        unknown: "unknown";
+    }>>;
+}, z.core.$strip>>, z.ZodReadonly<z.ZodObject<{
+    kind: z.ZodLiteral<"skill_install">;
+    target: z.ZodString;
+    mode: z.ZodEnum<{
+        featured: "featured";
+        ai: "ai";
+    }>;
+    result: z.ZodEnum<{
+        ok: "ok";
+        failed: "failed";
+    }>;
+    errorCode: z.ZodOptional<z.ZodEnum<{
+        cancelled: "cancelled";
+        compat: "compat";
+        unsupported_platform: "unsupported_platform";
+        not_bundle: "not_bundle";
+        already_installed: "already_installed";
+        not_found: "not_found";
+        pnpm_missing: "pnpm_missing";
+        build_blocked: "build_blocked";
+        permission: "permission";
+        disk_full: "disk_full";
+        integrity: "integrity";
+        invalid_spec: "invalid_spec";
+        network: "network";
+        timeout: "timeout";
+        refused: "refused";
+        write_failed: "write_failed";
+        operation_error: "operation_error";
         unknown: "unknown";
     }>>;
 }, z.core.$strip>>], "kind">;
@@ -935,7 +1000,11 @@ export declare const marketInstalledPackageSchema: z.ZodReadonly<z.ZodObject<{
     packageName: z.ZodString;
     icon: z.ZodOptional<z.ZodString>;
     version: z.ZodString;
+    titleZh: z.ZodOptional<z.ZodString>;
+    titleEn: z.ZodOptional<z.ZodString>;
     description: z.ZodString;
+    descriptionZh: z.ZodOptional<z.ZodString>;
+    descriptionEn: z.ZodOptional<z.ZodString>;
     repository: z.ZodUnion<readonly [z.ZodString, z.ZodLiteral<"">]>;
     repositoryDirectory: z.ZodOptional<z.ZodString>;
     self: z.ZodBoolean;
@@ -966,7 +1035,11 @@ export declare const marketInstalledResultSchema: z.ZodReadonly<z.ZodObject<{
         packageName: z.ZodString;
         icon: z.ZodOptional<z.ZodString>;
         version: z.ZodString;
+        titleZh: z.ZodOptional<z.ZodString>;
+        titleEn: z.ZodOptional<z.ZodString>;
         description: z.ZodString;
+        descriptionZh: z.ZodOptional<z.ZodString>;
+        descriptionEn: z.ZodOptional<z.ZodString>;
         repository: z.ZodUnion<readonly [z.ZodString, z.ZodLiteral<"">]>;
         repositoryDirectory: z.ZodOptional<z.ZodString>;
         self: z.ZodBoolean;

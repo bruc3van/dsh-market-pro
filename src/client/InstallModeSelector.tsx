@@ -10,15 +10,17 @@ interface MenuOption<T extends string = string> { value: T; label: string; count
  */
 type MenuOpenState = 'closed' | 'open-pointer' | 'open-keyboard'
 
-export function MarketSelector<T extends string = string>({ value, onChange, label, options, className }: {
+export function MarketSelector<T extends string = string>({ value, onChange, label, options, className, prefix, disabled = false }: {
   value: T
   onChange: (value: T) => void
   label: string
   options: readonly MenuOption<T>[]
   className: string
+  prefix?: string
+  disabled?: boolean
 }) {
   const [menuState, setMenuState] = useState<MenuOpenState>('closed')
-  const open = menuState !== 'closed'
+  const open = !disabled && menuState !== 'closed'
   const close = () => { setMenuState('closed') }
   const selected = options.find(option => option.value === value) ?? options[0]!
   return <div className={className}>
@@ -30,10 +32,11 @@ export function MarketSelector<T extends string = string>({ value, onChange, lab
           : <span className="dsh_market_optionRow"><span className="dsh_market_optionLabel">{option.label}</span><span className="dsh_market_optionCount">{option.count}</span></span>,
       }))}
       onSelect={(next) => { close(); onChange(next as T) }}
-      anchor={<button type="button" className="dsh_market_modeTrigger" aria-haspopup="menu" aria-expanded={open}
+      anchor={<button type="button" className="dsh_market_modeTrigger" disabled={disabled} aria-haspopup="menu" aria-expanded={open}
         aria-label={`${label}：${selected.label}`}
-        onClick={() => { setMenuState(current => (current === 'closed' ? 'open-pointer' : 'closed')) }}
-        onKeyDown={event => { if (!open && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) { event.preventDefault(); setMenuState('open-keyboard') } }}>
+        onClick={() => { if (!disabled) setMenuState(current => (current === 'closed' ? 'open-pointer' : 'closed')) }}
+        onKeyDown={event => { if (!disabled && !open && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) { event.preventDefault(); setMenuState('open-keyboard') } }}>
+        {prefix !== undefined && <span className="dsh_market_selectPrefix">{prefix}</span>}
         <span className="dsh_market_selectLabel">{selected.label}</span>
         <IconChevronDownOutlineRegular size={14} className="dsh_market_modeChevron" />
       </button>} />

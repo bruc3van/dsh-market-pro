@@ -32,7 +32,7 @@ export function DirectInstallPanel({ item, installer, ownedIndex, t, onClose, on
   ownedIndexRef.current = ownedIndex
   const userTouchedRef = useRef(false)
   const id = useId()
-  const open = !dismissed && (item !== null || state.phase !== 'idle')
+  const open = !dismissed && (item !== null || (state.phase !== 'idle' && state.origin !== 'manual'))
   const busy = ['checking', 'installing', 'cancelling', 'unknown'].includes(state.phase)
   const visibleItem = busy && !submitted ? null : item
   const dismiss = () => { setDismissed(true); installer.reset(); onClose() }
@@ -52,7 +52,7 @@ export function DirectInstallPanel({ item, installer, ownedIndex, t, onClose, on
     setSelected(previous => reconcileSelectedTargets(itemTargets, previous, ownedIndex, userTouchedRef.current))
   }, [item, ownedIndex, showResult])
   useEffect(() => {
-    if (shouldRefreshInstalledAfterDirect(state)) onInstalled()
+    if (state.origin !== 'manual' && shouldRefreshInstalledAfterDirect(state)) onInstalled()
   }, [state, onInstalled])
   const targetOwned = (spec: string): MarketInstalledPackage | undefined =>
     ownedIndex ? ownedByTarget(ownedIndex, spec) : undefined

@@ -10,6 +10,7 @@ export interface SettingsViewProps {
     readonly onTryAssistant?: () => void;
     readonly tryBusy?: boolean;
     readonly tryMessage?: string;
+    readonly onStarred?: () => void;
 }
 /** Built-in settings tab for toggling the AI assistant and online catalog access. */
-export declare function SettingsView({ t, settings, settingsReady, telemetrySuppressedByEnv, updateSettings, onTryAssistant, tryBusy, tryMessage, }: SettingsViewProps): ReactElement;
+export declare function SettingsView({ t, settings, settingsReady, telemetrySuppressedByEnv, updateSettings, onTryAssistant, tryBusy, tryMessage, onStarred, }: SettingsViewProps): ReactElement;

@@ -1,5 +1,6 @@
 import { Switch } from '@deepseek-ai/dsh-client-ui-primitives'
 import { MarketButton } from './MarketButton.tsx'
+import { StarActionLink } from './StarPromptCard.tsx'
 import { useEffect, useId, useRef, useState, type ReactElement } from 'react'
 import type { SafeMarketSettings, SafeMarketSettingsUpdate } from '../contract.ts'
 import type { MarketLocale } from './copy.ts'
@@ -13,6 +14,7 @@ export interface SettingsViewProps {
   readonly onTryAssistant?: () => void
   readonly tryBusy?: boolean
   readonly tryMessage?: string
+  readonly onStarred?: () => void
 }
 
 type SettingsSaveState =
@@ -30,12 +32,14 @@ export function SettingsView({
   onTryAssistant,
   tryBusy = false,
   tryMessage = '',
+  onStarred,
 }: SettingsViewProps): ReactElement {
   const [saveState, setSaveState] = useState<SettingsSaveState>({ status: 'idle' })
   const baseId = useId()
   const aiHeadingId = `${baseId}-ai`
   const catalogHeadingId = `${baseId}-catalog`
   const telemetryHeadingId = `${baseId}-telemetry`
+  const starHeadingId = `${baseId}-star`
   const mounted = useRef(true)
 
   useEffect(() => {
@@ -121,15 +125,17 @@ export function SettingsView({
         <div className="dsh_market_settingHead">
           <div className="dsh_market_settingCopy">
             <h4 id={telemetryHeadingId} className="dsh_market_settingName">{t('settings.telemetry.title')}</h4>
-            <p className="dsh_market_settingBody">{t('settings.telemetry.desc')}</p>
-            <a
-              className="dsh_market_settingLink"
-              href="https://github.com/bruc3van/dsh-market-pro/blob/master/PRIVACY.md"
-              target="_blank"
-              rel="noreferrer"
-            >
-              {t('settings.telemetry.privacyLink')}
-            </a>
+            <p className="dsh_market_settingBody">
+              {t('settings.telemetry.desc')}
+              <a
+                className="dsh_market_settingLink"
+                href="https://github.com/bruc3van/dsh-market-pro/blob/master/PRIVACY.md"
+                target="_blank"
+                rel="noreferrer"
+              >
+                {t('settings.telemetry.privacyLink')}
+              </a>
+            </p>
           </div>
           <Switch
             checked={telemetrySuppressedByEnv ? false : settings.telemetryEnabled}
@@ -141,6 +147,16 @@ export function SettingsView({
         {telemetrySuppressedByEnv && (
           <p className="dsh_market_settingBody">{t('settings.telemetry.envSuppressed')}</p>
         )}
+      </section>
+
+      <section className="dsh_market_settingRow" aria-labelledby={starHeadingId}>
+        <div className="dsh_market_settingHead dsh_market_settingStarHead">
+          <div className="dsh_market_settingCopy">
+            <h4 id={starHeadingId} className="dsh_market_settingName">{t('settings.star.title')}</h4>
+            <p className="dsh_market_settingBody">{t('star.prompt')}</p>
+          </div>
+          <StarActionLink t={t} onStarred={onStarred} />
+        </div>
       </section>
     </div>
   )

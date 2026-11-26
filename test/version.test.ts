@@ -19,6 +19,8 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const pkg = JSON.parse(await readFile(resolve(root, 'package.json'), 'utf8')) as {
   name: string
   version: string
+  exports: Record<string, string | Record<string, string>>
+  files: string[]
   dsh: { client: { inject: string[] } }
   peerDependencies: Record<string, string>
   devDependencies: Record<string, string>
@@ -67,6 +69,15 @@ test('package metadata and bundle entry agree on the plugin identity and version
     pkg.version,
     `dsh.plugin.json says ${plugin.version} but package.json says ${pkg.version} — bump both together`,
   )
+  assert.equal(pkg.exports['./locale/*.json'], './locale/*.json')
+  assert.ok(pkg.files.includes('locale/*.json'))
+  for (const lang of ['en', 'zh'] as const) {
+    const locale = JSON.parse(await readFile(resolve(root, 'locale', `${lang}.json`), 'utf8')) as {
+      meta?: { title?: string; description?: string }
+    }
+    assert.ok(typeof locale.meta?.title === 'string' && locale.meta.title.trim() !== '', `locale/${lang}.json must declare meta.title`)
+    assert.ok(typeof locale.meta?.description === 'string' && locale.meta.description.trim() !== '', `locale/${lang}.json must declare meta.description`)
+  }
 })
 
 for (const name of ['README.md', 'README_EN.md'] as const) {

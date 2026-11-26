@@ -19,6 +19,7 @@ import { randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { parseGitHubRepoSlug } from './installInfo.ts'
 import { FEATURED_MCP_SERVERS } from './mcpFeatured.ts'
+import { findFeaturedSkillByExactId } from './skillsFeatured.ts'
 import type {
   TelemetryClientEvent,
   TelemetryErrorCode,
@@ -60,6 +61,7 @@ export interface TelemetryOptions {
   readonly os?: TelemetryOs
   readonly isEnabled: () => boolean
   readonly isPublicPluginTarget?: (target: string) => boolean
+  readonly resolvePublicPluginTarget?: (candidate: string) => string | null
   readonly storage: TelemetryStoragePort
   readonly disposeSignal?: AbortSignal
   readonly env?: Readonly<Record<string, string | undefined>>
@@ -80,6 +82,12 @@ export interface TelemetryReporter {
   reportMcpInstall(input: {
     readonly target: string
     readonly mode: 'featured' | 'custom'
+    readonly result: 'ok' | 'failed'
+    readonly errorCode?: TelemetryErrorCode
+  }): void
+  reportSkillInstall(input: {
+    readonly target: string
+    readonly mode: 'featured' | 'ai'
     readonly result: 'ok' | 'failed'
     readonly errorCode?: TelemetryErrorCode
   }): void
@@ -146,10 +154,13 @@ export function detectOs(platform: string = process.platform): TelemetryOs {
   return 'other'
 }
 
-/** Extract a clean package name or `owner/repo` slug from an install target, else `'custom'`. */
+/**
+ * Extract a clean package name or `owner/repo` slug from an install target,
+ * optionally resolving it to a canonical official-catalog identifier, else `'custom'`.
+ */
 export function sanitizePluginTarget(
   rawTarget: string,
-  isPublic?: (candidate: string) => boolean,
+  resolver?: (candidate: string) => boolean | string | null,
 ): string {
   const trimmed = rawTarget.trim()
   if (trimmed === '' || trimmed === 'custom') return 'custom'
@@ -172,7 +183,11 @@ export function sanitizePluginTarget(
     }
   }
   if (candidate === '') return 'custom'
-  if (isPublic !== undefined && !isPublic(candidate)) return 'custom'
+  if (resolver !== undefined) {
+    const resolved = resolver(candidate)
+    if (resolved === false || resolved === null || resolved === '' || resolved === 'custom') return 'custom'
+    if (typeof resolved === 'string') return resolved
+  }
   return candidate
 }
 
@@ -180,6 +195,12 @@ export function sanitizePluginTarget(
 export function sanitizeMcpTarget(rawId: string): string {
   const clean = rawId.trim().toLowerCase()
   return FEATURED_MCP_IDS.has(clean) ? clean : 'custom'
+}
+
+/** Only keep known built-in curated Agent Skill IDs (`owner/repo/skillId`), else `'custom'`. */
+export function sanitizeSkillTarget(rawId: string): string {
+  const found = findFeaturedSkillByExactId(rawId.trim())
+  return found !== undefined ? found.id : 'custom'
 }
 
 export function createTelemetryReporter(options: TelemetryOptions): TelemetryReporter {
@@ -293,7 +314,7 @@ export function createTelemetryReporter(options: TelemetryOptions): TelemetryRep
   }
 
   const sendFeedback = async (
-    event: 'plugin_install' | 'mcp_install',
+    event: 'plugin_install' | 'mcp_install' | 'skill_install',
     target: string,
     mode: 'direct' | 'ai' | 'featured' | 'custom',
     result: 'ok' | 'failed',
@@ -328,6 +349,8 @@ export function createTelemetryReporter(options: TelemetryOptions): TelemetryRep
     else feedbackFailuresToday += 1
   }
 
+  const pluginTargetResolver = options.resolvePublicPluginTarget ?? options.isPublicPluginTarget
+
   return {
     scheduleBootPing() {
       if (disposed || bootTimer !== undefined) return
@@ -350,7 +373,7 @@ export function createTelemetryReporter(options: TelemetryOptions): TelemetryRep
         return
       }
       if (event.kind === 'plugin_install') {
-        const cleanTarget = sanitizePluginTarget(event.target, options.isPublicPluginTarget)
+        const cleanTarget = sanitizePluginTarget(event.target, pluginTargetResolver)
         if (cleanTarget === 'custom') return
         void sendFeedback('plugin_install', cleanTarget, event.mode, event.result, event.errorCode)
         return
@@ -359,11 +382,17 @@ export function createTelemetryReporter(options: TelemetryOptions): TelemetryRep
         const cleanTarget = sanitizeMcpTarget(event.target)
         if (cleanTarget === 'custom') return
         void sendFeedback('mcp_install', cleanTarget, event.mode, event.result, event.errorCode)
+        return
+      }
+      if (event.kind === 'skill_install') {
+        const cleanTarget = sanitizeSkillTarget(event.target)
+        if (cleanTarget === 'custom') return
+        void sendFeedback('skill_install', cleanTarget, event.mode, event.result, event.errorCode)
       }
     },
 
     reportPluginInstall(input) {
-      const cleanTarget = sanitizePluginTarget(input.target, options.isPublicPluginTarget)
+      const cleanTarget = sanitizePluginTarget(input.target, pluginTargetResolver)
       if (cleanTarget === 'custom') return
       void sendFeedback('plugin_install', cleanTarget, input.mode, input.result, input.errorCode)
     },
@@ -372,6 +401,12 @@ export function createTelemetryReporter(options: TelemetryOptions): TelemetryRep
       const cleanTarget = sanitizeMcpTarget(input.target)
       if (cleanTarget === 'custom') return
       void sendFeedback('mcp_install', cleanTarget, input.mode, input.result, input.errorCode)
+    },
+
+    reportSkillInstall(input) {
+      const cleanTarget = sanitizeSkillTarget(input.target)
+      if (cleanTarget === 'custom') return
+      void sendFeedback('skill_install', cleanTarget, input.mode, input.result, input.errorCode)
     },
 
     dispose() {

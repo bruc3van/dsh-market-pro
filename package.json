@@ -54,7 +54,8 @@
       "default": "./lib/invariant.js"
     },
     "./package.json": "./package.json",
-    "./icon": "./assets/logo.svg"
+    "./icon": "./assets/logo.svg",
+    "./locale/*.json": "./locale/*.json"
   },
   "dsh": {
     "bundle": {
@@ -81,6 +82,7 @@
   "files": [
     "assets/logo.svg",
     "assets/logo.png",
+    "locale/*.json",
     "lib",
     "!lib/**/*.map",
     "cordis.patch.yml",

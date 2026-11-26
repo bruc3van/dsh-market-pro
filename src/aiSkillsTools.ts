@@ -125,6 +125,7 @@ export interface MarketAiSkillsToolDeps {
   readonly readInstalledSkills: (agent: unknown, signal?: AbortSignal) => Promise<LiveSkillsSnapshot>
   readonly getApprover?: () => MarketApprovalServiceFace | undefined
   readonly installSkill?: (request: InstallFeaturedSkillRequest, signal: AbortSignal) => Promise<InstallFeaturedSkillResult>
+  readonly onInstallOutcome?: (result: InstallFeaturedSkillResult) => void
   readonly homeDir?: string
 }
 
@@ -566,6 +567,7 @@ export function createMarketAiSkillsToolDefinition(deps: MarketAiSkillsToolDeps)
               ...(projectDir !== undefined ? { projectDir } : {}),
               ...(overwrite ? { overwrite: true } : {}),
             }, exec?.signal ?? controller.signal)
+            deps.onInstallOutcome?.(result)
             if (result.ok) {
               return JSON.stringify({
                 outcome: 'installed',
@@ -711,6 +713,7 @@ export async function readLiveSessionSkills(ctx: Context, agent: unknown, signal
 export function registerMarketAiSkillsTool(ctx: Context, deps: {
   readonly profile: string
   readonly readSettings: () => SafeMarketSettings
+  readonly onInstallOutcome?: (result: InstallFeaturedSkillResult) => void
 }): { sync(): void } {
   const safeGet = <T>(name: string): T | undefined => {
     try {
@@ -725,6 +728,7 @@ export function registerMarketAiSkillsTool(ctx: Context, deps: {
     readInstalledSkills: (agent, signal) => readLiveSessionSkills(ctx, agent, signal),
     getApprover: () => safeGet<MarketApprovalServiceFace>('approval'),
     installSkill: (request, signal) => installFeaturedSkillOnHost(request, signal),
+    onInstallOutcome: deps.onInstallOutcome,
   }
 
   return registerDynamicAiTool(ctx, {

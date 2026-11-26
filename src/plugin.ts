@@ -42,9 +42,10 @@ import { registerMarketAiTool, type HostPluginManagerUpdateFace, type HostPlugin
 import { registerMarketAiMcpTool } from './aiMcpTools.ts'
 import { registerMarketAiSkillsTool } from './aiSkillsTools.ts'
 import { adoptDomainState, initialDomainState, safeMarketDomainSpec, type SafeMarketDomainState } from './store.ts'
-import { createTelemetryReporter, isTelemetryEnvSuppressed } from './telemetry.ts'
+import { packageNameFromInstallSpec, parseGitHubRepoSlug } from './installInfo.ts'
+import { classifyInstallError, createTelemetryReporter, isTelemetryEnvSuppressed } from './telemetry.ts'
 import { TYPERT_MANIFEST } from './typert.ts'
-import type { SafeMarketSettingsUpdate } from './contract.ts'
+import type { InstallFeaturedSkillResult, MarketPlugin, SafeMarketSettingsUpdate } from './contract.ts'
 import { PACKAGE_NAME } from './shapes.ts'
 import type { Config } from './index.ts'
 
@@ -132,24 +133,38 @@ export function applyMarket(ctx: Context, resolved: Config): () => void {
   const selfVersion = readSelfVersion()
   const hostTelemetryDisabled = (ctx.get('profileContext')?.telemetryDisabledEnv ?? '').trim() !== ''
   const telemetrySuppressedByEnv = hostTelemetryDisabled || isTelemetryEnvSuppressed()
-  const isPublicPluginTarget = (candidate: string): boolean => {
-    if (!isOfficialCatalogBase(resolved.catalogBase)) return false
-    if (seat.data.catalogBase !== '' && !isOfficialCatalogBase(seat.data.catalogBase)) return false
+  const resolvePublicPluginTarget = (candidate: string): string | null => {
+    if (!isOfficialCatalogBase(resolved.catalogBase)) return null
+    if (seat.data.catalogBase !== '' && !isOfficialCatalogBase(seat.data.catalogBase)) return null
     const cached = seat.data.catalog
-    if (cached === null) return false
+    if (cached === null) return null
     const needle = candidate.toLowerCase()
-    for (const item of cached.items) {
-      if (item.fullName.toLowerCase() === needle || item.packageName?.toLowerCase() === needle) return true
+    const matchItem = (item: MarketPlugin): string | null => {
+      if (item.fullName.toLowerCase() === needle) return item.fullName
+      if (item.packageName?.toLowerCase() === needle) return item.fullName || item.packageName
+      for (const target of item.installInfo?.targets ?? []) {
+        const pkg = packageNameFromInstallSpec(target.install).toLowerCase()
+        const repo = parseGitHubRepoSlug(target.install, { allowCodeload: true }).toLowerCase()
+        if ((pkg !== '' && pkg === needle) || (repo !== '' && repo === needle)) {
+          return item.fullName || candidate
+        }
+      }
+      return null
     }
     for (const entry of cached.featured?.entries ?? []) {
-      if (entry.item.fullName.toLowerCase() === needle || entry.item.packageName?.toLowerCase() === needle) return true
+      const matched = matchItem(entry.item)
+      if (matched !== null) return matched
     }
-    return false
+    for (const item of cached.items) {
+      const matched = matchItem(item)
+      if (matched !== null) return matched
+    }
+    return null
   }
   const telemetry = createTelemetryReporter({
     pluginVersion: selfVersion,
     isEnabled: () => !hostTelemetryDisabled && readSettings().telemetryEnabled,
-    isPublicPluginTarget,
+    resolvePublicPluginTarget,
     storage: {
       ready: domainReady,
       read: () => ({
@@ -332,9 +347,25 @@ export function applyMarket(ctx: Context, resolved: Config): () => void {
     readSettings,
     entries: () => ctx.loader.entries() as Iterable<McpLoaderEntry>,
   })
+  const reportSkillOutcome = (mode: 'featured' | 'ai', result: InstallFeaturedSkillResult): void => {
+    if (result.ok) {
+      telemetry.reportSkillInstall({ target: result.id, mode, result: 'ok' })
+      return
+    }
+    if (result.code === 'already-exists' || result.code === 'invalid-project-dir' || result.code === 'not-found') {
+      return
+    }
+    telemetry.reportSkillInstall({
+      target: result.id,
+      mode,
+      result: 'failed',
+      errorCode: classifyInstallError(result.error, { skillErrorCode: result.code }),
+    })
+  }
   const aiSkillsTool = registerMarketAiSkillsTool(ctx, {
     profile: profile.name,
     readSettings,
+    onInstallOutcome: result => reportSkillOutcome('ai', result),
   })
   syncAiAssistant = () => {
     aiSkill.sync()
@@ -359,7 +390,11 @@ export function applyMarket(ctx: Context, resolved: Config): () => void {
     (name, signal) => probeManagedMcp(ctx, ctx.loader.entries() as Iterable<McpLoaderEntry>, name, signal),
     loaderId => adoptMcp(ctx, ctx.loader.entries() as Iterable<McpLoaderEntry>, loaderId),
     event => telemetry.handleClientEvent(event),
-    (request, signal) => installFeaturedSkillOnHost(request, signal),
+    async (request, signal) => {
+      const result = await installFeaturedSkillOnHost(request, signal)
+      reportSkillOutcome('featured', result)
+      return result
+    },
     request => deleteInstalledSkillOnHost(request),
   )
 

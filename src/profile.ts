@@ -436,8 +436,16 @@ export function packageDirFromProfile(profileDir: string, packageName: string): 
   return undefined
 }
 
+/** Localized display title and description read from a package's DSH locale files. */
+export interface BundleLocaleMeta {
+  readonly titleZh?: string
+  readonly titleEn?: string
+  readonly descriptionZh?: string
+  readonly descriptionEn?: string
+}
+
 /** One installed bundle's display facts plus the entry ids it introduces. */
-export interface BundleInfo {
+export interface BundleInfo extends BundleLocaleMeta {
   icon?: string
   version: string
   description: string
@@ -531,6 +539,67 @@ export async function readPackageIcon(packageDir: string, manifest: Record<strin
   return undefined
 }
 
+/** Maximum locale JSON file size admitted for local plugin display metadata. */
+const MAX_LOCAL_LOCALE_BYTES = 64 * 1024
+
+function localeExportTarget(manifest: Record<string, unknown>, language: 'zh' | 'en'): string | undefined {
+  const exportsField = manifest.exports
+  if (exportsField === null || typeof exportsField !== 'object' || Array.isArray(exportsField)) return undefined
+  const record = exportsField as Record<string, unknown>
+  const exact = exportTargetPath(record[`./locale/${language}.json`])
+  if (exact !== undefined) return exact
+  const pattern = exportTargetPath(record['./locale/*.json'])
+  if (pattern !== undefined && pattern.includes('*')) return pattern.replace('*', language)
+  return undefined
+}
+
+async function readLocaleMetaFile(root: string, rel: string): Promise<{ title?: string; description?: string } | undefined> {
+  if (isAbsolute(rel) || win32.isAbsolute(rel) || /^[A-Za-z][A-Za-z\d+.-]*:/u.test(rel)) return undefined
+  try {
+    const file = await realpath(resolve(root, rel))
+    const local = relative(root, file)
+    if (local === '' || local === '..' || local.startsWith(`..${sep}`) || isAbsolute(local)) return undefined
+    const info = await stat(file)
+    if (!info.isFile() || info.size === 0 || info.size > MAX_LOCAL_LOCALE_BYTES) return undefined
+    const parsed = JSON.parse(await readFile(file, 'utf8')) as { meta?: unknown }
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined
+    const meta = parsed.meta
+    if (meta === null || typeof meta !== 'object' || Array.isArray(meta)) return undefined
+    const record = meta as { title?: unknown; description?: unknown }
+    const title = typeof record.title === 'string' && record.title.trim() !== '' ? record.title.trim() : undefined
+    const description = typeof record.description === 'string' && record.description.trim() !== '' ? record.description.trim() : undefined
+    return title !== undefined || description !== undefined ? { ...(title !== undefined ? { title } : {}), ...(description !== undefined ? { description } : {}) } : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Read localized `meta.title` / `meta.description` from a package's exported
+ * DSH locale JSON files (`./locale/zh.json` and `./locale/en.json`).
+ */
+export async function readPackageLocaleMeta(packageDir: string, manifest: Record<string, unknown>): Promise<BundleLocaleMeta> {
+  const zhRel = localeExportTarget(manifest, 'zh')
+  const enRel = localeExportTarget(manifest, 'en')
+  if (zhRel === undefined && enRel === undefined) return {}
+  let root: string
+  try {
+    root = await realpath(packageDir)
+  } catch {
+    return {}
+  }
+  const [zhMeta, enMeta] = await Promise.all([
+    zhRel === undefined ? undefined : readLocaleMetaFile(root, zhRel),
+    enRel === undefined ? undefined : readLocaleMetaFile(root, enRel),
+  ])
+  return {
+    ...(zhMeta?.title !== undefined ? { titleZh: zhMeta.title } : {}),
+    ...(enMeta?.title !== undefined ? { titleEn: enMeta.title } : {}),
+    ...(zhMeta?.description !== undefined ? { descriptionZh: zhMeta.description } : {}),
+    ...(enMeta?.description !== undefined ? { descriptionEn: enMeta.description } : {}),
+  }
+}
+
 function githubSlugFromUrl(url: string): string {
   return parseGitHubRepoSlug(url, { allowBareSlug: true })
 }
@@ -621,9 +690,13 @@ export async function readBundleInfo(
   const seen = new Set<string>()
   const entries = collectEntryRows(patches).filter(entry => !seen.has(entry.id) && seen.add(entry.id))
   const locator = repositoryLocatorOf(manifest, dependencySpec)
-  const icon = await readPackageIcon(dir, manifest)
+  const [icon, localeMeta] = await Promise.all([
+    readPackageIcon(dir, manifest),
+    readPackageLocaleMeta(dir, manifest),
+  ])
   return {
     ...(icon !== undefined ? { icon } : {}),
+    ...localeMeta,
     version: typeof (manifest as { version?: unknown }).version === 'string' ? (manifest as { version: string }).version : '',
     description: typeof manifest.description === 'string' ? manifest.description : '',
     repository: locator.repository,

@@ -2,6 +2,10 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   createDirectInstaller,
+  installRegistryLabel,
+  isManualInstallInputValid,
+  isValidCustomRegistryUrl,
+  offeredInstallRegistries,
   reconcileSelectedTargets,
   shouldRefreshInstalledAfterDirect,
   type InstallHost,
@@ -354,4 +358,123 @@ test('directInstaller does not report build-approval pauses as failed outcomes',
   await installer.approve()
   assert.equal(installer.getSnapshot().phase, 'done')
   assert.deepEqual(outcomes, [{ spec: 'demo-native-plugin', result: 'ok', message: '' }])
+})
+
+test('directInstaller surfaces structured inspectProblem and packageResult failure hints to onOutcome', async () => {
+  const outcomes: Array<{
+    spec: string
+    result: string
+    inspectProblem?: string
+    errorCode?: string
+    packageKind?: string
+    timedOut?: boolean
+  }> = []
+  const inspectRefusalHost = {
+    inspect: async () => ({ ok: true as const, value: { status: 'refused' as const, problem: 'not-a-bundle', reason: 'No bundle' } }),
+    installBundle: async () => ({ ok: true as const, value: { application: 'applied' as const } }),
+    cancelInstall: async () => ({ ok: true as const, value: { status: 'cancelled' } }),
+    waitForInstall: async () => ({ ok: true as const, value: null }),
+  }
+  const installer1 = createDirectInstaller(() => inspectRefusalHost, outcome => outcomes.push(outcome))
+  await installer1.start('https://github.com/alchaincyf/nuwa-skill')
+  assert.equal(outcomes[0]?.result, 'failed')
+  assert.equal(outcomes[0]?.inspectProblem, 'not-a-bundle')
+  assert.deepEqual(installer1.getSnapshot().inspectError, { problem: 'not-a-bundle', reason: 'No bundle' })
+
+  const installFailureHost = {
+    inspect: async () => ({ ok: true as const, value: { status: 'accepted' as const, registry: null } }),
+    installBundle: async () => ({
+      ok: true as const,
+      value: {
+        application: 'failed' as const,
+        error: { code: 'operation-error', diagnostic: 'pnpm failed' },
+        packageResult: { output: 'ERR_PNPM_NO_MATCHING_VERSION', kind: 'no-matching-version', timedOut: false },
+      },
+    }),
+    cancelInstall: async () => ({ ok: true as const, value: { status: 'cancelled' } }),
+    waitForInstall: async () => ({ ok: true as const, value: null }),
+  }
+  const installer2 = createDirectInstaller(() => installFailureHost, outcome => outcomes.push(outcome))
+  await installer2.start('demo-pkg')
+  assert.equal(outcomes[1]?.result, 'failed')
+  assert.equal(outcomes[1]?.errorCode, 'operation-error')
+  assert.equal(outcomes[1]?.packageKind, 'no-matching-version')
+  assert.equal(outcomes[1]?.timedOut, false)
+})
+
+test('manual install helpers validate inputs, deduplicate registries, and format registry labels', () => {
+  assert.equal(isManualInstallInputValid('  dsh-plugin-whale-pet  '), true)
+  assert.equal(isManualInstallInputValid('/Users/alice/my-plugin'), true)
+  assert.equal(isManualInstallInputValid('   '), false)
+  assert.equal(isManualInstallInputValid('bad\ninput'), false)
+
+  assert.equal(isValidCustomRegistryUrl('https://npm.example.com/'), true)
+  assert.equal(isValidCustomRegistryUrl('http://localhost:4873'), true)
+  assert.equal(isValidCustomRegistryUrl('ftp://example.com'), false)
+  assert.equal(isValidCustomRegistryUrl('not-a-url'), false)
+
+  const offered = offeredInstallRegistries({
+    registry: 'https://registry.npmmirror.com/',
+    fallbackRegistries: ['https://registry.npmjs.org/', 'https://registry.npmmirror.com'],
+    resolved: 'https://registry.npmjs.org/',
+  })
+  assert.deepEqual(offered, ['https://registry.npmmirror.com/', 'https://registry.npmjs.org/'])
+
+  assert.equal(installRegistryLabel('https://registry.npmmirror.com/', null).kind, 'npmmirror')
+  assert.equal(installRegistryLabel('https://registry.npmjs.org/', null).kind, 'official')
+  assert.equal(installRegistryLabel(null, null).kind, 'default')
+  assert.equal(installRegistryLabel('https://npm.corp.local/', null).host, 'npm.corp.local')
+})
+
+test('directInstaller startManual supports local paths, custom registries, and preserves manual options across retry', async () => {
+  const seenInspect: Array<{ spec: string; registry?: string | null }> = []
+  const seenInstall: Array<{ spec: string; registry?: string | null; saveExact?: boolean; enabled?: boolean }> = []
+  const outcomes: Array<{ spec: string; result: string; manual?: boolean }> = []
+  let failOnce = true
+
+  const host = {
+    registries: async () => ({
+      ok: true as const,
+      value: { registry: 'https://registry.npmmirror.com/', fallbackRegistries: ['https://registry.npmjs.org/'], resolved: null },
+    }),
+    inspect: async (spec: string, options: { registry?: string | null }) => {
+      seenInspect.push({ spec, registry: options.registry })
+      return { ok: true as const, value: { status: 'accepted' as const, registry: options.registry ?? null } }
+    },
+    installBundle: async (spec: string, options?: { registry?: string | null; saveExact?: boolean; enabled?: boolean }) => {
+      seenInstall.push({ spec, registry: options?.registry, saveExact: options?.saveExact, enabled: options?.enabled })
+      if (failOnce) {
+        failOnce = false
+        return { ok: true as const, value: { application: 'failed' as const, error: { code: 'operation-error', diagnostic: 'transient' } } }
+      }
+      return { ok: true as const, value: { application: 'applied' as const } }
+    },
+    cancelInstall: async () => ({ ok: true as const, value: { status: 'cancelled' } }),
+    waitForInstall: async () => ({ ok: true as const, value: null }),
+  }
+
+  const installer = createDirectInstaller(() => host, outcome => outcomes.push(outcome))
+  const regs = await installer.listRegistries()
+  assert.equal(regs?.registry, 'https://registry.npmmirror.com/')
+
+  await installer.startManual('  C:\\plugins\\local-plugin  ', {
+    registry: 'https://npm.corp.local/',
+    saveExact: true,
+    enabled: false,
+    title: 'Local Plugin',
+  })
+  assert.equal(installer.getSnapshot().origin, 'manual')
+  assert.equal(installer.getSnapshot().phase, 'failed')
+  assert.equal(outcomes[0]?.manual, true)
+
+  await installer.retry()
+  assert.equal(installer.getSnapshot().phase, 'done')
+  assert.equal(outcomes[1]?.manual, true)
+  assert.deepEqual(seenInspect[1], { spec: 'C:\\plugins\\local-plugin', registry: 'https://npm.corp.local/' })
+  assert.deepEqual(seenInstall[1], {
+    spec: 'C:\\plugins\\local-plugin',
+    registry: 'https://npm.corp.local/',
+    saveExact: true,
+    enabled: false,
+  })
 })

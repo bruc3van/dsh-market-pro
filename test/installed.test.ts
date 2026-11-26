@@ -1818,3 +1818,71 @@ test('readPackageIcon and InstalledManager.list surface local manifest/exported 
     await rm(home, { recursive: true, force: true })
   }
 })
+
+test('list reads localized display meta from exported locale files and Host listBundles', async () => {
+  const { home, profileDir } = await makeHome()
+  try {
+    const demoDir = join(profileDir, 'node_modules', 'demo-plugin')
+    await mkdir(join(demoDir, 'locale'), { recursive: true })
+    await writeFile(join(demoDir, 'locale', 'zh.json'), JSON.stringify({
+      meta: { title: '示例插件', description: '本地中文插件描述' },
+    }))
+    await writeFile(join(demoDir, 'locale', 'en.json'), JSON.stringify({
+      meta: { title: 'Demo Plugin', description: 'Local English description' },
+    }))
+    await writeFile(join(demoDir, 'package.json'), JSON.stringify({
+      name: 'demo-plugin',
+      version: '1.0.0',
+      description: 'Raw English SEO description',
+      exports: { './locale/*.json': './locale/*.json' },
+      dsh: { bundle: { patch: './cordis.patch.yml' } },
+    }))
+    await writeFile(join(demoDir, 'cordis.patch.yml'), '- insert:\n  - id: demo\n    name: demo-plugin\n')
+
+    const { loader } = stubLoader([{ id: 'include:demo', fiberState: 2 }])
+    const localListed = marketInstalledResultSchema.parse(await createInstalledManager({
+      profile: 'web',
+      profileDir,
+      home,
+      loader,
+      selfName: 'dsh-market-pro',
+    }).list())
+    assert.equal(localListed.packages[0]?.titleZh, '示例插件')
+    assert.equal(localListed.packages[0]?.titleEn, 'Demo Plugin')
+    assert.equal(localListed.packages[0]?.descriptionZh, '本地中文插件描述')
+    assert.equal(localListed.packages[0]?.descriptionEn, 'Local English description')
+
+    const hostListed = marketInstalledResultSchema.parse(await createInstalledManager({
+      profile: 'web',
+      profileDir,
+      home,
+      loader,
+      selfName: 'dsh-market-pro',
+      pluginManager: () => ({
+        listBundles: async () => [{
+          name: 'demo-plugin',
+          official: false,
+          availability: 'profile',
+          enabled: true,
+          installed: true,
+          optional: false,
+          removable: true,
+          rows: [],
+          overrides: [],
+          meta: {
+            title: { 'en-US': 'Host Demo', 'zh-CN': '宿主示例插件' },
+            description: { 'en-US': 'Host English description', 'zh-CN': '宿主中文插件描述' },
+          },
+        }],
+        setBundleEnabled: async () => { throw new Error('unused') },
+        removeBundle: async () => { throw new Error('unused') },
+      }),
+    }).list())
+    assert.equal(hostListed.packages[0]?.titleZh, '宿主示例插件')
+    assert.equal(hostListed.packages[0]?.titleEn, 'Host Demo')
+    assert.equal(hostListed.packages[0]?.descriptionZh, '宿主中文插件描述')
+    assert.equal(hostListed.packages[0]?.descriptionEn, 'Host English description')
+  } finally {
+    await rm(home, { recursive: true, force: true })
+  }
+})

@@ -252,7 +252,25 @@ export type SafeMarketSettingsUpdate =
 export type TelemetryHostKind = 'desktop' | 'web' | 'other'
 export type TelemetryOs = 'darwin' | 'win32' | 'linux' | 'other'
 export type TelemetryLocale = 'zh' | 'en' | 'other'
-export type TelemetryErrorCode = 'compat' | 'network' | 'timeout' | 'refused' | 'cancelled' | 'unknown'
+export type TelemetryErrorCode =
+  | 'compat'
+  | 'unsupported_platform'
+  | 'not_bundle'
+  | 'already_installed'
+  | 'not_found'
+  | 'pnpm_missing'
+  | 'build_blocked'
+  | 'permission'
+  | 'disk_full'
+  | 'integrity'
+  | 'invalid_spec'
+  | 'network'
+  | 'timeout'
+  | 'refused'
+  | 'cancelled'
+  | 'write_failed'
+  | 'operation_error'
+  | 'unknown'
 
 export type TelemetryClientEvent =
   | {
@@ -271,6 +289,13 @@ export type TelemetryClientEvent =
     readonly kind: 'mcp_install'
     readonly target: string
     readonly mode: 'featured' | 'custom'
+    readonly result: 'ok' | 'failed'
+    readonly errorCode?: TelemetryErrorCode
+  }
+  | {
+    readonly kind: 'skill_install'
+    readonly target: string
+    readonly mode: 'featured' | 'ai'
     readonly result: 'ok' | 'failed'
     readonly errorCode?: TelemetryErrorCode
   }
@@ -294,7 +319,11 @@ export interface MarketInstalledPackage {
   readonly packageName: string
   readonly icon?: string
   readonly version: string
+  readonly titleZh?: string
+  readonly titleEn?: string
   readonly description: string
+  readonly descriptionZh?: string
+  readonly descriptionEn?: string
   /**
    * The `owner/name` this package's manifest points its `repository` field
    * at, when that field names a GitHub repository in a shape matching
@@ -488,7 +517,26 @@ export const safeMarketSettingsUpdateSchema = z.discriminatedUnion('field', [
   z.object({ field: z.literal('telemetryEnabled'), value: z.boolean() }).readonly(),
 ])
 
-const telemetryErrorCodeSchema = z.enum(['compat', 'network', 'timeout', 'refused', 'cancelled', 'unknown'])
+const telemetryErrorCodeSchema = z.enum([
+  'compat',
+  'unsupported_platform',
+  'not_bundle',
+  'already_installed',
+  'not_found',
+  'pnpm_missing',
+  'build_blocked',
+  'permission',
+  'disk_full',
+  'integrity',
+  'invalid_spec',
+  'network',
+  'timeout',
+  'refused',
+  'cancelled',
+  'write_failed',
+  'operation_error',
+  'unknown',
+])
 
 /** Strict wire codec for client-reported anonymous telemetry events. */
 export const telemetryClientEventSchema = z.discriminatedUnion('kind', [
@@ -508,6 +556,13 @@ export const telemetryClientEventSchema = z.discriminatedUnion('kind', [
     kind: z.literal('mcp_install'),
     target: z.string().max(100),
     mode: z.enum(['featured', 'custom']),
+    result: z.enum(['ok', 'failed']),
+    errorCode: telemetryErrorCodeSchema.optional(),
+  }).readonly(),
+  z.object({
+    kind: z.literal('skill_install'),
+    target: z.string().max(200),
+    mode: z.enum(['featured', 'ai']),
     result: z.enum(['ok', 'failed']),
     errorCode: telemetryErrorCodeSchema.optional(),
   }).readonly(),
@@ -533,7 +588,11 @@ export const marketInstalledPackageSchema = z.object({
   packageName: packageNameSchema,
   icon: z.string().refine(isMarketIcon).optional(),
   version: z.string(),
+  titleZh: z.string().optional(),
+  titleEn: z.string().optional(),
   description: z.string(),
+  descriptionZh: z.string().optional(),
+  descriptionEn: z.string().optional(),
   // Either a slug the Host already shape-checked, or nothing. A manifest
   // pointing somewhere unparseable must not fail the whole panel read, so the
   // Host reduces it to '' rather than passing the raw field on.

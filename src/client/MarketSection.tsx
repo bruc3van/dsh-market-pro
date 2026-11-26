@@ -1,9 +1,11 @@
-import { IconInfoOutlineRegular, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconInfoOutlineRegular, Switch, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import { MarketButton } from './MarketButton.tsx'
 import type { DirectInstaller } from './directInstall.ts'
 import { loadingProgressOf } from './catalogCache.ts'
 import { MarketSelector } from './InstallModeSelector.tsx'
 import { DirectInstallPanel } from './DirectInstallPanel.tsx'
+import { ManualInstallPanel } from './ManualInstallPanel.tsx'
+import { officialBundleDisplay, type HostBundleInfo, type OfficialBundlesController } from './officialBundles.ts'
 import type { DirectoryBrowserController } from './directoryBrowser.ts'
 import { DirectoryBrowserPanel } from './DirectoryBrowserPanel.tsx'
 import type { PluginUpdater } from './pluginUpdates.ts'
@@ -46,7 +48,7 @@ import { FEATURED_CATEGORY, PACKAGE_NAME, SUBSCRIPTION_CATEGORY, isSafeVersion }
 import type { MarketLocale } from './copy.ts'
 import { catalogIndexForInstalled, hasRemainingTargets, ownedBy, ownedIndexOf, shortName } from './owned.ts'
 import {
-  INSTALLED_FILTER, SELF_CARD_KEY, allCatalogMatchCount, featuredRows, installedReviewCardKey, marketKey, marketRows, matches, pageOf, sortMarketRows, starCount, stateOf, type MarketSort,
+  INSTALLED_FILTER, OFFICIAL_EXPERIMENTAL_FILTER, SELF_CARD_KEY, allCatalogMatchCount, featuredRows, installedReviewCardKey, marketKey, marketRows, matches, pageOf, sortMarketRows, starCount, stateOf, type MarketSort,
 } from './rows.ts'
 import { SkillsView } from './SkillsView.tsx'
 import type { FeaturedSkill } from '../skillsFeatured.ts'
@@ -108,6 +110,7 @@ export type WorkspaceReadiness = 'pending' | 'none' | 'present'
 /** Injected business face: the live source and the section's verbs. */
 export interface MarketSectionInjected {
   directInstaller?: DirectInstaller
+  officialBundles?: OfficialBundlesController
   pluginUpdater?: PluginUpdater
   hooks: { scope: SafeMarketSource }
   /** Persist one marketplace setting field and return the updated snapshot. */
@@ -214,6 +217,7 @@ type WorkspacePickState =
 type MarketOverlay =
   | { readonly kind: 'none' }
   | { readonly kind: 'direct-install'; readonly item: MarketPlugin }
+  | { readonly kind: 'manual-install' }
   | { readonly kind: 'update' }
   | { readonly kind: 'batch-update' }
 
@@ -365,6 +369,44 @@ function useInstalled({ t, active, listInstalled, subscribeInstalledChanges, set
   return { state, action, feedback, count, reload, refresh: load, toggle, uninstall, requestUninstall, cancelUninstall }
 }
 
+function useElapsedSeconds(active: boolean): number {
+  const [seconds, setSeconds] = useState(0)
+  useEffect(() => {
+    if (!active) { setSeconds(0); return }
+    const startedAt = Date.now()
+    setSeconds(0)
+    const timer = window.setInterval(() => {
+      setSeconds(Math.max(1, Math.floor((Date.now() - startedAt) / 1000)))
+    }, 1000)
+    return () => window.clearInterval(timer)
+  }, [active])
+  return seconds
+}
+
+function UninstallProgressFooter({ t, name, onRefresh }: {
+  t: MarketLocale
+  name: string
+  onRefresh: () => void
+}): ReactElement {
+  const elapsed = useElapsedSeconds(true)
+  return (
+    <>
+      <span className="dsh_market_cardNotice" aria-live="polite">
+        {elapsed >= 15 ? t('installed.uninstallingSlow') : t('installed.uninstallingHint', { name })}
+      </span>
+      {elapsed >= 30 && (
+        <MarketButton intent="secondary" onClick={onRefresh}>
+          {t('installed.refreshStatus')}
+        </MarketButton>
+      )}
+      <MarketButton intent="danger" disabled aria-busy="true">
+        <span className="dsh_market_inlineSpinner" aria-hidden="true" />
+        {elapsed >= 3 ? `${t('installed.uninstalling')} ${elapsed}s` : t('installed.uninstalling')}
+      </MarketButton>
+    </>
+  )
+}
+
 /**
  * One installed package, in the same card the catalog rows use — so the grid
  * stays one grid and the eye does not have to re-learn the layout when the
@@ -384,7 +426,7 @@ function InstalledCard({ t, english, item, matched, installed, snapshot, card, i
   onCheckUpdate?: (packageName: string) => void
   availableVersion?: string
 }): ReactElement {
-  const { action, requestUninstall, cancelUninstall, toggle, uninstall } = installed
+  const { action, refresh, requestUninstall, cancelUninstall, toggle, uninstall } = installed
   const anyBusy = action.status === 'toggling' || action.status === 'uninstalling'
   const toggling = action.status === 'toggling' && action.packageName === item.packageName
   const uninstalling = action.status === 'uninstalling' && action.packageName === item.packageName
@@ -402,11 +444,13 @@ function InstalledCard({ t, english, item, matched, installed, snapshot, card, i
     installed: t('installed.installedState'),
     unregistered: t('installed.unregisteredState'),
   }
-  const displayName = (english ? matched?.titleEn : matched?.titleZh) || shortName(item.packageName)
+  const localTitle = english ? item.titleEn : item.titleZh
+  const localDesc = english ? item.descriptionEn : item.descriptionZh
+  const displayName = localTitle || (english ? matched?.titleEn : matched?.titleZh) || shortName(item.packageName)
   const repoSlug = item.repository || matched?.fullName || ''
   const categoryLabel = matched !== undefined ? (english ? matched.categoryEn : matched.categoryZh) : ''
   const catalogDesc = matched === undefined ? '' : (english ? matched.descriptionEn || matched.description : matched.description)
-  const description = catalogDesc || item.description
+  const description = localDesc || catalogDesc || item.description
   return (
     <li className="dsh_market_card dsh_market_installedCard" data-confirming={confirmRow ? 'true' : undefined}>
       <div className="dsh_market_head">
@@ -467,22 +511,21 @@ function InstalledCard({ t, english, item, matched, installed, snapshot, card, i
       {card?.status === 'error' && <p className="dsh_market_cardError">{card.message}</p>}
       {card?.status === 'needs-workspace' && <p className="dsh_market_cardNotice">{card.message}</p>}
       <div className="dsh_market_foot">
-        {confirmRow
-          ? (
-            <>
-              <span className="dsh_market_cardNotice" aria-live="polite">
-                {uninstalling
-                  ? t('installed.uninstallingHint', { name: shortName(item.packageName) })
-                  : t('installed.confirmUninstall', { name: shortName(item.packageName) })}
-              </span>
-              <MarketButton
-                intent="danger"
-                disabled={busyRow}
-                onClick={() => { uninstall(item) }}
-              >
-                {uninstalling ? t('installed.uninstalling') : t('installed.confirm')}
-              </MarketButton>
-              {!uninstalling && (
+        {uninstalling
+          ? <UninstallProgressFooter t={t} name={shortName(item.packageName)} onRefresh={refresh} />
+          : confirmRow
+            ? (
+              <>
+                <span className="dsh_market_cardNotice" aria-live="polite">
+                  {t('installed.confirmUninstall', { name: shortName(item.packageName) })}
+                </span>
+                <MarketButton
+                  intent="danger"
+                  disabled={busyRow}
+                  onClick={() => { uninstall(item) }}
+                >
+                  {t('installed.confirm')}
+                </MarketButton>
                 <MarketButton
                   intent="secondary"
                   disabled={busyRow}
@@ -490,9 +533,8 @@ function InstalledCard({ t, english, item, matched, installed, snapshot, card, i
                 >
                   {t('installed.cancel')}
                 </MarketButton>
-              )}
-            </>
-            )
+              </>
+              )
           : (
             <>
               {onCheckUpdate && <MarketButton intent={availableVersion ? 'primary' : 'secondary'}
@@ -714,7 +756,11 @@ function InstalledCards({ t, installed, needle, installedFilter, updatableCount,
       return [
         item.packageName,
         shortName(item.packageName),
+        item.titleZh ?? '',
+        item.titleEn ?? '',
         item.description,
+        item.descriptionZh ?? '',
+        item.descriptionEn ?? '',
         item.repository,
         matched?.titleZh ?? '',
         matched?.titleEn ?? '',
@@ -829,8 +875,221 @@ function InstalledCards({ t, installed, needle, installedFilter, updatableCount,
   )
 }
 
+function OfficialExperimentalCards({
+  t,
+  english,
+  officialBundles,
+  needle,
+  officialFilter,
+  installDisabled = false,
+  onInstallOnDemand,
+  onClearFilters,
+  onShowAllOfficial,
+}: {
+  readonly t: MarketLocale
+  readonly english: boolean
+  readonly officialBundles: OfficialBundlesController
+  readonly needle: string
+  readonly officialFilter: 'all' | 'enabled' | 'disabled'
+  readonly installDisabled?: boolean
+  readonly onInstallOnDemand: (bundle: HostBundleInfo, enabled: boolean) => void
+  readonly onClearFilters: () => void
+  readonly onShowAllOfficial: () => void
+}): ReactElement {
+  const state = useSyncExternalStore(officialBundles.subscribe, officialBundles.getSnapshot)
+  const scoped = state.bundles.filter((bundle) => {
+    if (officialFilter === 'enabled') return bundle.enabled
+    if (officialFilter === 'disabled') return !bundle.enabled
+    return true
+  })
+  const shown = needle === ''
+    ? scoped
+    : scoped.filter((bundle) => {
+        const display = officialBundleDisplay(bundle, english)
+        return [bundle.name, shortName(bundle.name), display.title, display.description]
+          .some(text => text.toLocaleLowerCase().includes(needle))
+      })
+
+  const noticeText = state.notice === null
+    ? ''
+    : state.notice.kind === 'restart'
+      ? t('official.notice.restart', { name: shortName(state.notice.packageName) })
+      : state.notice.kind === 'overridden'
+        ? t('official.notice.overridden', { name: shortName(state.notice.packageName) })
+        : state.notice.kind === 'removed'
+          ? t('official.notice.removed', { name: shortName(state.notice.packageName) })
+          : t('official.notice.error', { name: shortName(state.notice.packageName), reason: state.notice.message })
+
+  return (
+    <>
+      {state.notice !== null && (
+        <div className="dsh_market_notice" role="status">
+          <p className="dsh_market_noticeBody" data-error={state.notice.kind === 'error' ? 'true' : undefined}>{noticeText}</p>
+          <MarketButton intent="secondary" onClick={() => officialBundles.dismissNotice()}>
+            {t('official.dismiss')}
+          </MarketButton>
+        </div>
+      )}
+      {state.status === 'loading' && (
+        <div className="dsh_market_notice" aria-busy="true" aria-live="polite">
+          <p className="dsh_market_noticeBody">{t('official.loading')}</p>
+        </div>
+      )}
+      {state.status === 'error' && (
+        <p className="dsh_market_status" data-error="true">
+          {t('official.failed', { reason: state.error })}
+          <MarketButton intent="secondary" onClick={() => { void officialBundles.refresh() }}>{t('retry')}</MarketButton>
+        </p>
+      )}
+      {state.status === 'ready' && state.bundles.length === 0 && (
+        <MarketEmptyState
+          icon="installed"
+          title={t('official.emptyTitle')}
+          description={t('official.emptyHint')}
+        />
+      )}
+      {state.status === 'ready' && state.bundles.length > 0 && shown.length === 0 && (
+        <MarketEmptyState
+          icon="search"
+          title={t('official.emptySearchTitle')}
+          description={t('official.emptySearchHint')}
+          primaryAction={officialFilter !== 'all'
+            ? { label: t('official.showAll'), count: state.bundles.length, onClick: onShowAllOfficial }
+            : { label: t('filter.clear'), onClick: onClearFilters }}
+          secondaryAction={officialFilter !== 'all' && needle !== '' ? { label: t('filter.clear'), onClick: onClearFilters } : undefined}
+        />
+      )}
+      {shown.length > 0 && (
+        <ul className="dsh_market_cards dsh_market_cardsUniform">
+          {shown.map((bundle) => {
+            const display = officialBundleDisplay(bundle, english)
+            const isBusy = state.busy.includes(bundle.name)
+            const isUninstalling = state.uninstalling.includes(bundle.name)
+            const confirming = state.confirmingUninstall === bundle.name
+            const showInstallButton = display.notInstalled && bundle.installTarget !== undefined
+            const showUninstall = bundle.installed && bundle.removable
+            const hasActions = showInstallButton || display.updatable || showUninstall || isUninstalling
+            return (
+              <li
+                key={bundle.name}
+                className="dsh_market_card dsh_market_installedCard dsh_market_officialCard"
+                data-confirming={confirming || isUninstalling ? 'true' : undefined}
+              >
+                <div className="dsh_market_head">
+                  <PluginLogo src={display.icon} name={display.title} />
+                  <div className="dsh_market_identity">
+                    <span className="dsh_market_name" title={display.title}>{display.title}</span>
+                    <span className="dsh_market_packageName" title={bundle.name}>{bundle.name}</span>
+                  </div>
+                  <div className="dsh_market_officialToggle">
+                    <Switch
+                      checked={bundle.enabled}
+                      label={t('official.toggleAria', { name: display.title })}
+                      disabled={isBusy || display.switchDisabled || (display.notInstalled && installDisabled)}
+                      title={bundle.readOnlyReason ? t('official.readOnly') : undefined}
+                      onChange={next => { void officialBundles.toggle(bundle, next, onInstallOnDemand) }}
+                    />
+                  </div>
+                </div>
+                <div className="dsh_market_meta dsh_market_skillBadges">
+                  <span className="dsh_market_categoryTag dsh_market_officialBadge">
+                    {t(display.experimental ? 'official.badge.experimental' : 'official.badge.official')}
+                  </span>
+                  {bundle.version !== undefined && bundle.version !== '' && (
+                    <span className="dsh_market_categoryTag">{`v${bundle.version}`}</span>
+                  )}
+                  {display.notInstalled && (
+                    <span className="dsh_market_categoryTag">{t('official.badge.notInstalled')}</span>
+                  )}
+                  {display.updatable && (
+                    <span className="dsh_market_categoryTag dsh_market_officialUpdatable">{t('official.badge.updatable')}</span>
+                  )}
+                  {display.status === 'not-running' && (
+                    <span className="dsh_market_installedState" data-state="failed">{t('official.status.notRunning')}</span>
+                  )}
+                  {display.status === 'problem' && (
+                    <span className="dsh_market_installedState" data-state="readFailed">{t('official.status.problem')}</span>
+                  )}
+                </div>
+                {display.description !== '' && (
+                  <p className="dsh_market_desc" title={display.description}>{display.description}</p>
+                )}
+                {bundle.error !== undefined && (
+                  <p className="dsh_market_cardError">
+                    {bundle.error.diagnostic || bundle.error.code}
+                  </p>
+                )}
+                {bundle.readOnlyReason !== undefined && bundle.error === undefined && (
+                  <p className="dsh_market_cardNotice">{t('official.readOnly')}</p>
+                )}
+                {hasActions && (
+                  <div className="dsh_market_foot">
+                    {isUninstalling ? (
+                      <UninstallProgressFooter t={t} name={display.title} onRefresh={() => { void officialBundles.refresh() }} />
+                    ) : confirming ? (
+                      <>
+                        <span className="dsh_market_cardNotice" aria-live="polite">
+                          {t('installed.confirmUninstall', { name: display.title })}
+                        </span>
+                        <MarketButton
+                          intent="danger"
+                          disabled={isBusy}
+                          onClick={() => { void officialBundles.confirmUninstallNow(bundle.name) }}
+                        >
+                          {t('installed.confirm')}
+                        </MarketButton>
+                        <MarketButton
+                          intent="secondary"
+                          disabled={isBusy}
+                          onClick={() => officialBundles.cancelUninstall()}
+                        >
+                          {t('installed.cancel')}
+                        </MarketButton>
+                      </>
+                    ) : (
+                      <>
+                        {showInstallButton && (
+                          <MarketButton
+                            intent="primary"
+                            disabled={isBusy || installDisabled}
+                            onClick={() => onInstallOnDemand(bundle, true)}
+                          >
+                            {t('official.installAndEnable')}
+                          </MarketButton>
+                        )}
+                        {display.updatable && (
+                          <MarketButton
+                            intent="primary"
+                            disabled={isBusy || installDisabled}
+                            onClick={() => { void officialBundles.update(bundle, onInstallOnDemand, () => !installDisabled) }}
+                          >
+                            {t('official.update')}
+                          </MarketButton>
+                        )}
+                        {showUninstall && (
+                          <MarketButton
+                            intent="danger"
+                            disabled={isBusy}
+                            onClick={() => officialBundles.requestUninstall(bundle.name)}
+                          >
+                            {t('installed.uninstall')}
+                          </MarketButton>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </>
+  )
+}
+
 /** The Plugins page. */
-function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInstalled, subscribeInstalledChanges, setInstalledEnabled, uninstallInstalled, chooseWorkspace, workspaceReadiness, cards, installBusy, onReviewDraft, onOpenSettings, directInstaller, setDirectItem, installedRevision, appliedUpdateRevision, onCheckUpdate, onOpenBatchUpdate, availableUpdates, onProbeUpdates, onRegisterRefresh, onOwnedIndexChange }: {
+function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInstalled, subscribeInstalledChanges, setInstalledEnabled, uninstallInstalled, officialBundles, onInstallOfficialBundle, chooseWorkspace, workspaceReadiness, cards, installBusy, onReviewDraft, onOpenSettings, directInstaller, setDirectItem, installedRevision, appliedUpdateRevision, onCheckUpdate, onOpenBatchUpdate, availableUpdates, onProbeUpdates, onRegisterRefresh, onOwnedIndexChange }: {
   setDirectItem: (item: MarketPlugin) => void
   installedRevision: number
   appliedUpdateRevision: number
@@ -849,6 +1108,8 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
   subscribeInstalledChanges?: MarketSectionInjected['subscribeInstalledChanges']
   setInstalledEnabled: MarketSectionInjected['setInstalledEnabled']
   uninstallInstalled: MarketSectionInjected['uninstallInstalled']
+  officialBundles?: OfficialBundlesController
+  onInstallOfficialBundle?: (bundle: HostBundleInfo, enabled: boolean) => void
   chooseWorkspace: MarketSectionInjected['chooseWorkspace']
   workspaceReadiness: MarketSectionInjected['workspaceReadiness']
   directInstaller?: DirectInstaller
@@ -873,6 +1134,7 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
   // so local management stays immediately accessible.
   const [category, setCategory] = useState(() => (snapshot.settingsReady && !enabled ? INSTALLED_FILTER : FEATURED_CATEGORY))
   const [installedFilter, setInstalledFilter] = useState<'all' | 'updatable'>('all')
+  const [officialFilter, setOfficialFilter] = useState<'all' | 'enabled' | 'disabled'>('all')
   const [filterCategory, setFilterCategory] = useState('')
   const [sort, setSort] = useState<MarketSort>('active')
   const [page, setPage] = useState(0)
@@ -882,9 +1144,23 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
     scrollResultsContainerToTop(resultsRef.current, behavior)
   }
   const installed = useInstalled({ t, active: snapshot.settingsReady, listInstalled, subscribeInstalledChanges, setInstalledEnabled, uninstallInstalled })
+  const officialState = useSyncExternalStore(
+    officialBundles?.subscribe ?? (() => () => {}),
+    officialBundles?.getSnapshot ?? (() => null),
+  )
+  const directState = useSyncExternalStore(
+    directInstaller?.subscribe ?? (() => () => {}),
+    directInstaller?.getSnapshot ?? (() => null),
+  )
+  const directBusy = directState !== null && ['checking', 'installing', 'cancelling', 'unknown'].includes(directState.phase)
   useEffect(() => {
-    if (snapshot.settingsReady && !enabled) setCategory(INSTALLED_FILTER)
-  }, [snapshot.settingsReady, enabled])
+    if (snapshot.settingsReady) void officialBundles?.load()
+  }, [snapshot.settingsReady, officialBundles])
+  useEffect(() => {
+    if (snapshot.settingsReady && !enabled && category !== INSTALLED_FILTER && category !== OFFICIAL_EXPERIMENTAL_FILTER) {
+      setCategory(INSTALLED_FILTER)
+    }
+  }, [snapshot.settingsReady, enabled, category])
   useEffect(() => { if (installedRevision > 0) installed.refresh() }, [installedRevision, installed.refresh])
   useLayoutEffect(() => {
     if (appliedUpdateRevision > 0) scrollResultsToTop('instant')
@@ -900,6 +1176,11 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
     }
   }, [installed.state, onProbeUpdates])
   const installedSelected = category === INSTALLED_FILTER
+  const officialSelected = category === OFFICIAL_EXPERIMENTAL_FILTER
+  const showOfficialChip = officialState !== null
+    && (officialState.status === 'loading'
+      || officialState.status === 'error'
+      || (officialState.status === 'ready' && officialState.bundles.length > 0))
   const installedUpdatableCount = installed.state.status === 'ready' && installed.state.result.error === ''
     ? installed.state.result.packages.filter(item => Boolean(availableUpdates?.[item.packageName])).length
     : 0
@@ -984,14 +1265,19 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
   const catalog = state.status === 'ready' ? state.catalog : null
   const needle = query.trim().toLocaleLowerCase()
   const showFeatured = catalog === null || catalog.featured !== undefined
+  useEffect(() => {
+    if (officialSelected && !showOfficialChip) {
+      setCategory(enabled ? (showFeatured ? FEATURED_CATEGORY : '') : INSTALLED_FILTER)
+    }
+  }, [officialSelected, showOfficialChip, enabled, showFeatured])
   const featuredSelected = category === FEATURED_CATEGORY && catalog?.featured !== undefined
   const featuredChipPressed = category === FEATURED_CATEGORY && showFeatured
-  const allSelected = !installedSelected && !featuredChipPressed
+  const allSelected = !installedSelected && !officialSelected && !featuredChipPressed
   const filterCategories = featuredSelected
     ? catalog.featured?.categories ?? []
     : catalog?.categories.filter(entry => entry.key !== FEATURED_CATEGORY && entry.key !== SUBSCRIPTION_CATEGORY) ?? []
   const scope = filterCategories.some(entry => entry.key === filterCategory) ? filterCategory : ''
-  const shown = useMemo<readonly { item: MarketPlugin; reason?: string }[]>(() => catalog === null || installedSelected
+  const shown = useMemo<readonly { item: MarketPlugin; reason?: string }[]>(() => catalog === null || installedSelected || officialSelected
     ? []
     : featuredSelected
       ? featuredRows(catalog.featured, needle, english, scope)
@@ -999,12 +1285,12 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
         marketRows(catalog.items, catalog.featured, needle).filter(item => matches(item, needle, scope, english)),
         sort,
         catalog.fetchedAt,
-      ).map(item => ({ item })), [catalog, installedSelected, featuredSelected, needle, english, scope, sort])
+      ).map(item => ({ item })), [catalog, installedSelected, officialSelected, featuredSelected, needle, english, scope, sort])
   const allMatchCount = useMemo(() => {
-    if (catalog === null || installedSelected || shown.length > 0) return 0
+    if (catalog === null || installedSelected || officialSelected || shown.length > 0) return 0
     if (!featuredSelected && scope === '') return 0
     return allCatalogMatchCount(catalog.items, catalog.featured, needle, english)
-  }, [catalog, installedSelected, shown.length, featuredSelected, scope, needle, english])
+  }, [catalog, installedSelected, officialSelected, shown.length, featuredSelected, scope, needle, english])
   const paged = pageOf(shown, page)
   useLayoutEffect(() => {
     scrollResultsToTop('instant')
@@ -1014,13 +1300,23 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
     scrollResultsToTop()
   }, [catalog, category, filterCategory, sort, query, english])
 
-  const canRefresh = snapshot.settingsReady && (enabled || installedSelected)
-  const refreshBusy = enabled ? refreshing : installed.state.status === 'loading'
-  const refreshDisabled = enabled ? (state.status === 'loading' || refreshing) : installed.state.status === 'loading'
+  const canRefresh = snapshot.settingsReady && (enabled || installedSelected || officialSelected)
+  const refreshBusy = enabled
+    ? refreshing
+    : officialSelected
+      ? officialState?.status === 'loading'
+      : installed.state.status === 'loading'
+  const refreshDisabled = enabled
+    ? (state.status === 'loading' || refreshing)
+    : officialSelected
+      ? officialState?.status === 'loading'
+      : installed.state.status === 'loading'
   const refreshLabel = refreshBusy ? t('refreshing') : t('refresh')
   const triggerRefresh = () => {
     if (enabled) load(true)
-    if (installedSelected) {
+    if (officialSelected) {
+      void officialBundles?.refresh()
+    } else if (installedSelected) {
       installed.reload()
     } else {
       const names = installed.state.status === 'ready' && installed.state.result.error === ''
@@ -1141,6 +1437,12 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
               {t('featured.chip')} {catalog?.featured !== undefined && <span>{catalog.featured.count}</span>}
             </button>
           )}
+          {showOfficialChip && (
+            <button type="button" className="dsh_market_scopeButton" aria-pressed={officialSelected}
+              onClick={() => setCategory(OFFICIAL_EXPERIMENTAL_FILTER)}>
+              {t('official.chip')} {officialState?.status === 'ready' && <span>{officialState.bundles.length}</span>}
+            </button>
+          )}
           <button type="button" className="dsh_market_scopeButton" aria-pressed={allSelected}
             onClick={() => switchToAll(false)}>
             {t('all')} {catalog !== null && <span>{catalog.items.length}</span>}
@@ -1150,7 +1452,7 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
             {t('installed.chip')} <span>{installed.count}</span>
           </button>
         </div>
-        {(enabled || installedSelected) && (
+        {(enabled || installedSelected || officialSelected) && (
           <div className="dsh_market_filterActions">
             <input
               ref={searchInputRef}
@@ -1174,6 +1476,19 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
                 ]}
               />
             )}
+            {officialSelected && officialState?.status === 'ready' && (
+              <MarketSelector
+                value={officialFilter}
+                onChange={setOfficialFilter}
+                label={t('official.filter.aria')}
+                className="dsh_market_sort"
+                options={[
+                  { value: 'all', label: t('official.filter.all'), count: officialState.bundles.length },
+                  { value: 'enabled', label: t('official.filter.enabled'), count: officialState.bundles.filter(b => b.enabled).length },
+                  { value: 'disabled', label: t('official.filter.disabled'), count: officialState.bundles.filter(b => !b.enabled).length },
+                ]}
+              />
+            )}
             {installedSelected && onOpenBatchUpdate && batchUpdatableCount > 0 && (
               <MarketButton
                 intent="primary"
@@ -1187,7 +1502,7 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
                 {`${t('installed.updateAll')} (${String(batchUpdatableCount)})`}
               </MarketButton>
             )}
-            {!installedSelected && filterCategories.length > 0 && <MarketSelector
+            {!installedSelected && !officialSelected && filterCategories.length > 0 && <MarketSelector
               value={scope} onChange={setFilterCategory} label={t('filter.category')} className="dsh_market_category"
               options={[{ value: '', label: t('filter.allCategories') }, ...filterCategories
                 .map(entry => ({ value: entry.key, label: english ? entry.en : entry.zh, count: entry.count }))]} />}
@@ -1205,7 +1520,21 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
 
       </div>
       <div className="dsh_market_results" ref={resultsRef}>
-      {installedSelected
+      {officialSelected && officialBundles
+        ? (
+          <OfficialExperimentalCards
+            t={t}
+            english={english}
+            officialBundles={officialBundles}
+            needle={needle}
+            officialFilter={officialFilter}
+            installDisabled={directBusy}
+            onInstallOnDemand={onInstallOfficialBundle ?? (() => {})}
+            onClearFilters={clearFilters}
+            onShowAllOfficial={() => { setOfficialFilter('all'); setQuery('') }}
+          />
+          )
+        : installedSelected
         ? (
           <InstalledCards
             t={t}
@@ -1321,7 +1650,7 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
               </>
               )}
 
-      {!installedSelected && shown.length > 0 && (
+      {!installedSelected && !officialSelected && shown.length > 0 && (
         <ul className="dsh_market_cards dsh_market_cardsUniform">
           {paged.items.map(({ item, reason }) => {
             const owned = ownedBy(ownedIndex, item)
@@ -1402,7 +1731,7 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
         </p>
       )}
       </div>
-      {!installedSelected && shown.length > 0 && <nav className="dsh_market_pagination" aria-label={t('pagination.label')}>
+      {!installedSelected && !officialSelected && shown.length > 0 && <nav className="dsh_market_pagination" aria-label={t('pagination.label')}>
         <span className="dsh_market_pageRange">{t('pagination.range', { start: String(paged.start), end: String(paged.end), total: String(paged.total) })}</span>
         <div className="dsh_market_pager">
           <Tooltip label={t('pagination.previous')} side="top" portal disabled={paged.current === 0}>
@@ -1427,7 +1756,7 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
 /** The Marketplace section. */
 export function MarketSection({
   useScope, updateSettings, loadCatalog, peekCatalog, listSkills, skillsSession, installFeaturedSkill, deleteInstalledSkill, canOpenFolder, openFolder, install, installIntoNewWorkspace, chooseWorkspace, directoryBrowser, workspaceReadiness,
-  listInstalled, subscribeInstalledChanges, setInstalledEnabled, uninstallInstalled, directInstaller, pluginUpdater, mcp, close, t,
+  listInstalled, subscribeInstalledChanges, setInstalledEnabled, uninstallInstalled, directInstaller, officialBundles, pluginUpdater, mcp, close, t,
 }: MarketSectionProps): ReactElement {
   const snapshot = useScope(value => value)
   // The slot props carry a translate function, not a locale tag; the
@@ -1442,10 +1771,28 @@ export function MarketSection({
   const openDirectItem = useCallback((item: MarketPlugin) => {
     setOverlay({ kind: 'direct-install', item })
   }, [])
+  const installOfficialBundle = useCallback((bundle: HostBundleInfo, enabled: boolean) => {
+    if (!directInstaller || bundle.installTarget === undefined) return
+    if (['checking', 'installing', 'cancelling', 'unknown'].includes(directInstaller.getSnapshot().phase)) return
+    const { title } = officialBundleDisplay(bundle, english)
+    setOverlay({ kind: 'manual-install' })
+    void directInstaller.startManual(bundle.installTarget.spec, {
+      saveExact: !bundle.installTarget.spec.startsWith('link:'),
+      enabled,
+      title,
+    })
+  }, [directInstaller, english])
   const updateState = useSyncExternalStore(pluginUpdater?.subscribe ?? (() => () => {}), pluginUpdater?.getSnapshot ?? (() => null))
   const [installedRevision, setInstalledRevision] = useState(0)
   const [ownedIndex, setOwnedIndex] = useState<ReadonlyMap<string, MarketInstalledPackage>>(() => new Map())
   const refreshInstalled = useCallback(() => setInstalledRevision(value => value + 1), [])
+  const handleManualInstalled = useCallback(() => {
+    refreshInstalled()
+    void officialBundles?.refresh()
+  }, [refreshInstalled, officialBundles])
+  const closeManualPanel = useCallback(() => {
+    setOverlay(current => (current.kind === 'manual-install' ? { kind: 'none' } : current))
+  }, [])
   useEffect(() => { if (updateState?.revision) refreshInstalled() }, [updateState?.revision, refreshInstalled])
   const application = updateState?.result?.result.application
   const appliedUpdateRevision = updateState?.phase === 'done' && (application === 'applied' || application === 'restart-required')
@@ -1775,6 +2122,11 @@ export function MarketSection({
         onReview={reviewInstalled} onAgentInstall={directItem ? () => agentInstall(directItem) : undefined}
         reviewBusy={installBusy} reviewAvailable={snapshot.profile !== null}
         reviewMessage={reviewResult?.status === 'error' || reviewResult?.status === 'needs-workspace' ? reviewResult.message : ''} />}
+      {directInstaller && <ManualInstallPanel open={overlay.kind === 'manual-install'} installer={directInstaller} t={t}
+        onClose={closeManualPanel}
+        onInstalled={handleManualInstalled}
+        onReview={reviewInstalled} reviewBusy={installBusy} reviewAvailable={snapshot.profile !== null}
+        reviewMessage={reviewResult?.status === 'error' || reviewResult?.status === 'needs-workspace' ? reviewResult.message : ''} />}
       {pluginUpdater && updateState && <PluginUpdatePanel open={updateOpen} state={updateState} updater={pluginUpdater} t={t}
         onClose={() => setOverlay(current => (current.kind === 'update' ? { kind: 'none' } : current))} />}
       {pluginUpdater && updateState && <BatchUpdatePanel open={batchUpdateOpen} state={updateState} updater={pluginUpdater} t={t}
@@ -1799,7 +2151,8 @@ export function MarketSection({
           </button>
         ))}
       </div>
-      {((page === 'mcp' && mcpToolbar && (mcpToolbar.canOpenDocument || mcpToolbar.canAdd))
+      {((page === 'plugins' && directInstaller !== undefined)
+        || (page === 'mcp' && mcpToolbar && (mcpToolbar.canOpenDocument || mcpToolbar.canAdd))
         || (snapshot.settingsReady && snapshot.value.aiAssistantEnabled)) && (
         <div className="dsh_market_tabToolbarActions">
           {page === 'mcp' && mcpToolbar?.canOpenDocument && (
@@ -1828,6 +2181,18 @@ export function MarketSection({
               {page === 'mcp' ? t('ai.pickMcp') : page === 'skills' ? t('ai.pickSkills') : t('ai.pick')}
             </MarketButton>
           )}
+          {page === 'plugins' && directInstaller && (
+            <MarketButton
+              intent="primary"
+              disabled={installBusy}
+              onClick={() => setOverlay({ kind: 'manual-install' })}
+              icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M12 5v14M5 12h14" />
+              </svg>}
+            >
+              {t('manual.open')}
+            </MarketButton>
+          )}
           {page === 'mcp' && mcpToolbar?.canAdd && (
             <MarketButton
               intent="primary"
@@ -1844,7 +2209,7 @@ export function MarketSection({
           {aiPickCard.message}
         </p>
       )}
-      {starPromptVisible && <StarPromptCard t={t} onSettle={settleStar} />}
+      {starPromptVisible && page !== 'settings' && <StarPromptCard t={t} onSettle={settleStar} />}
       {/* The Plugins panel stays mounted across tab switches: unmounting it
           would drop the search/filter state and re-pull the catalog on every
           return. The Skills panel remounts per visit, so each visit re-reads
@@ -1875,6 +2240,8 @@ export function MarketSection({
           subscribeInstalledChanges={subscribeInstalledChanges}
           setInstalledEnabled={setInstalledEnabled}
           uninstallInstalled={uninstallInstalled}
+          officialBundles={officialBundles}
+          onInstallOfficialBundle={installOfficialBundle}
           chooseWorkspace={() => chooseWorkspace(tabsId)}
           workspaceReadiness={workspaceReadiness}
           cards={cards}
@@ -1941,6 +2308,7 @@ export function MarketSection({
             onTryAssistant={tryAiAssistant}
             tryBusy={installBusy}
             tryMessage={aiPickCard?.status === 'error' || aiPickCard?.status === 'needs-workspace' ? aiPickCard.message : ''}
+            onStarred={() => settleStar('starred')}
           />
         </div>
       )}
