@@ -85,6 +85,7 @@ Only four event shapes can ever leave your machine:
 }
 ```
 
+- `mode` identifies the install source only: `"direct"` / `"featured"` (Market UI) vs `"ai"` (`/market-pro` Agent assistant). No prompt text or conversation history is ever included.
 - `errorCode` (present only when `result === "failed"`) is mapped client-side to a closed, privacy-safe enum: `"compat" | "unsupported_platform" | "not_bundle" | "already_installed" | "not_found" | "pnpm_missing" | "build_blocked" | "permission" | "disk_full" | "integrity" | "invalid_spec" | "network" | "timeout" | "refused" | "cancelled" | "write_failed" | "operation_error" | "unknown"`. Raw error messages, local paths, and stack traces are never sent.
 - `id` is a random per-install UUIDv4 generated locally for daily deduplication. It is never derived from hardware IDs, MAC addresses, usernames, or accounts, and is cleared locally as soon as telemetry is turned off in Settings.
 
@@ -159,6 +160,7 @@ DSH Market Pro 内置极简、可关闭的遥测，仅用于统计公共安装�
 }
 ```
 
+- `mode` 仅用于区分安装入口：`"direct"` / `"featured"`（市场图形界面）与 `"ai"`（`/market-pro` 对话助手），绝不包含对话文本或提示词内容。
 - `errorCode` 仅在失败时出现，且固定映射为封闭、脱敏枚举：`compat | unsupported_platform | not_bundle | already_installed | not_found | pnpm_missing | build_blocked | permission | disk_full | integrity | invalid_spec | network | timeout | refused | cancelled | write_failed | operation_error | unknown`，绝不上报原始报错文本、本地路径或堆栈。
 - `id` 为本地生成的随机 UUIDv4，仅用于去重，不绑定任何硬件指纹、用户名或账号；在设置中关闭统计后立即清除。
 

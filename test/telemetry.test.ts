@@ -168,6 +168,26 @@ test('createTelemetryReporter sends at most one daily ping, respects toggle, and
   await new Promise(resolve => setTimeout(resolve, 20))
   assert.equal(sent.length, 4)
 
+  // AI-mode helpers report mode='ai' for all three categories while still dropping custom/private targets.
+  enabled = true
+  reporter.reportPluginInstall({ target: 'dsh-better-sidebar@0.32.1', mode: 'ai', result: 'ok' })
+  reporter.reportMcpInstall({ target: 'context7', mode: 'ai', result: 'failed', errorCode: 'network' })
+  reporter.reportSkillInstall({ target: 'vercel-labs/skills/find-skills', mode: 'ai', result: 'ok' })
+  reporter.reportPluginInstall({ target: '@acme/private-tool', mode: 'ai', result: 'ok' })
+  reporter.reportMcpInstall({ target: 'my-private-mcp', mode: 'ai', result: 'ok' })
+  await new Promise(resolve => setTimeout(resolve, 20))
+  assert.equal(sent.length, 7)
+  assert.equal(sent[4]?.event, 'plugin_install')
+  assert.equal(sent[4]?.mode, 'ai')
+  assert.equal(sent[4]?.target, 'dsh-better-sidebar')
+  assert.equal(sent[5]?.event, 'mcp_install')
+  assert.equal(sent[5]?.mode, 'ai')
+  assert.equal(sent[5]?.target, 'context7')
+  assert.equal(sent[5]?.errorCode, 'network')
+  assert.equal(sent[6]?.event, 'skill_install')
+  assert.equal(sent[6]?.mode, 'ai')
+  assert.equal(sent[6]?.target, 'vercel-labs/skills/find-skills')
+
   reporter.dispose()
 })
 

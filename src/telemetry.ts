@@ -81,7 +81,7 @@ export interface TelemetryReporter {
   }): void
   reportMcpInstall(input: {
     readonly target: string
-    readonly mode: 'featured' | 'custom'
+    readonly mode: 'featured' | 'ai' | 'custom'
     readonly result: 'ok' | 'failed'
     readonly errorCode?: TelemetryErrorCode
   }): void

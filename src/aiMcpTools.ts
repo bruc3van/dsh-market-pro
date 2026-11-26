@@ -142,6 +142,12 @@ export interface McpToolExecContext {
   readonly signal?: AbortSignal
 }
 
+export interface McpAiInstallOutcome {
+  readonly featuredId: string
+  readonly ok: boolean
+  readonly error?: string
+}
+
 export interface MarketAiMcpToolDeps {
   readonly profile: string
   readonly readSettings: () => SafeMarketSettings
@@ -150,6 +156,7 @@ export interface MarketAiMcpToolDeps {
   readonly installMcp: (plan: ManagedMcpInstallPlan) => Promise<ManagedMcpInstallResult>
   readonly setMcpEnabled: (name: string, enabled: boolean, approved: ManagedMcpRevision) => Promise<{ readonly name: string; readonly enabled: boolean }>
   readonly getApprover: () => McpApprovalServiceFace | undefined
+  readonly onInstallOutcome?: (outcome: McpAiInstallOutcome) => void
 }
 
 const CJK_RUN = /[\u3400-\u9fff]+/g
@@ -724,7 +731,18 @@ export function createMarketAiMcpToolDefinition(deps: MarketAiMcpToolDeps): Reco
           if (!deps.readSettings().aiAssistantEnabled) {
             throw new Error('DSH Market Pro AI assistant was disabled while waiting for approval; nothing was written.')
           }
-          const result = await deps.installMcp(plan)
+          let result: ManagedMcpInstallResult
+          try {
+            result = await deps.installMcp(plan)
+          } catch (error) {
+            deps.onInstallOutcome?.({
+              featuredId,
+              ok: false,
+              error: error instanceof Error ? error.message : String(error),
+            })
+            throw error
+          }
+          deps.onInstallOutcome?.({ featuredId, ok: true })
           const meta = installOutcomeMeta(result)
           return JSON.stringify({
             outcome: meta.outcome,
@@ -821,6 +839,7 @@ export function registerMarketAiMcpTool(ctx: Context, deps: {
   readonly profile: string
   readonly readSettings: () => SafeMarketSettings
   readonly entries: () => Iterable<McpLoaderEntry>
+  readonly onInstallOutcome?: (outcome: McpAiInstallOutcome) => void
 }): { sync(): void } {
   const getApprover = (): McpApprovalServiceFace | undefined => {
     try {
@@ -837,6 +856,7 @@ export function registerMarketAiMcpTool(ctx: Context, deps: {
     installMcp: plan => installManagedMcp(ctx, deps.entries(), plan),
     setMcpEnabled: (name, enabled, approved) => setManagedMcpEnabled(ctx, deps.entries(), name, enabled, approved),
     getApprover,
+    ...(deps.onInstallOutcome !== undefined ? { onInstallOutcome: deps.onInstallOutcome } : {}),
   }
 
   return registerDynamicAiTool(ctx, {

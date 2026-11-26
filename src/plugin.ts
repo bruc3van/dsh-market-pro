@@ -341,11 +341,36 @@ export function applyMarket(ctx: Context, resolved: Config): () => void {
     pluginManager: () => safeGet<HostPluginManagerUpdateFace>('pluginManager'),
     pluginMarket: () => safeGet<HostPluginMarketUpdateFace>('pluginMarket'),
     getApprover: () => safeGet<MarketApprovalServiceFace>('approval'),
+    onInstallOutcome: outcome => {
+      telemetry.reportPluginInstall({
+        target: outcome.spec,
+        mode: 'ai',
+        result: outcome.result,
+        ...(outcome.result === 'failed'
+          ? {
+              errorCode: classifyInstallError(outcome.message, {
+                inspectProblem: outcome.inspectProblem,
+                errorCode: outcome.errorCode,
+                packageKind: outcome.packageKind,
+                timedOut: outcome.timedOut,
+              }),
+            }
+          : {}),
+      })
+    },
   })
   const aiMcpTool = registerMarketAiMcpTool(ctx, {
     profile: profile.name,
     readSettings,
     entries: () => ctx.loader.entries() as Iterable<McpLoaderEntry>,
+    onInstallOutcome: outcome => {
+      telemetry.reportMcpInstall({
+        target: outcome.featuredId,
+        mode: 'ai',
+        result: outcome.ok ? 'ok' : 'failed',
+        ...(outcome.ok ? {} : { errorCode: classifyInstallError(outcome.error ?? '') }),
+      })
+    },
   })
   const reportSkillOutcome = (mode: 'featured' | 'ai', result: InstallFeaturedSkillResult): void => {
     if (result.ok) {

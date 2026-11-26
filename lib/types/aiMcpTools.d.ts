@@ -38,6 +38,11 @@ export interface McpToolExecContext {
     readonly callId?: string;
     readonly signal?: AbortSignal;
 }
+export interface McpAiInstallOutcome {
+    readonly featuredId: string;
+    readonly ok: boolean;
+    readonly error?: string;
+}
 export interface MarketAiMcpToolDeps {
     readonly profile: string;
     readonly readSettings: () => SafeMarketSettings;
@@ -49,6 +54,7 @@ export interface MarketAiMcpToolDeps {
         readonly enabled: boolean;
     }>;
     readonly getApprover: () => McpApprovalServiceFace | undefined;
+    readonly onInstallOutcome?: (outcome: McpAiInstallOutcome) => void;
 }
 /** Explicit machine-readable outcome of MCP install actions for Agent branching. */
 export type McpInstallActionOutcome = 'already-configured-match' | 'already-configured-toggle-needed' | 'installed-credentials-required' | 'installed-disabled' | 'installed-connected' | 'installed-pending';
@@ -66,6 +72,7 @@ export declare function registerMarketAiMcpTool(ctx: Context, deps: {
     readonly profile: string;
     readonly readSettings: () => SafeMarketSettings;
     readonly entries: () => Iterable<McpLoaderEntry>;
+    readonly onInstallOutcome?: (outcome: McpAiInstallOutcome) => void;
 }): {
     sync(): void;
 };

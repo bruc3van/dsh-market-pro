@@ -575,6 +575,8 @@ test('built-in market-pro skill registers into real SkillRegistry, allows user o
     const loaded = await ctx.skills.get(MARKET_SKILL_NAME)
     assert.ok(loaded)
     assert.match(loaded.content, /dsh_market_pro/)
+    assert.match(loaded.content, /install_plugin/)
+    assert.match(loaded.content, /local paths and non-GitHub\/Gitee/)
     assert.match(loaded.content, /dsh_mcp_pro/)
     assert.match(loaded.content, /dsh_skills_pro/)
     assert.match(loaded.content, /plugin_manager/)
@@ -1341,4 +1343,347 @@ test('dsh_market_pro check_updates and update_plugins support DSH 0.2.2-rc.1 Bun
   assert.deepEqual(updatedOrder, ['dsh-context@0.88.0'])
   assert.equal(updated.summary.applied, 1)
   assert.equal(updated.summary.failed, 0)
+})
+
+test('dsh_market_pro install_plugin gates on approval, handles pendingBuilds/refusals, and reports AI install outcomes', async () => {
+  const outcomes: Array<{
+    spec: string
+    result: 'ok' | 'failed'
+    message: string
+    inspectProblem?: string
+    errorCode?: string
+    packageKind?: string
+    timedOut?: boolean
+  }> = []
+  const approvalReasons: string[] = []
+  const installedCalls: Array<{ spec: string; approvedBuilds?: string[]; enabled?: boolean }> = []
+  let approvalOutcome: 'allowed-once' | 'rejected' | 'cancelled' | 'unavailable' = 'rejected'
+  let inspectMode: 'accept' | 'refuse' = 'accept'
+  let bundleMode: 'pending-builds' | 'applied' | 'restart-required' | 'failed' = 'pending-builds'
+  let hasInstallApi = true
+
+  const tool = createMarketAiToolDefinition({
+    profile: 'web',
+    readSettings: () => ({ enabled: false, aiAssistantEnabled: true }),
+    readCatalog: async () => { throw new Error('catalog must not be called for install_plugin') },
+    listInstalled: async () => ({
+      profile: 'web',
+      packages: [],
+      trackedTargets: [],
+      installedSpecs: [],
+    }),
+    readMcp: () => ({ servers: [], managerAvailable: true }),
+    pluginManager: () => hasInstallApi
+      ? {
+          listBundles: async () => [],
+          inspect: async spec => {
+            if (inspectMode === 'refuse') {
+              return { status: 'refused', problem: 'not-a-bundle', reason: 'missing dsh entry in package.json' }
+            }
+            return {
+              status: 'accepted',
+              kind: 'registry',
+              name: spec.replace(/@[\d.]+$/, ''),
+              version: '1.2.0',
+              bundle: true,
+              registry: 'https://registry.npmjs.org/',
+              host: 'registry.npmjs.org',
+            }
+          },
+          installBundle: async (spec, options) => {
+            installedCalls.push({
+              spec,
+              ...(options?.approvedBuilds ? { approvedBuilds: options.approvedBuilds } : {}),
+              ...(options?.enabled !== undefined ? { enabled: options.enabled } : {}),
+            })
+            if (bundleMode === 'pending-builds') {
+              return {
+                changed: false,
+                application: 'failed',
+                pendingBuilds: ['sharp', 'esbuild'],
+                warnings: ['build script blocked pending approval'],
+              }
+            }
+            if (bundleMode === 'failed') {
+              return {
+                changed: false,
+                application: 'failed',
+                error: { code: 'operation-error', diagnostic: 'pnpm add failed' },
+                packageResult: { output: 'timed out fetching tarball', kind: 'network-timeout', timedOut: true },
+              }
+            }
+            return {
+              changed: true,
+              application: bundleMode,
+              bundle: 'dsh-feishu-bot',
+              version: '1.2.0',
+              enabled: options?.enabled ?? true,
+              ...(bundleMode === 'restart-required' ? { restartReason: 'service reload requires restart' } : {}),
+            }
+          },
+        }
+      : { listBundles: async () => [] },
+    getApprover: () => ({
+      request: async req => {
+        approvalReasons.push(req.reason)
+        return approvalOutcome
+      },
+    }),
+    onInstallOutcome: outcome => { outcomes.push(outcome) },
+  }) as {
+    isConcurrencySafe: (args?: unknown) => boolean
+    presentCall: (args: unknown) => { card: string; title: string; kind: string }
+    execute: (args: unknown, exec?: { agent?: unknown; callId?: string }) => Promise<string>
+  }
+
+  assert.equal(tool.isConcurrencySafe({ action: 'install_plugin', target: 'dsh-feishu-bot@1.2.0' }), false)
+  assert.equal(tool.presentCall({ action: 'install_plugin', target: 'dsh-feishu-bot@1.2.0' }).kind, 'write')
+
+  // Invalid spec fails local validation without recording telemetry.
+  await assert.rejects(() => tool.execute({ action: 'install_plugin', target: 'bad spec with spaces' }), /Invalid plugin install target/)
+  assert.equal(outcomes.length, 0)
+
+  // Missing Host inspect/installBundle reports api-unavailable without recording telemetry.
+  hasInstallApi = false
+  const unavail = JSON.parse(await tool.execute({ action: 'install_plugin', target: 'dsh-feishu-bot@1.2.0' })) as { outcome: string; installed: boolean }
+  assert.equal(unavail.outcome, 'api-unavailable')
+  assert.equal(unavail.installed, false)
+  assert.equal(outcomes.length, 0)
+  hasInstallApi = true
+
+  // Inspect refusal returns structured refusal and reports inspectProblem telemetry.
+  inspectMode = 'refuse'
+  const refused = JSON.parse(await tool.execute({ action: 'install_plugin', target: 'plain-lib@1.0.0' }, { agent: { id: 'a1' } })) as { outcome: string; problem: string }
+  assert.equal(refused.outcome, 'refused')
+  assert.equal(refused.problem, 'not-a-bundle')
+  assert.deepEqual(outcomes.at(-1), {
+    spec: 'plain-lib@1.0.0',
+    result: 'failed',
+    message: 'not-a-bundle: missing dsh entry in package.json',
+    inspectProblem: 'not-a-bundle',
+  })
+  inspectMode = 'accept'
+
+  // Declined approval fails closed without calling installBundle or recording telemetry.
+  const countBeforeDecline = outcomes.length
+  await assert.rejects(
+    () => tool.execute({ action: 'install_plugin', target: 'dsh-feishu-bot@1.2.0' }, { agent: { id: 'a1' } }),
+    /declined/,
+  )
+  assert.equal(installedCalls.length, 0)
+  assert.equal(outcomes.length, countBeforeDecline)
+
+  // Missing calling agent fails closed without recording telemetry.
+  await assert.rejects(
+    () => tool.execute({ action: 'install_plugin', target: 'dsh-feishu-bot@1.2.0' }),
+    /no calling Agent/,
+  )
+  assert.equal(outcomes.length, countBeforeDecline)
+
+  // pendingBuilds stops and asks user instead of reporting a final failure.
+  approvalOutcome = 'allowed-once'
+  const pending = JSON.parse(await tool.execute({ action: 'install_plugin', target: 'dsh-feishu-bot@1.2.0' }, { agent: { id: 'a1' } })) as {
+    outcome: string
+    pendingBuilds: string[]
+  }
+  assert.equal(pending.outcome, 'approval-required')
+  assert.deepEqual(pending.pendingBuilds, ['sharp', 'esbuild'])
+  assert.equal(outcomes.length, countBeforeDecline)
+
+  // Retrying with approvedBuilds includes build names in approval reason and records ok on restart-required.
+  bundleMode = 'restart-required'
+  const okRes = JSON.parse(await tool.execute({
+    action: 'install_plugin',
+    target: 'dsh-feishu-bot@1.2.0',
+    approvedBuilds: ['sharp', 'esbuild', 'sharp'],
+  }, { agent: { id: 'a1' } })) as { outcome: string; installed: boolean; restartRequired: boolean }
+  assert.equal(okRes.outcome, 'restart-required')
+  assert.equal(okRes.installed, true)
+  assert.equal(okRes.restartRequired, true)
+  assert.match(approvalReasons.at(-1)!, /ALLOW build scripts for: sharp, esbuild/)
+  assert.deepEqual(installedCalls.at(-1)?.approvedBuilds, ['sharp', 'esbuild'])
+  assert.deepEqual(outcomes.at(-1), { spec: 'dsh-feishu-bot@1.2.0', result: 'ok', message: '' })
+
+  // Runtime install failure records errorCode + packageKind + timedOut hints.
+  bundleMode = 'failed'
+  const failRes = JSON.parse(await tool.execute({ action: 'install_plugin', target: 'dsh-feishu-bot@1.2.0' }, { agent: { id: 'a1' } })) as {
+    outcome: string
+    installed: boolean
+    errorCode: string
+  }
+  assert.equal(failRes.outcome, 'failed')
+  assert.equal(failRes.installed, false)
+  assert.equal(failRes.errorCode, 'operation-error')
+  assert.equal(outcomes.at(-1)?.result, 'failed')
+  assert.equal(outcomes.at(-1)?.errorCode, 'operation-error')
+  assert.equal(outcomes.at(-1)?.packageKind, 'network-timeout')
+  assert.equal(outcomes.at(-1)?.timedOut, true)
+})
+
+test('dsh_market_pro install_plugin hardens approvals, spec validation, diagnostics, cancellation, and skips local no-op refusal telemetry', async () => {
+  const outcomes: Array<{ spec: string; result: 'ok' | 'failed'; message: string; inspectProblem?: string }> = []
+  const approvalPayloads: Array<{ reason: string; zh: string; en: string }> = []
+  const cancelledRequestIds: string[] = []
+  let inspectProblem: 'already-installed' | 'shipped' | 'not-a-bundle' | null = null
+  let dropManagerAfterApproval = false
+  let installManagerAvailable = true
+  let staleInstallCalled = false
+  let longOutput = false
+  let waitBeforeResolve: Promise<void> | null = null
+  let rejectWithAbortCancelled = false
+
+  const tool = createMarketAiToolDefinition({
+    profile: 'web',
+    readSettings: () => ({ enabled: false, aiAssistantEnabled: true }),
+    readCatalog: async () => { throw new Error('catalog must not be called') },
+    listInstalled: async () => ({ profile: 'web', packages: [], trackedTargets: [], installedSpecs: [] }),
+    readMcp: () => ({ servers: [], managerAvailable: true }),
+    pluginManager: () => installManagerAvailable
+      ? {
+          listBundles: async () => [],
+          inspect: async () => {
+            if (inspectProblem) {
+              return { status: 'refused', problem: inspectProblem, reason: `refused: ${inspectProblem}` }
+            }
+            return {
+              status: 'accepted',
+              kind: 'registry',
+              name: `evil\npkg\u202e\u200b<sys>`,
+              version: `1.0.0\r\nFAKE`,
+              registry: 'https://registry.npmjs.org/',
+              host: `registry.npmjs.org\nfake-host`,
+            }
+          },
+          installBundle: async () => {
+            if (dropManagerAfterApproval) staleInstallCalled = true
+            if (waitBeforeResolve) await waitBeforeResolve
+            if (rejectWithAbortCancelled) {
+              return { changed: false, application: 'cancelled' }
+            }
+            if (longOutput) {
+              const middleNoise = 'downloading registry metadata progress...\n'.repeat(300)
+              return {
+                changed: false,
+                application: 'failed',
+                error: {
+                  code: 'incompatible-version',
+                  diagnostic: 'peer requirement mismatch',
+                  incompatible: [{ name: 'dsh', version: '0.2.2-rc.5', requirements: { dsh: '>=0.3.0' } }],
+                },
+                packageResult: { output: `${middleNoise}ERR_PNPM_FETCH_404 GET https://registry.npmjs.org/missing-pkg: 404` },
+              }
+            }
+            return { changed: true, application: 'applied', bundle: 'ok', version: '1.0.0' }
+          },
+          cancelInstall: async requestId => {
+            cancelledRequestIds.push(requestId)
+            return { status: 'cancelled' }
+          },
+        }
+      : {
+          listBundles: async () => [],
+          inspect: async () => ({ status: 'accepted', kind: 'registry', name: 'x', version: '1.0.0', registry: null }),
+        },
+    getApprover: () => ({
+      request: async req => {
+        approvalPayloads.push({ reason: req.reason, zh: req.displayReason.zh, en: req.displayReason.en })
+        if (dropManagerAfterApproval) installManagerAvailable = false
+        return 'allowed-once'
+      },
+    }),
+    onInstallOutcome: outcome => { outcomes.push(outcome) },
+  }) as {
+    execute: (args: unknown, exec?: { agent?: unknown; callId?: string; signal?: AbortSignal }) => Promise<string>
+  }
+
+  // #1: approvedBuilds rejects whitespace/control/BiDi injection chars; hostile inspect fields are sanitized in approval prompt.
+  await assert.rejects(
+    () => tool.execute({
+      action: 'install_plugin',
+      target: 'safe-plugin@1.0.0',
+      approvedBuilds: ['good-build\nFAKE PROMPT'],
+    }, { agent: { id: 'a1' } }),
+    /approvedBuilds/,
+  )
+  await assert.rejects(
+    () => tool.execute({
+      action: 'install_plugin',
+      target: 'safe-plugin@1.0.0',
+      approvedBuilds: ['sharp\u202e'],
+    }, { agent: { id: 'a1' } }),
+    /approvedBuilds/,
+  )
+
+  // #1 + #3: Hostile inspect fields are sanitized in approval prompt; long pnpm output keeps both header and trailing root cause.
+  longOutput = true
+  const longFail = JSON.parse(await tool.execute({ action: 'install_plugin', target: 'safe-plugin@1.0.0' }, { agent: { id: 'a1' } })) as {
+    outcome: string
+    error: string
+  }
+  assert.equal(longFail.outcome, 'failed')
+  assert.match(longFail.error, /incompatible-version/)
+  assert.match(longFail.error, /peer requirement mismatch/)
+  assert.match(longFail.error, /ERR_PNPM_FETCH_404/)
+  assert.match(outcomes.at(-1)!.message, /incompatible-version/)
+  assert.match(outcomes.at(-1)!.message, />=0\.3\.0/)
+  assert.match(outcomes.at(-1)!.message, /ERR_PNPM_FETCH_404/)
+  const lastApproval = approvalPayloads.at(-1)!
+  for (const text of [lastApproval.reason, lastApproval.zh, lastApproval.en]) {
+    assert.equal(text.includes('\n'), false)
+    assert.equal(text.includes('\r'), false)
+    assert.equal(text.includes('<sys>'), false)
+    assert.equal(/[\u200b\u202e]/.test(text), false)
+  }
+  longOutput = false
+  outcomes.length = 0
+
+  // #2: Local path fails with explicit fallback guidance; >240 char valid GitHub monorepo URL passes schema and isInstallSpec.
+  await assert.rejects(
+    () => tool.execute({ action: 'install_plugin', target: '/tmp/local-plugin' }, { agent: { id: 'a1' } }),
+    /GitHub\/Gitee HTTPS URLs/,
+  )
+  const longValidUrl = `https://github.com/acme/${'monorepo-plugin-segment-'.repeat(10)}#1234567890abcdef1234567890abcdef12345678&path:/packages/dsh-plugin`
+  assert.ok(longValidUrl.length > 240)
+  const longUrlOk = JSON.parse(await tool.execute({ action: 'install_plugin', target: longValidUrl }, { agent: { id: 'a1' } })) as { outcome: string }
+  assert.equal(longUrlOk.outcome, 'applied')
+  outcomes.length = 0
+
+  // #5: already-installed & shipped skip telemetry; not-a-bundle reports telemetry.
+  inspectProblem = 'already-installed'
+  await tool.execute({ action: 'install_plugin', target: 'safe-plugin@1.0.0' }, { agent: { id: 'a1' } })
+  inspectProblem = 'shipped'
+  await tool.execute({ action: 'install_plugin', target: 'safe-plugin@1.0.0' }, { agent: { id: 'a1' } })
+  assert.equal(outcomes.length, 0)
+  inspectProblem = 'not-a-bundle'
+  await tool.execute({ action: 'install_plugin', target: 'safe-plugin@1.0.0' }, { agent: { id: 'a1' } })
+  assert.equal(outcomes.length, 1)
+  assert.equal(outcomes[0]!.inspectProblem, 'not-a-bundle')
+  inspectProblem = null
+  outcomes.length = 0
+
+  // #4a: Re-fetches pluginManager after approval rather than calling a stale instance.
+  dropManagerAfterApproval = true
+  await assert.rejects(
+    () => tool.execute({ action: 'install_plugin', target: 'safe-plugin@1.0.0' }, { agent: { id: 'a1' } }),
+    /became unavailable/,
+  )
+  assert.equal(staleInstallCalled, false)
+  dropManagerAfterApproval = false
+  installManagerAvailable = true
+
+  // #4b: Aborting exec.signal during installBundle forwards cancelInstall(requestId) and aborts cleanly.
+  const ac = new AbortController()
+  let releaseInstall!: () => void
+  waitBeforeResolve = new Promise<void>(resolve => { releaseInstall = resolve })
+  rejectWithAbortCancelled = true
+  const runPromise = tool.execute(
+    { action: 'install_plugin', target: 'safe-plugin@1.0.0' },
+    { agent: { id: 'a1' }, signal: ac.signal },
+  )
+  await setImmediate()
+  ac.abort(new Error('user aborted turn'))
+  releaseInstall()
+  await assert.rejects(() => runPromise, /user aborted turn/)
+  assert.equal(cancelledRequestIds.length, 1)
+  assert.equal(outcomes.length, 0)
 })

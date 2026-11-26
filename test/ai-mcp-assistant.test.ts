@@ -780,3 +780,61 @@ test('dsh_mcp_pro hardening: blocks mixed-template smuggling, checks approval vi
     await fallbackCtx.fiber.dispose()
   }
 })
+
+test('dsh_mcp_pro reports onInstallOutcome only for actual install_featured execution', async () => {
+  const { ctx, entries, state, approver } = makeFakeHost()
+  let settings: SafeMarketSettings = { enabled: true, aiAssistantEnabled: true }
+  const fakeExec = { agent: { id: 'mcp-agent' }, callId: 'call-mcp-outcome' }
+  const outcomes: Array<{ featuredId: string; ok: boolean; error?: string }> = []
+  let failNextInstall = false
+
+  const tool = createMarketAiMcpToolDefinition({
+    profile: 'web',
+    readSettings: () => settings,
+    inspectMcp: () => inspectManagedMcp(ctx, entries),
+    findExistingFeaturedMcp: (input, inspection) => findExistingFeaturedMcp(ctx, input, inspection),
+    installMcp: async plan => {
+      if (failNextInstall) throw new Error('settings conflict: retry needed')
+      return installManagedMcp(ctx, entries, plan)
+    },
+    setMcpEnabled: (name, enabled, approved) => setManagedMcpEnabled(ctx, entries, name, enabled, approved),
+    getApprover: () => approver,
+    onInstallOutcome: outcome => { outcomes.push(outcome) },
+  }) as {
+    execute: (args: unknown, exec?: { agent?: unknown; callId?: string }) => Promise<string>
+  }
+
+  // Successful featured install records featuredId + ok:true.
+  const okRes = JSON.parse(await tool.execute({ action: 'install_featured', featuredId: 'exa' }, fakeExec)) as { installed: boolean }
+  assert.equal(okRes.installed, true)
+  assert.deepEqual(outcomes, [{ featuredId: 'exa', ok: true }])
+
+  // Already configured match does not double-report.
+  const repeatRes = JSON.parse(await tool.execute({ action: 'install_featured', featuredId: 'exa' }, fakeExec)) as { alreadyConfigured: boolean }
+  assert.equal(repeatRes.alreadyConfigured, true)
+  assert.equal(outcomes.length, 1)
+
+  // Approval rejection does not record an install failure.
+  state.approvalOutcome = 'rejected'
+  await assert.rejects(() => tool.execute({ action: 'install_featured', featuredId: 'deepwiki' }, fakeExec), /declined/)
+  assert.equal(outcomes.length, 1)
+
+  // Custom MCP installs never emit featured telemetry outcomes.
+  state.approvalOutcome = 'allowed-once'
+  await tool.execute({
+    action: 'install_custom',
+    name: 'internal-only',
+    transport: 'stdio',
+    command: 'node',
+    args: ['internal.js'],
+  }, fakeExec)
+  assert.equal(outcomes.length, 1)
+
+  // Actual installMcp failure after approval emits ok:false + error message.
+  failNextInstall = true
+  await assert.rejects(() => tool.execute({ action: 'install_featured', featuredId: 'deepwiki' }, fakeExec), /settings conflict/)
+  assert.deepEqual(outcomes, [
+    { featuredId: 'exa', ok: true },
+    { featuredId: 'deepwiki', ok: false, error: 'settings conflict: retry needed' },
+  ])
+})

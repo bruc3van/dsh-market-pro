@@ -80,6 +80,58 @@ export interface HostPluginManagerUpdateFace {
             readonly restartReason?: string;
         };
     }>;
+    inspect?: (spec: string, options?: {
+        readonly registry?: string | null;
+    }, signal?: AbortSignal) => Promise<{
+        readonly status: 'accepted';
+        readonly kind?: string;
+        readonly name?: string;
+        readonly version?: string;
+        readonly description?: string;
+        readonly bundle?: boolean | null;
+        readonly registry: string | null;
+        readonly host?: string;
+    } | {
+        readonly status: 'refused';
+        readonly problem: string;
+        readonly reason: string;
+        readonly registries?: readonly (string | null)[];
+    }>;
+    installBundle?: (spec: string, options?: {
+        readonly enabled?: boolean;
+        readonly saveExact?: boolean;
+        readonly requestId?: string;
+        readonly approvedBuilds?: string[];
+        readonly registry?: string | null;
+    }) => Promise<{
+        readonly changed?: boolean;
+        readonly application: 'applied' | 'restart-required' | 'overridden' | 'failed' | 'cancelled';
+        readonly restartReason?: string;
+        readonly stage?: string;
+        readonly target?: string;
+        readonly enabled?: boolean;
+        readonly error?: {
+            readonly code: string;
+            readonly diagnostic?: string;
+            readonly incompatible?: readonly {
+                readonly name: string;
+                readonly version: string;
+                readonly requirements?: Readonly<Record<string, string>>;
+                readonly peers?: Readonly<Record<string, string>>;
+            }[];
+        };
+        readonly warnings?: readonly string[];
+        readonly packageResult?: {
+            readonly output?: string;
+            readonly kind?: string;
+            readonly timedOut?: boolean;
+        };
+        readonly bundle?: string;
+        readonly version?: string;
+        readonly pendingBuilds?: readonly string[];
+        readonly approvedBuilds?: readonly string[];
+    }>;
+    cancelInstall?: (requestId: string) => Promise<unknown>;
 }
 /** Structural subset of DSH's Host `pluginMarket` service for Git subscription update discovery. */
 export interface HostPluginMarketUpdateFace {
@@ -116,6 +168,15 @@ export interface HostPluginMarketUpdateFace {
         }[];
     }>;
 }
+export interface PluginAiInstallOutcome {
+    readonly spec: string;
+    readonly result: 'ok' | 'failed';
+    readonly message: string;
+    readonly inspectProblem?: string;
+    readonly errorCode?: string;
+    readonly packageKind?: string;
+    readonly timedOut?: boolean;
+}
 export interface MarketAiToolDeps {
     readonly profile: string;
     readonly readSettings: () => SafeMarketSettings;
@@ -125,11 +186,14 @@ export interface MarketAiToolDeps {
     readonly pluginManager?: () => HostPluginManagerUpdateFace | undefined;
     readonly pluginMarket?: () => HostPluginMarketUpdateFace | undefined;
     readonly getApprover?: () => MarketApprovalServiceFace | undefined;
+    readonly onInstallOutcome?: (outcome: PluginAiInstallOutcome) => void;
 }
 /** Explicit machine-readable outcome of `check_updates` for Agent branching. */
 export type MarketCheckUpdatesStatus = 'unavailable' | 'updates-available' | 'up-to-date' | 'check-failed';
 /** Explicit machine-readable outcome of `update_plugins` for Agent branching. */
 export type MarketUpdatePluginsOutcome = 'api-unavailable' | 'nothing-to-update' | 'applied' | 'restart-required' | 'partial-failure' | 'failed';
+/** Explicit machine-readable outcome of `install_plugin` for Agent branching. */
+export type MarketInstallPluginOutcome = 'api-unavailable' | 'refused' | 'approval-required' | 'applied' | 'restart-required' | 'overridden' | 'cancelled' | 'failed';
 /** Build the registry-ready `dsh_market_pro` tool definition with a compact schema. */
 export declare function createMarketAiToolDefinition(deps: MarketAiToolDeps): Record<string, unknown>;
 /**
