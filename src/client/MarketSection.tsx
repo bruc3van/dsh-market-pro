@@ -54,6 +54,15 @@ import { McpView, type McpToolbarActions } from './McpView.tsx'
 import { SettingsView } from './SettingsView.tsx'
 import type { McpController } from './mcpController.ts'
 import { BackToTop, scrollResultsContainerToTop } from './BackToTop.tsx'
+import { StarPromptCard } from './StarPromptCard.tsx'
+import {
+  STAR_PROMPT_STORAGE_KEY,
+  STAR_REPOSITORY_URL,
+  STAR_SETTLED_EVENT,
+  recordMarketOpen,
+  settleStarPrompt,
+  starPromptPending,
+} from './starPrompt.ts'
 import { PluginLogo } from './PluginLogo.tsx'
 import { buildInstallPrompt, buildReviewPrompt, type ReviewTarget } from './reviewPrompt.ts'
 import { useSearchDock } from './useSearchDock.ts'
@@ -1492,6 +1501,17 @@ export function MarketSection({
   const activeRefresh = page === 'settings' ? undefined : refreshByPage[page]
   const rawSelfUpdate = updateState?.available[PACKAGE_NAME] ?? ''
   const selfUpdateVersion = isSafeVersion(rawSelfUpdate) ? rawSelfUpdate : ''
+  // The background probe fills `available` on entry, long before anyone opens
+  // the installed filter: surfacing the count in the header is what makes
+  // those updates visible without the tab switch. When more than the market
+  // itself is updatable the header offers the batch panel instead of the
+  // single self-update shortcut — the batch already queues the market last.
+  const totalUpdatableCount = Object.keys(updateState?.available ?? {}).length
+  // Count non-self rows by key, not through the version-safety gate: a self row
+  // whose probed version fails the check still must not masquerade as a
+  // third-party update and summon the batch entry on its own.
+  const nonSelfUpdatableCount = Object.keys(updateState?.available ?? {}).filter(name => name !== PACKAGE_NAME).length
+  const showBatchUpdateEntry = nonSelfUpdatableCount > 0 && openBatchUpdate !== undefined
   const searchDock = useSearchDock(page)
   const [cards, setCards] = useState<Readonly<Record<string, CardState>>>({})
   const [aiSkillFeedbackId, setAiSkillFeedbackId] = useState<string | null>(null)
@@ -1509,6 +1529,49 @@ export function MarketSection({
     mounted.current = true
     return () => { mounted.current = false }
   }, [])
+  // Count this opening once — the ref survives StrictMode's replayed effect,
+  // so a mount is one open no matter how many times the effect re-runs. From
+  // the third open on the star nudge is armed; answering it either way is
+  // terminal, so this is the only effect that ever re-shows it.
+  const [starPromptVisible, setStarPromptVisible] = useState(false)
+  const starCounted = useRef(false)
+  useEffect(() => {
+    if (starCounted.current) return
+    starCounted.current = true
+    if (recordMarketOpen()) setStarPromptVisible(true)
+  }, [])
+  const settleStar = useCallback((outcome: 'dismissed' | 'starred') => {
+    settleStarPrompt(outcome)
+    // Peers (main view, sidebar, plugin tab) hide their copy immediately; the
+    // origin tag keeps this instance's own listener out of the way, because a
+    // starred settle here delays its unmount until the navigation commits.
+    if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function' && typeof CustomEvent === 'function') {
+      window.dispatchEvent(new CustomEvent(STAR_SETTLED_EVENT, { detail: tabsId }))
+    }
+    if (outcome === 'starred') {
+      // Let the browser commit the target=_blank navigation before the anchor
+      // unmounts — detaching the node in the same click task can cancel it.
+      window.setTimeout(() => { if (mounted.current) setStarPromptVisible(false) }, 400)
+    } else {
+      setStarPromptVisible(false)
+    }
+  }, [tabsId])
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return
+    const onPeerSettled = (event: Event) => {
+      if ((event as CustomEvent).detail === tabsId) return
+      setStarPromptVisible(false)
+    }
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === STAR_PROMPT_STORAGE_KEY && !starPromptPending()) setStarPromptVisible(false)
+    }
+    window.addEventListener(STAR_SETTLED_EVENT, onPeerSettled)
+    window.addEventListener('storage', onStorage)
+    return () => {
+      window.removeEventListener(STAR_SETTLED_EVENT, onPeerSettled)
+      window.removeEventListener('storage', onStorage)
+    }
+  }, [tabsId])
   // One review hand-off at a time: two cards clicked back to back must not
   // open two sessions and stage two drafts.
   const aiDraftBusy = Object.values(cards).some(card => card.status === 'busy' || card.status === 'picking')
@@ -1639,7 +1702,21 @@ export function MarketSection({
           {isSafeVersion(snapshot.version) && <span className="dsh_market_selfVersion">{`v${snapshot.version}`}</span>}
         </h2>
         <div className="dsh_market_headerActions">
-          {selfUpdateVersion !== '' && checkUpdate && (
+          {showBatchUpdateEntry && (
+            <MarketButton
+              intent="primary"
+              className="dsh_market_selfUpdate"
+              disabled={installBusy}
+              title={t('batchUpdate.title')}
+              onClick={() => { openBatchUpdate?.() }}
+              icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M12 16V4m-5 5 5-5 5 5M5 20h14" />
+              </svg>}
+            >
+              {`${t('installed.updateAll')} (${String(totalUpdatableCount)})`}
+            </MarketButton>
+          )}
+          {!showBatchUpdateEntry && selfUpdateVersion !== '' && checkUpdate && (
             <MarketButton
               intent="primary"
               className="dsh_market_selfUpdate"
@@ -1669,7 +1746,7 @@ export function MarketSection({
           )}
           <a
             className="dsh_market_headerAction"
-            href="https://github.com/bruc3van/dsh-market-pro"
+            href={STAR_REPOSITORY_URL}
             target="_blank"
             rel="noreferrer"
           >
@@ -1677,17 +1754,6 @@ export function MarketSection({
               <path d="M9 19c-4.3 1.3-4.3-2.2-6-2.7M15 22v-3.8a3.3 3.3 0 0 0-.9-2.5c3-.3 6.2-1.5 6.2-6.9a5.4 5.4 0 0 0-1.5-3.8 5 5 0 0 0-.1-3.8s-1.2-.4-3.9 1.4a13.4 13.4 0 0 0-7 0C5.1.8 3.9 1.2 3.9 1.2A5 5 0 0 0 3.8 5a5.4 5.4 0 0 0-1.5 3.8c0 5.4 3.2 6.6 6.2 6.9a3.3 3.3 0 0 0-.9 2.5V22" />
             </svg>
             {t('header.repository')}
-          </a>
-          <a
-            className="dsh_market_headerAction"
-            href="https://x.com/bruc3van"
-            target="_blank"
-            rel="noreferrer"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M4 3h4l12 18h-4L4 3ZM20 3l-7 8M4 21l7-8" />
-            </svg>
-            {t('header.contact')}
           </a>
         </div>
       </div>
@@ -1776,6 +1842,7 @@ export function MarketSection({
           {aiPickCard.message}
         </p>
       )}
+      {starPromptVisible && <StarPromptCard t={t} onSettle={settleStar} />}
       {/* The Plugins panel stays mounted across tab switches: unmounting it
           would drop the search/filter state and re-pull the catalog on every
           return. The Skills panel remounts per visit, so each visit re-reads
@@ -1792,7 +1859,7 @@ export function MarketSection({
           installedRevision={installedRevision}
           appliedUpdateRevision={appliedUpdateRevision}
           onCheckUpdate={checkUpdate}
-          onOpenBatchUpdate={openBatchUpdate}
+          onOpenBatchUpdate={showBatchUpdateEntry ? undefined : openBatchUpdate}
           availableUpdates={updateState?.available}
           onProbeUpdates={probeUpdates}
           onRegisterRefresh={onRegisterPluginsRefresh}

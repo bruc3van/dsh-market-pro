@@ -27,7 +27,7 @@ export const MARKET_SKILL_DESCRIPTION =
   'DSH Market Pro AI assistant: discover, compare, and safely install DSH plugins, 100 curated Agent Skills, and curated/custom MCP servers, plus check & batch-update installed plugins. / 插件市场Pro AI 助手：一站式选型、安全安装插件、精选技能与 MCP，支持插件一键批量更新。'
 
 export const MARKET_SKILL_WHEN_TO_USE =
-  'Invoke when finding, comparing, recommending, auditing, installing, or updating DSH plugins, curated Agent Skills (SKILL.md), or MCP servers — or choosing the best capability type (plugin vs MCP vs skill) for a user goal. Skip for unrelated tasks.'
+  'Invoke when finding, comparing, recommending, auditing, installing, or updating DSH plugins, curated Agent Skills (SKILL.md), or MCP servers — including when the user asks to check for plugin updates or upgrade/update installed plugins — or choosing the best capability type (plugin vs MCP vs skill) for a user goal. Skip for unrelated tasks.'
 
 /** Build the model-facing instruction body for the unified built-in `market-pro` skill. */
 export function buildMarketSkillContent(profile: string): string {
@@ -63,7 +63,7 @@ export function buildMarketSkillContent(profile: string): string {
     '## Capability Routing (Choose the Shortest Path)',
     '',
     `1. **Open-ended capability need** ("add browser automation / Feishu / diagramming / frontend setup") -> inspect current setup in parallel (\`environment\` / \`list_configured\` / \`list_installed\`) and choose across **Plugin** (host UI/lifecycle/deep integration), **MCP** (external APIs/tools/data sources), and **Skill** (lightweight workflow instructions/CLI playbooks). Deliver 2–4 concrete, complementary options first instead of asking questions before searching.`,
-    `2. **DSH plugins or plugin updates** -> use \`${MARKET_TOOL_NAME}\` only.`,
+    `2. **DSH plugins or plugin updates** (install/add, check for updates, update/upgrade installed plugins) -> use \`${MARKET_TOOL_NAME}\` only; for updates go straight to \`check_updates\` — never guess versions, never use CLI package managers, and never edit profile files manually.`,
     `3. **MCP servers** -> use \`${MCP_TOOL_NAME}\` only.`,
     `4. **Agent Skills (\`SKILL.md\`)** -> use \`${SKILLS_TOOL_NAME}\` only.`,
     '',

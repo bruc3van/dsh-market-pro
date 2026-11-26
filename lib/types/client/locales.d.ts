@@ -64,6 +64,8 @@ export declare const zh: {
     readonly 'batchUpdate.status.skipped': "已跳过";
     readonly 'batchUpdate.status.inUse': "运行中，需重启后更新";
     readonly 'batchUpdate.status.deferred': "重启后再更新";
+    readonly 'star.prompt': "如果 DSH Market Pro 帮到了你，请在 GitHub 点个 Star，这对我意义重大";
+    readonly 'star.action': "去点 Star";
     readonly 'audit.action': "AI 审查";
     readonly 'direct.authorization': "需要授权";
     readonly 'direct.buildHint': "以下依赖需要运行安装脚本，允许后继续安装。";
@@ -212,7 +214,6 @@ export declare const zh: {
     readonly 'header.more': "更多操作";
     readonly backToTop: "回到顶部";
     readonly 'header.repository': "仓库";
-    readonly 'header.contact': "作者";
     readonly installedHere: "已安装 v{version}";
     readonly installedHereUnknown: "已安装";
     readonly installing: "正在打开会话…";

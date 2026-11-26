@@ -420,6 +420,82 @@ export const cssText = `
   .dsh_market_backToTop:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
 }
 .dsh_market_backToTop:focus-visible { outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary)); outline-offset: 2px; }
+/* The star nudge sits in flow at the top-right — below the tab toolbar,
+   right-aligned like the section's other rows — so it never covers a control
+   in any mount context (main, sidebar, plugin tab) and never shares the
+   back-to-top button's corner. */
+.dsh_market_starPrompt {
+  flex: none;
+  align-self: flex-end;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(460px, 100%);
+  box-sizing: border-box;
+  padding: 10px 14px;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-lg);
+  background: var(--dsw-alias-bg-layer-2);
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-primary);
+}
+.dsh_market_starIcon {
+  flex: none;
+  color: var(--dsw-alias-state-warn-primary);
+}
+.dsh_market_starText {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}
+.dsh_market_starActions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.dsh_market_starAction {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  box-sizing: border-box;
+  padding: 0 10px;
+  border-radius: var(--dsw-radius-sm);
+  background: var(--dsw-alias-button-primary-fill);
+  color: var(--dsw-alias-label-primary-foreground);
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 500;
+  text-decoration: none;
+  white-space: nowrap;
+}
+@media (hover: hover) {
+  .dsh_market_starAction:hover { background: var(--dsw-alias-button-primary-hover); }
+}
+.dsh_market_starAction:focus-visible {
+  outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary)); outline-offset: 2px;
+}
+.dsh_market_starDismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--dsw-radius-sm);
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+}
+@media (hover: hover) {
+  .dsh_market_starDismiss:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+}
+.dsh_market_starDismiss:focus-visible {
+  outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary)); outline-offset: 2px;
+}
 .dsh_market_skillSource { overflow-wrap: anywhere; }
 /* Hide the host composer on the Skills tab while keeping pending reviews visible. */
 [data-conversation-scroll]:has(.dsh_market_projectSkills) > [data-composer-seat]:not(:has([data-approval-key], [data-plan-review-key])) {
@@ -1904,6 +1980,12 @@ button.dsh_market_dangerButton { color: var(--dsw-alias-state-error-primary); }
   .dsh_market_empty { padding: 28px 16px 24px; }
   .dsh_market_emptyActions { width: 100%; }
   .dsh_market_emptyActions > button { flex: 1 1 auto; }
+  .dsh_market_starPrompt {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+  .dsh_market_starText { flex-basis: calc(100% - 28px); }
+  .dsh_market_starActions { margin-left: auto; }
 }
 @container (max-width: 440px) {
   .dsh_market_mcpPair { flex-wrap: wrap; }
