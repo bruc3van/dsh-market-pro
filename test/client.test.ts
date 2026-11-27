@@ -690,3 +690,33 @@ test('loadingProgressOf advances monotonically through stages and caps below 100
   assert.deepEqual(loadingProgressOf(-100), start)
   assert.deepEqual(loadingProgressOf(Number.NaN), start)
 })
+
+test('stateOf distinguishes incompatible-version and other non-running hostError bundles', () => {
+  const base: MarketInstalledPackage = {
+    packageName: 'demo-plugin',
+    version: '1.0.0',
+    description: 'demo',
+    repository: '',
+    self: false,
+    inBox: false,
+    unregistered: false,
+    enabled: false,
+    entries: [],
+    error: '',
+    heldDown: false,
+  }
+  assert.equal(stateOf({
+    ...base,
+    hostError: { code: 'incompatible-version', incompatible: [] },
+  }), 'incompatible')
+  assert.equal(stateOf({
+    ...base,
+    bundleEnabled: true,
+    hostError: { code: 'unsupported-platform' },
+  }), 'notRunning')
+  assert.equal(stateOf({
+    ...base,
+    bundleEnabled: false,
+    hostError: { code: 'unsupported-platform' },
+  }), 'disabled')
+})

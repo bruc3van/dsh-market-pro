@@ -17,8 +17,9 @@ export declare function isOfficialCatalogBase(base: string): boolean;
  * 7 — schema-4 compact feed support, subscription icon/keyword hydration, and npmmirror failover.
  * 8 — the editorial pick cap grows from 100 to 1000.
  * 9 — `publishedAt`, the feed's own publish stamp used for cross-mirror freshness comparison.
+ * 10 — DSH runtime compatibility target selection (`dshEngine`, `compatFallback`) hydrated across subscription and repository cards.
  */
-export declare const CATALOG_FORMAT = 9;
+export declare const CATALOG_FORMAT = 10;
 /**
  * Where a parsed catalog survives a restart. The catalog source neither opens
  * nor closes this — the plugin body owns the domain's lifecycle and hands the
@@ -59,6 +60,8 @@ export interface CatalogOptions {
     readonly hedgeDelayMs?: number;
     /** Grace window before hedging a source whose headers already arrived but whose body download stalled. */
     readonly bodyHedgeDelayMs?: number;
+    /** Running DSH Host semantic version used for compatibility selection during catalog derivation. */
+    readonly dshVersion?: string;
 }
 /**
  * Drop the redundant `subscription` payload when an editorial `featured` list
@@ -75,7 +78,7 @@ export declare function stripUnusedSubscription(catalog: MarketCatalog): MarketC
  * @returns the parsed and validated catalog.
  * @throws when the body is not a market this plugin understands.
  */
-export declare function deriveMarket(body: unknown, marketSize: number): MarketCatalog;
+export declare function deriveMarket(body: unknown, marketSize: number, dshVersion?: string): MarketCatalog;
 /** The catalog reader: memory first, then the network. */
 export interface CatalogSource {
     /**

@@ -1,3 +1,4 @@
+import type { IncompatibleRequirementItem } from '../compatibility.ts'
 import { isMarketIcon } from '../shapes.ts'
 import { shortName } from './owned.ts'
 
@@ -14,12 +15,7 @@ export interface HostBundleRow {
 export interface HostBundleError {
   readonly code: string
   readonly diagnostic?: string
-  readonly incompatible?: readonly {
-    readonly name: string
-    readonly version: string
-    readonly runtimeVersion?: string
-    readonly requirements?: Readonly<Record<string, string>>
-  }[]
+  readonly incompatible?: readonly IncompatibleRequirementItem[]
 }
 
 export interface HostBundleInfo {
@@ -49,7 +45,7 @@ export interface HostBundleInfo {
 export interface HostBundleChangeResult {
   readonly application: 'applied' | 'restart-required' | 'overridden' | 'failed' | 'cancelled'
   readonly restartReason?: string
-  readonly error?: { readonly code: string; readonly diagnostic?: string }
+  readonly error?: HostBundleError
 }
 
 export interface OfficialBundleHost {
@@ -209,7 +205,7 @@ export type OfficialBundlesNotice =
   | { readonly kind: 'restart'; readonly packageName: string; readonly message: string }
   | { readonly kind: 'overridden'; readonly packageName: string; readonly message: string }
   | { readonly kind: 'removed'; readonly packageName: string; readonly message: string }
-  | { readonly kind: 'error'; readonly packageName: string; readonly message: string }
+  | { readonly kind: 'error'; readonly packageName: string; readonly message: string; readonly error?: HostBundleError }
 
 export interface OfficialBundlesState {
   readonly status: 'idle' | 'loading' | 'ready' | 'unavailable' | 'error'
@@ -380,7 +376,7 @@ export function createOfficialBundlesController(options: {
           } else if (outcome.application === 'overridden') {
             publish({ notice: { kind: 'overridden', packageName: bundle.name, message: '' } })
           } else if (outcome.application === 'failed') {
-            publish({ notice: { kind: 'error', packageName: bundle.name, message: changeFailureText(outcome) } })
+            publish({ notice: { kind: 'error', packageName: bundle.name, message: changeFailureText(outcome), ...(outcome.error !== undefined ? { error: outcome.error } : {}) } })
           }
         } catch (error) {
           publish({ notice: { kind: 'error', packageName: bundle.name, message: errorMessage(error) } })
@@ -408,7 +404,7 @@ export function createOfficialBundlesController(options: {
             return
           }
           if (removed.value.application === 'failed' && removed.value.error?.code !== 'stop-profile') {
-            publish({ notice: { kind: 'error', packageName: bundle.name, message: changeFailureText(removed.value) } })
+            publish({ notice: { kind: 'error', packageName: bundle.name, message: changeFailureText(removed.value), ...(removed.value.error !== undefined ? { error: removed.value.error } : {}) } })
             return
           }
           if (removed.value.application === 'overridden') {
@@ -448,7 +444,7 @@ export function createOfficialBundlesController(options: {
             return
           }
           if (removed.value.application === 'failed') {
-            publish({ notice: { kind: 'error', packageName, message: changeFailureText(removed.value) } })
+            publish({ notice: { kind: 'error', packageName, message: changeFailureText(removed.value), ...(removed.value.error !== undefined ? { error: removed.value.error } : {}) } })
           } else if (removed.value.application === 'restart-required') {
             publish({ notice: { kind: 'restart', packageName, message: '' } })
           } else if (removed.value.application === 'applied') {

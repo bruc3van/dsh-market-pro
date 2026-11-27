@@ -1,4 +1,5 @@
 /** Update discovery and replacement use the official Host's package identities and decisions. */
+import { type CompatibilityDirection } from '../compatibility.ts';
 import type { BundleInfo, MarketIndexSummary, MarketQuery, MarketSearchResult, PluginInstallRequestId, PluginUpdateProgress, PluginUpdateResult, PluginVersionList, Registry } from '@deepseek-ai/dsh-api-remotes/client';
 import { type SelectionRestore } from '../pluginUpdateRecovery.ts';
 export { blocksHotUpdates, isBundleInUse } from '../pluginUpdateRecovery.ts';
@@ -35,6 +36,7 @@ export interface UpdateChoice {
     prerelease: boolean;
     deprecated?: string;
     blocked?: string;
+    blockedKind?: CompatibilityDirection;
     source: {
         registry: Registry;
     } | {
@@ -99,7 +101,7 @@ export declare function orderBatchTargets<T extends {
     readonly packageName: string;
 }>(items: readonly T[], selfName: string): T[];
 /** One shared operation survives switching between the market's three entry points. */
-export declare function createPluginUpdater(host: () => UpdateHost | undefined, market: () => UpdateMarketHost | undefined): {
+export declare function createPluginUpdater(host: () => UpdateHost | undefined, market: () => UpdateMarketHost | undefined, getDshVersion?: () => string): {
     getSnapshot: () => UpdateState;
     subscribe: (listener: () => void) => () => void;
     probe(packageNames?: readonly string[]): Promise<void>;

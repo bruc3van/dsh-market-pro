@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { deriveMarket } from '../src/catalog.ts'
 import { marketCatalogSchema, type MarketInstalledPackage } from '../src/contract.ts'
 import { featuredRows, marketKey, marketRows, matches, pageOf } from '../src/client/rows.ts'
+import { catalogItemCompatibility } from '../src/client/compatCopy.ts'
 import { ownedBy, ownedIndexOf } from '../src/client/owned.ts'
 import { isMarketIcon } from '../src/shapes.ts'
 
@@ -281,4 +282,218 @@ test('an editorial block with no surviving picks falls back to the subscription 
   const catalog = marketCatalogSchema.parse(deriveMarket(feed, 1))
   assert.equal(catalog.featured?.count, 2, 'the subscription is still shown, as the pick list')
   assert.equal(catalog.subscription, undefined, 'subscription never travels without an editorial list')
+})
+
+test('deriveMarket falls back to compatible subscription versions and hydrates All repo targets without monorepo cross-contamination', () => {
+  const rawFeed = {
+    schema_version: 3,
+    source_fetched_at: '2026-11-26T00:00:00Z',
+    subscription_updated_at: '2026-11-26T00:00:00Z',
+    entries: [
+      {
+        full_name: 'owner/monorepo',
+        description: 'Monorepo',
+        stargazers_count: 50,
+        category: 'agents-workflows',
+        packages: {
+          mode: 'command',
+          targets: [
+            { install: '@demo/alpha@2.0.0', profile: 'web', note: 'Alpha' },
+            { install: `https://github.com/owner/monorepo#${'a'.repeat(40)}&path:/packages/beta`, profile: 'web', note: 'Beta' },
+          ],
+          tasks: [],
+          requirements: [],
+          note: '',
+          manual: '',
+        },
+      },
+      {
+        full_name: 'owner/standalone',
+        description: 'Standalone',
+        stargazers_count: 20,
+        category: 'agents-workflows',
+        packages: {
+          mode: 'command',
+          targets: [{ install: 'standalone@1.0.0', profile: 'web', note: '' }],
+          tasks: [],
+          requirements: [],
+          note: '',
+          manual: '',
+        },
+      },
+    ],
+    subscription: {
+      format: 1,
+      metadata: { categories: { 'agents-workflows': { title: { zh: 'Agent 工作流', en: 'Agent workflows' } } } },
+      plugins: [
+        packageRow('@demo/alpha', {
+          versions: [
+            { version: '2.0.0', source: { type: 'npm', registry: 'https://registry.npmjs.org/' }, engines: { dsh: '>=0.2.2-rc.1 <0.3.0' } },
+            { version: '1.0.0', source: { type: 'npm', registry: 'https://registry.npmjs.org/' }, engines: { dsh: '^0.1.0 || ^0.2.0' } },
+          ],
+        }),
+        packageRow('@demo/beta', {
+          repository: { url: 'https://github.com/owner/monorepo', path: 'packages/beta' },
+          versions: [
+            { version: '3.0.0', source: { type: 'git', url: 'https://github.com/owner/monorepo.git', commit: 'a'.repeat(40), path: 'packages/beta' }, engines: { dsh: '>=0.3.0' } },
+          ],
+        }),
+        packageRow('standalone', {
+          repository: { url: 'https://github.com/owner/standalone' },
+          versions: [
+            { version: '1.0.0', source: { type: 'npm', registry: 'https://registry.npmjs.org/' }, engines: { dsh: '>=0.2.2-rc.1' } },
+          ],
+        }),
+      ],
+    },
+  }
+
+  const catalog = marketCatalogSchema.parse(deriveMarket(rawFeed, 10, '0.2.1'))
+  const alphaEntry = catalog.featured?.entries.find(e => e.item.packageName === '@demo/alpha')
+  assert.ok(alphaEntry)
+  const alphaTarget = alphaEntry.item.installInfo?.targets[0]
+  assert.equal(alphaTarget?.install, '@demo/alpha@1.0.0')
+  assert.equal(alphaTarget?.dshEngine, '^0.1.0 || ^0.2.0')
+  assert.deepEqual(alphaTarget?.compatFallback, {
+    selectedVersion: '1.0.0',
+    latestVersion: '2.0.0',
+    latestEngine: '>=0.2.2-rc.1 <0.3.0',
+  })
+
+  const monoRepo = catalog.items.find(i => i.fullName === 'owner/monorepo')
+  assert.ok(monoRepo?.installInfo)
+  const [monoAlpha, monoBeta] = monoRepo.installInfo.targets
+  assert.equal(monoAlpha?.dshEngine, '^0.1.0 || ^0.2.0')
+  assert.deepEqual(monoAlpha?.compatFallback, {
+    selectedVersion: '1.0.0',
+    latestVersion: '2.0.0',
+    latestEngine: '>=0.2.2-rc.1 <0.3.0',
+  })
+  assert.equal(monoBeta?.dshEngine, '>=0.3.0')
+  assert.equal(monoBeta?.compatFallback, undefined)
+
+  const standaloneRepo = catalog.items.find(i => i.fullName === 'owner/standalone')
+  assert.equal(standaloneRepo?.installInfo?.targets[0]?.dshEngine, '>=0.2.2-rc.1')
+})
+
+test('Monorepo hydration never promotes one sibling constraint onto unconstrained targets, and skips malformed historical versions', () => {
+  const partialFeed = {
+    schema_version: 3,
+    source_fetched_at: '2026-11-26T00:00:00Z',
+    subscription_updated_at: '2026-11-26T00:00:00Z',
+    entries: [
+      {
+        full_name: 'owner/mixed-mono',
+        description: 'Mixed Monorepo',
+        stargazers_count: 30,
+        category: 'agents-workflows',
+        packages: {
+          mode: 'command',
+          targets: [
+            { install: '@demo/alpha@2.0.0', profile: 'web', note: 'Alpha' },
+            { install: '@demo/unconstrained@1.0.0', profile: 'web', note: 'Beta' },
+          ],
+          tasks: [],
+          requirements: [],
+          note: '',
+          manual: '',
+        },
+      },
+    ],
+    subscription: {
+      format: 1,
+      metadata: { categories: { 'agents-workflows': { title: { zh: 'Agent 工作流', en: 'Agent workflows' } } } },
+      plugins: [
+        packageRow('@demo/alpha', {
+          repository: { url: 'https://github.com/owner/mixed-mono' },
+          versions: [
+            { version: '2.0.0', source: { type: 'npm', registry: 'https://registry.npmjs.org/' }, engines: { dsh: '>=0.3.0' } },
+            // Malformed historical source must not abort loading the full catalog.
+            { version: '1.0.0', source: { type: 'tarball', url: 'https://evil.example/a.tgz' } },
+          ],
+        }),
+      ],
+    },
+  }
+
+  const catalog = marketCatalogSchema.parse(deriveMarket(partialFeed, 10, '0.2.2-rc.1'))
+  const mono = catalog.items[0]
+  assert.ok(mono?.installInfo)
+  assert.equal(mono.installInfo.targets[0]?.dshEngine, '>=0.3.0')
+  assert.equal(mono.installInfo.targets[1]?.dshEngine, undefined)
+  assert.deepEqual(mono.installInfo.requirements, [])
+})
+
+test('compatFallback hydration replaces incompatible latest dshEngine and stale requirements with the selected older release', () => {
+  const fallbackFeed = {
+    schema_version: 3,
+    source_fetched_at: '2026-11-26T00:00:00Z',
+    subscription_updated_at: '2026-11-26T00:00:00Z',
+    entries: [
+      {
+        full_name: 'owner/fallback-with-engine',
+        description: 'Fallback with engine',
+        stargazers_count: 40,
+        category: 'agents-workflows',
+        packages: {
+          mode: 'command',
+          targets: [{ install: 'pkg-engine@2.0.0', profile: 'web', note: '' }],
+          tasks: [],
+          requirements: ['DSH >=0.3.0', 'Node >= 20'],
+          note: '',
+          manual: '',
+        },
+      },
+      {
+        full_name: 'owner/fallback-no-engine',
+        description: 'Fallback without engine',
+        stargazers_count: 35,
+        category: 'agents-workflows',
+        packages: {
+          mode: 'command',
+          targets: [{ install: 'pkg-plain@2.0.0', profile: 'web', note: '' }],
+          tasks: [],
+          requirements: ['DSH >=0.3.0'],
+          note: '',
+          manual: '',
+        },
+      },
+    ],
+    subscription: {
+      format: 1,
+      metadata: { categories: { 'agents-workflows': { title: { zh: 'Agent 工作流', en: 'Agent workflows' } } } },
+      plugins: [
+        packageRow('pkg-engine', {
+          repository: { url: 'https://github.com/owner/fallback-with-engine' },
+          versions: [
+            { version: '2.0.0', source: { type: 'npm', registry: 'https://registry.npmjs.org/' }, engines: { dsh: '>=0.3.0' } },
+            { version: '1.0.0', source: { type: 'npm', registry: 'https://registry.npmjs.org/' }, engines: { dsh: '>=0.2.0' } },
+          ],
+        }),
+        packageRow('pkg-plain', {
+          repository: { url: 'https://github.com/owner/fallback-no-engine' },
+          versions: [
+            { version: '2.0.0', source: { type: 'npm', registry: 'https://registry.npmjs.org/' }, engines: { dsh: '>=0.3.0' } },
+            { version: '1.0.0', source: { type: 'npm', registry: 'https://registry.npmjs.org/' } },
+          ],
+        }),
+      ],
+    },
+  }
+
+  const catalog = marketCatalogSchema.parse(deriveMarket(fallbackFeed, 10, '0.2.2-rc.5'))
+
+  const withEngine = catalog.items.find(i => i.fullName === 'owner/fallback-with-engine')
+  assert.ok(withEngine?.installInfo)
+  assert.equal(withEngine.installInfo.targets[0]?.install, 'pkg-engine@1.0.0')
+  assert.equal(withEngine.installInfo.targets[0]?.dshEngine, '>=0.2.0')
+  assert.deepEqual(withEngine.installInfo.requirements, ['Node >= 20', 'DSH >=0.2.0'])
+  assert.equal(catalogItemCompatibility(withEngine, '0.2.2-rc.5'), undefined)
+
+  const noEngine = catalog.items.find(i => i.fullName === 'owner/fallback-no-engine')
+  assert.ok(noEngine?.installInfo)
+  assert.equal(noEngine.installInfo.targets[0]?.install, 'pkg-plain@1.0.0')
+  assert.equal(noEngine.installInfo.targets[0]?.dshEngine, undefined)
+  assert.deepEqual(noEngine.installInfo.requirements, [])
+  assert.equal(catalogItemCompatibility(noEngine, '0.2.2-rc.5'), undefined)
 })

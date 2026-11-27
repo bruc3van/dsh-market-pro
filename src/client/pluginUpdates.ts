@@ -1,4 +1,10 @@
 /** Update discovery and replacement use the official Host's package identities and decisions. */
+import {
+  classifyIncompatibleItems,
+  classifyRequirementRecord,
+  formatRequirementsText,
+  type CompatibilityDirection,
+} from '../compatibility.ts'
 import type {
   BundleInfo, MarketIndexSummary, MarketQuery, MarketSearchResult, PluginInstallRequestId,
   PluginUpdateProgress, PluginUpdateResult, PluginVersionList, Registry,
@@ -48,6 +54,7 @@ export interface UpdateChoice {
   prerelease: boolean
   deprecated?: string
   blocked?: string
+  blockedKind?: CompatibilityDirection
   source: { registry: Registry } | { spec: string; index: string }
 }
 export interface AvailableUpdate {
@@ -152,10 +159,6 @@ export function orderBatchTargets<T extends { readonly packageName: string }>(
   return [...others, ...selfItems]
 }
 
-function requirementsText(requirements: Readonly<Record<string, string>>): string {
-  return Object.entries(requirements).map(([name, range]) => `${name === 'engines.dsh' ? 'DSH' : name} ${range}`).join(', ')
-}
-
 function defaultCandidate(choices: readonly UpdateChoice[]): string {
   return choices.find(version => !version.blocked && !version.prerelease && version.deprecated === undefined)?.version ?? ''
 }
@@ -165,6 +168,7 @@ async function gitUpdateChoices(
   sources: readonly MarketIndexSummary[],
   packageName: string,
   isCurrent: () => boolean,
+  fallbackRuntimeVersion?: string,
 ): Promise<{ choices: UpdateChoice[]; warnings: string[] }> {
   const warnings: string[] = []
   let fallback: UpdateChoice[] = []
@@ -179,12 +183,27 @@ async function gitUpdateChoices(
       const page = answer.value
       const entry = page.entries.find(item => item.name === packageName)
       if (entry) {
-        const choices = entry.versions.filter(version => version.update).map(version => ({
-          version: version.version, prerelease: version.version.split('+')[0]!.includes('-'),
-          ...(!version.compatibility.compatible && !version.compatibility.exempted
-            ? { blocked: requirementsText(version.compatibility.requirements) || 'Incompatible with this DSH host.' } : {}),
-          source: { spec: version.install.spec, index: source.url },
-        }))
+        const choices = entry.versions.filter(version => version.update).map((version) => {
+          let blocked: string | undefined
+          let blockedKind: CompatibilityDirection | undefined
+          if (!version.compatibility.compatible && !version.compatibility.exempted) {
+            const reqText = formatRequirementsText(version.compatibility.requirements)
+            blocked = reqText || 'Incompatible with this DSH host.'
+            const runtime = 'runtimeVersion' in version.compatibility
+              && typeof version.compatibility.runtimeVersion === 'string'
+              && version.compatibility.runtimeVersion.trim() !== ''
+              ? version.compatibility.runtimeVersion
+              : fallbackRuntimeVersion
+            blockedKind = classifyRequirementRecord(version.compatibility.requirements, runtime)
+          }
+          return {
+            version: version.version,
+            prerelease: version.version.split('+')[0]!.includes('-'),
+            ...(blocked !== undefined ? { blocked } : {}),
+            ...(blockedKind !== undefined ? { blockedKind } : {}),
+            source: { spec: version.install.spec, index: source.url },
+          }
+        })
         if (defaultCandidate(choices)) return { choices, warnings }
         // Keep the first compatible prerelease in source order, or the first
         // blocked list for diagnostics when no compatible version exists.
@@ -224,7 +243,11 @@ function withAvailableDetail(
 }
 
 /** One shared operation survives switching between the market's three entry points. */
-export function createPluginUpdater(host: () => UpdateHost | undefined, market: () => UpdateMarketHost | undefined) {
+export function createPluginUpdater(
+  host: () => UpdateHost | undefined,
+  market: () => UpdateMarketHost | undefined,
+  getDshVersion?: () => string,
+) {
   let state: UpdateState = {
     ...IDLE_SINGLE_UPDATE,
     revision: 0, available: {}, availableDetails: {}, batch: IDLE_BATCH,
@@ -310,7 +333,13 @@ export function createPluginUpdater(host: () => UpdateHost | undefined, market: 
               if (currentProbe !== probeSeq) return
               gitSources = listed.ok ? listed.value : []
             }
-            const { choices } = await gitUpdateChoices(indexes, gitSources, bundle.name, () => currentProbe === probeSeq)
+            const { choices } = await gitUpdateChoices(
+              indexes,
+              gitSources,
+              bundle.name,
+              () => currentProbe === probeSeq,
+              getDshVersion?.(),
+            )
             if (currentProbe !== probeSeq) return
             const nextVersion = defaultCandidate(choices)
             const chosen = nextVersion !== '' ? choices.find(choice => choice.version === nextVersion) : undefined
@@ -359,13 +388,26 @@ export function createPluginUpdater(host: () => UpdateHost | undefined, market: 
           installedVersion = list.installed
           set({ installed: installedVersion })
           omitted = list.omitted
-          choices = list.versions.map(version => ({
-            version: version.version, prerelease: version.prerelease,
-            ...(version.deprecated === undefined ? {} : { deprecated: version.deprecated }),
-            ...(version.incompatible ? { blocked: requirementsText(version.incompatible.requirements) }
-              : !version.bundle ? { blocked: 'This version does not declare dsh.bundle.' } : {}),
-            source: { registry: list.registry },
-          }))
+          choices = list.versions.map((version) => {
+            if (version.incompatible) {
+              const info = classifyIncompatibleItems([version.incompatible], getDshVersion?.())
+              return {
+                version: version.version,
+                prerelease: version.prerelease,
+                ...(version.deprecated === undefined ? {} : { deprecated: version.deprecated }),
+                blocked: formatRequirementsText(version.incompatible.requirements),
+                blockedKind: info.direction,
+                source: { registry: list.registry },
+              }
+            }
+            return {
+              version: version.version,
+              prerelease: version.prerelease,
+              ...(version.deprecated === undefined ? {} : { deprecated: version.deprecated }),
+              ...(!version.bundle ? { blocked: 'This version does not declare dsh.bundle.' } : {}),
+              source: { registry: list.registry },
+            }
+          })
         } else {
           const indexes = market()
           if (!indexes) throw new Error('Git update discovery requires the official Discover feature and a configured subscription index.')
@@ -373,7 +415,7 @@ export function createPluginUpdater(host: () => UpdateHost | undefined, market: 
           if (current !== generation) return
           if (!sources.ok) throw new Error(sources.error.message)
           if (!sources.value.length) throw new Error('Add a subscription index in the official Discover page before checking Git updates.')
-          const found = await gitUpdateChoices(indexes, sources.value, packageName, () => current === generation)
+          const found = await gitUpdateChoices(indexes, sources.value, packageName, () => current === generation, getDshVersion?.())
           if (current !== generation) return
           choices = found.choices
           warnings = found.warnings

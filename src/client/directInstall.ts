@@ -1,5 +1,6 @@
+import { evaluateTargetsCompatibility, type IncompatibleRequirementItem } from '../compatibility.ts'
 import { isInstallSpec, type InstallInfo } from '../installInfo.ts'
-import type { MarketInstalledPackage } from '../contract.ts'
+import type { MarketIncompatiblePlugin, MarketInstalledPackage } from '../contract.ts'
 import { ownedByTarget } from './owned.ts'
 
 // Structural boundary for the optional host service. Do not rely on ambient
@@ -10,13 +11,8 @@ interface InstallResult {
   application: 'applied' | 'restart-required' | 'overridden' | 'failed' | 'cancelled'
   pendingBuilds?: string[]
   warnings?: string[]
-  error?: { code: string; diagnostic?: string; incompatible?: {
-    name: string; version: string
-    requirements?: Record<string, string>
-    /** Before DSH 0.2.1-alpha.4. */
-    peers?: Record<string, string>
-  }[] }
-  packageResult?: { output?: string; kind?: string; timedOut?: boolean }
+  error?: { code: string; diagnostic?: string; incompatible?: readonly IncompatibleRequirementItem[] }
+  packageResult?: { output?: string; kind?: string; timedOut?: boolean; incompatible?: readonly IncompatibleRequirementItem[] }
 }
 export interface PluginRegistriesSnapshot {
   readonly registry: string | null
@@ -60,6 +56,8 @@ export interface DirectState {
   manualTitle?: string
   registry?: string | null
   message: string
+  errorCode?: string
+  incompatible?: readonly MarketIncompatiblePlugin[]
   inspectError?: InspectRefusal
   application?: string
   pendingBuilds: string[]
@@ -74,6 +72,8 @@ const IDLE_DIRECT_STATE: DirectState = {
   manualTitle: undefined,
   registry: undefined,
   message: '',
+  errorCode: undefined,
+  incompatible: undefined,
   inspectError: undefined,
   application: undefined,
   pendingBuilds: [],
@@ -194,8 +194,9 @@ export function createDirectInstaller(
   const settle = async (result: Awaited<ReturnType<InstallHost['installBundle']>>) => {
     if (!result.ok) { set({ phase: 'unknown', recovering: false, message: result.error.message }); return }
     const value = result.value
+    const incompatible = value.error?.incompatible ?? value.packageResult?.incompatible
     const summary = [value.error?.code, value.error?.diagnostic, ...(value.warnings ?? []),
-      ...(value.error?.incompatible ?? []).map(p => `${p.name}@${p.version}: ${JSON.stringify(p.requirements ?? p.peers ?? {})}`),
+      ...(incompatible ?? []).map(p => `${p.name}@${p.version}: ${JSON.stringify(p.requirements ?? p.peers ?? {})}`),
       value.application === 'failed' ? value.packageResult?.output : undefined,
     ].filter(Boolean).join('\n').slice(-8000)
     const spec = state.spec
@@ -203,6 +204,8 @@ export function createDirectInstaller(
     set({ phase: value.application === 'failed' ? 'failed' : 'done', application: value.application,
       recovering: false,
       pendingBuilds: value.pendingBuilds ?? [],
+      errorCode: value.application === 'failed' ? value.error?.code : undefined,
+      incompatible: value.application === 'failed' ? incompatible : undefined,
       message: summary })
     if (value.application === 'applied' || value.application === 'restart-required') {
       onOutcome?.({ spec, result: 'ok', message: '', ...(manual ? { manual: true } : {}) })
@@ -242,6 +245,8 @@ export function createDirectInstaller(
         message: 'Invalid install target',
         inspectError: { problem: 'invalid-spec', reason: 'Invalid install target' },
         application: undefined,
+        errorCode: undefined,
+        incompatible: undefined,
         pendingBuilds: [],
         recovering: false,
         ...(initialQueue !== undefined ? { queue: initialQueue } : {}),
@@ -258,6 +263,8 @@ export function createDirectInstaller(
       message: '',
       inspectError: undefined,
       application: undefined,
+      errorCode: undefined,
+      incompatible: undefined,
       pendingBuilds: [],
       recovering: false,
       ...(initialQueue !== undefined ? { queue: initialQueue } : {}),
@@ -409,14 +416,20 @@ export function reconcileSelectedTargets(
   selected: readonly number[],
   ownedIndex: ReadonlyMap<string, MarketInstalledPackage> | undefined,
   userTouched: boolean,
+  dshVersion?: string,
+  fallbackRequirements?: readonly string[],
 ): number[] {
-  const isInstalled = (index: number): boolean =>
-    ownedIndex !== undefined && ownedByTarget(ownedIndex, targets[index]!.install) !== undefined
-  const remaining = selected.filter(index => index >= 0 && index < targets.length && !isInstalled(index))
+  const { targetIssues } = evaluateTargetsCompatibility(targets, dshVersion, fallbackRequirements)
+  const isBlocked = (index: number): boolean => {
+    const target = targets[index]!
+    if (ownedIndex !== undefined && ownedByTarget(ownedIndex, target.install) !== undefined) return true
+    return targetIssues[index] !== undefined
+  }
+  const remaining = selected.filter(index => index >= 0 && index < targets.length && !isBlocked(index))
   let next = remaining
   if (!userTouched && next.length === 0) {
-    const firstUninstalled = targets.findIndex((_, index) => !isInstalled(index))
-    next = firstUninstalled >= 0 ? [firstUninstalled] : []
+    const firstSelectable = targets.findIndex((_, index) => !isBlocked(index))
+    next = firstSelectable >= 0 ? [firstSelectable] : []
   }
   if (next.length === selected.length && next.every((value, index) => value === selected[index])) {
     return selected as number[]

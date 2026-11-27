@@ -911,6 +911,7 @@ function storedState(overrides: Partial<SafeMarketDomainState> = {}): SafeMarket
     catalogFormat: 2,
     marketSize: 100,
     catalogBase: 'https://example.test/data',
+    dshVersion: '',
     pendingUninstall: [],
     telemetryId: '',
     telemetryLastPingDay: '',
@@ -1882,6 +1883,101 @@ test('list reads localized display meta from exported locale files and Host list
     assert.equal(hostListed.packages[0]?.titleEn, 'Host Demo')
     assert.equal(hostListed.packages[0]?.descriptionZh, '宿主中文插件描述')
     assert.equal(hostListed.packages[0]?.descriptionEn, 'Host English description')
+  } finally {
+    await rm(home, { recursive: true, force: true })
+  }
+})
+
+test('list captures Host bundle incompatibility error, setEnabled includes details, and store preserves dshVersion', async () => {
+  const { home, profileDir } = await makeHome()
+  try {
+    await makeBundle(profileDir, 'demo-plugin', '- insert:\n  - id: demo-plugin\n    name: demo-plugin\n')
+    const { loader } = stubLoader([{ id: 'include:demo-plugin', fiberState: 0 }])
+    const hostError = {
+      code: 'incompatible-version' as const,
+      target: 'demo-plugin',
+      incompatible: [{
+        name: 'demo-plugin',
+        version: '2.0.0',
+        runtimeVersion: '0.2.2-rc.1',
+        requirements: { 'engines.dsh': '>=0.3.0' },
+      }],
+    }
+    const manager = createInstalledManager({
+      profile: 'web',
+      profileDir,
+      home,
+      loader,
+      selfName: 'dsh-market-pro',
+      pluginManager: () => ({
+        listBundles: async () => [{
+          name: 'demo-plugin',
+          official: false,
+          availability: 'profile',
+          enabled: false,
+          installed: true,
+          optional: false,
+          removable: true,
+          rows: [],
+          overrides: [],
+          error: hostError,
+        }],
+        setBundleEnabled: async () => ({
+          changed: false,
+          application: 'failed',
+          error: hostError,
+        } as never),
+        removeBundle: async () => { throw new Error('unused') },
+      }),
+    })
+
+    const listed = marketInstalledResultSchema.parse(await manager.list())
+    assert.deepEqual(listed.packages[0]?.hostError, {
+      code: 'incompatible-version',
+      incompatible: hostError.incompatible,
+    })
+
+    await assert.rejects(
+      () => manager.setEnabled('demo-plugin', true),
+      /incompatible-version.*>=0\.3\.0/,
+    )
+
+    // Legacy `peers` requirements also surface in setEnabled incompatibility errors.
+    const peersManager = createInstalledManager({
+      profile: 'web',
+      profileDir,
+      home,
+      loader,
+      selfName: 'dsh-market-pro',
+      pluginManager: () => ({
+        listBundles: async () => [],
+        setBundleEnabled: async () => ({
+          changed: false,
+          application: 'failed',
+          error: {
+            code: 'incompatible-version',
+            incompatible: [{ name: 'demo-plugin', version: '1.0.0', peers: { '@deepseek-ai/dsh-app': '>=0.3.0' } }],
+          },
+        } as never),
+        removeBundle: async () => { throw new Error('unused') },
+      }),
+    })
+    await assert.rejects(
+      () => peersManager.setEnabled('demo-plugin', true),
+      /incompatible-version.*@deepseek-ai\/dsh-app >=0\.3\.0/,
+    )
+
+    // Store migration defaults dshVersion to '' on legacy blobs and preserves explicit values.
+    const { dshVersion: _omitted, ...withoutDshVersion } = storedState()
+    const legacy = safeMarketDomainState.parse(withoutDshVersion)
+    assert.equal(legacy.dshVersion, '')
+
+    const adopted = adoptDomainState(
+      storedState({ catalog: null, dshVersion: '' }),
+      { ...legacy, dshVersion: '0.2.2-rc.5' },
+      candidate => candidate.dshVersion === '0.2.2-rc.5',
+    )
+    assert.equal(adopted.dshVersion, '0.2.2-rc.5')
   } finally {
     await rm(home, { recursive: true, force: true })
   }

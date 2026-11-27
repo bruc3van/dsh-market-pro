@@ -220,6 +220,8 @@ export interface MarketEnvironment {
    * not be read.
    */
   readonly version: string
+  /** Running DSH Host semantic version, when readable. */
+  readonly dshVersion?: string
   /** True when Host/process environment variables suppress telemetry. */
   readonly telemetrySuppressedByEnv?: boolean
 }
@@ -314,6 +316,22 @@ export interface MarketInstalledEntry {
   readonly phase: 'pending' | 'loading' | 'active' | 'failed' | 'disposed' | 'unloading' | null
 }
 
+/** One package whose declared DSH requirements reject the running DSH version. */
+export interface MarketIncompatiblePlugin {
+  readonly name: string
+  readonly version: string
+  readonly runtimeVersion?: string
+  readonly requirements?: Readonly<Record<string, string>>
+  readonly peers?: Readonly<Record<string, string>>
+}
+
+/** Structured management/load refusal reported by the Host pluginManager for an installed bundle. */
+export interface MarketHostError {
+  readonly code: string
+  readonly diagnostic?: string
+  readonly incompatible?: readonly MarketIncompatiblePlugin[]
+}
+
 /** One user-installed plugin package, with the live state of its entries. */
 export interface MarketInstalledPackage {
   readonly packageName: string
@@ -357,6 +375,8 @@ export interface MarketInstalledPackage {
   readonly entries: readonly MarketInstalledEntry[]
   /** Why the bundle could not be read (uninstall stays available); '' when read. */
   readonly error: string
+  /** Host-reported compatibility/platform/load refusal for this bundle, when any. */
+  readonly hostError?: MarketHostError
   /**
    * A same-session uninstall of this package left stop rows in the profile's
    * patch layer that are still holding its entries down: the sweep record is
@@ -401,9 +421,21 @@ export interface UninstallInstalledUpdate {
   readonly packageName: string
 }
 
+const compatFallbackSchema = z.object({
+  selectedVersion: z.string().max(80),
+  latestVersion: z.string().max(80),
+  latestEngine: z.string().max(400).optional(),
+}).readonly()
+
 const installInfoSchema = z.object({
   mode: z.enum(['command', 'manual']),
-  targets: z.array(z.object({ install: z.string().refine(isInstallSpec), profile: z.string().max(2000), note: z.string().max(2000) })).max(30),
+  targets: z.array(z.object({
+    install: z.string().refine(isInstallSpec),
+    profile: z.string().max(2000),
+    note: z.string().max(2000),
+    dshEngine: z.string().max(400).optional(),
+    compatFallback: compatFallbackSchema.optional(),
+  })).max(30),
   tasks: z.array(z.string().max(2000)).max(30),
   requirements: z.array(z.string().max(2000)).max(30),
   note: z.string().max(2000), manual: z.string().max(2000),
@@ -496,10 +528,13 @@ export const marketSkillsResultSchema = z.object({
   error: z.string(),
 }).readonly()
 
+export const DSH_VERSION_MAX_LENGTH = 80
+
 /** Strict wire codec for the deployment facts the browser needs. */
 export const marketEnvironmentSchema = z.object({
   profile: z.string(),
   version: z.string(),
+  dshVersion: z.string().max(DSH_VERSION_MAX_LENGTH).optional(),
   telemetrySuppressedByEnv: z.boolean().optional(),
 }).readonly()
 
@@ -583,6 +618,90 @@ export const marketInstalledEntrySchema = z.object({
   ]),
 }).readonly()
 
+const HOST_ERROR_LIMITS = {
+  code: 80,
+  diagnostic: 4000,
+  maxIncompatible: 32,
+  pluginName: 240,
+  pluginVersion: 80,
+  runtimeVersion: 80,
+  reqKey: 200,
+  reqValue: 400,
+} as const
+
+const marketIncompatiblePluginSchema = z.object({
+  name: z.string().max(HOST_ERROR_LIMITS.pluginName),
+  version: z.string().max(HOST_ERROR_LIMITS.pluginVersion),
+  runtimeVersion: z.string().max(HOST_ERROR_LIMITS.runtimeVersion).optional(),
+  requirements: z.record(z.string().max(HOST_ERROR_LIMITS.reqKey), z.string().max(HOST_ERROR_LIMITS.reqValue)).readonly().optional(),
+  peers: z.record(z.string().max(HOST_ERROR_LIMITS.reqKey), z.string().max(HOST_ERROR_LIMITS.reqValue)).readonly().optional(),
+}).readonly()
+
+export const marketHostErrorSchema = z.object({
+  code: z.string().max(HOST_ERROR_LIMITS.code),
+  diagnostic: z.string().max(HOST_ERROR_LIMITS.diagnostic).optional(),
+  incompatible: z.array(marketIncompatiblePluginSchema).max(HOST_ERROR_LIMITS.maxIncompatible).readonly().optional(),
+}).readonly()
+
+function sanitizeRequirementRecord(raw: unknown): Record<string, string> | undefined {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const out: Record<string, string> = {}
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof value !== 'string') continue
+    const k = key.slice(0, HOST_ERROR_LIMITS.reqKey)
+    const v = value.slice(0, HOST_ERROR_LIMITS.reqValue)
+    if (k !== '' && v !== '') out[k] = v
+  }
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
+/** Normalize an arbitrary Host management error into the bounded wire shape. */
+export function normalizeHostError(raw: unknown): MarketHostError | undefined {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const err = raw as {
+    code?: unknown
+    diagnostic?: unknown
+    incompatible?: unknown
+  }
+  if (typeof err.code !== 'string' || err.code.trim() === '') return undefined
+  const code = err.code.trim().slice(0, HOST_ERROR_LIMITS.code)
+  const diagnostic = typeof err.diagnostic === 'string' && err.diagnostic.trim() !== ''
+    ? err.diagnostic.trim().slice(0, HOST_ERROR_LIMITS.diagnostic)
+    : undefined
+  let incompatible: MarketIncompatiblePlugin[] | undefined
+  if (Array.isArray(err.incompatible)) {
+    const items: MarketIncompatiblePlugin[] = []
+    for (const entry of err.incompatible.slice(0, HOST_ERROR_LIMITS.maxIncompatible)) {
+      if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) continue
+      const rec = entry as {
+        name?: unknown
+        version?: unknown
+        runtimeVersion?: unknown
+        requirements?: unknown
+        peers?: unknown
+      }
+      if (typeof rec.name !== 'string' || typeof rec.version !== 'string') continue
+      const requirements = sanitizeRequirementRecord(rec.requirements)
+      const peers = sanitizeRequirementRecord(rec.peers)
+      items.push({
+        name: rec.name.slice(0, HOST_ERROR_LIMITS.pluginName),
+        version: rec.version.slice(0, HOST_ERROR_LIMITS.pluginVersion),
+        ...(typeof rec.runtimeVersion === 'string' && rec.runtimeVersion.trim() !== ''
+          ? { runtimeVersion: rec.runtimeVersion.trim().slice(0, HOST_ERROR_LIMITS.runtimeVersion) }
+          : {}),
+        ...(requirements !== undefined ? { requirements } : {}),
+        ...(peers !== undefined ? { peers } : {}),
+      })
+    }
+    if (items.length > 0) incompatible = items
+  }
+  return {
+    code,
+    ...(diagnostic !== undefined ? { diagnostic } : {}),
+    ...(incompatible !== undefined ? { incompatible } : {}),
+  }
+}
+
 /** Strict wire codec for one installed package. */
 export const marketInstalledPackageSchema = z.object({
   packageName: packageNameSchema,
@@ -605,6 +724,7 @@ export const marketInstalledPackageSchema = z.object({
   enabled: z.boolean(),
   entries: z.array(marketInstalledEntrySchema).readonly(),
   error: z.string(),
+  hostError: marketHostErrorSchema.optional(),
   heldDown: z.boolean(),
 }).readonly()
 

@@ -201,6 +201,8 @@ export interface MarketEnvironment {
      * not be read.
      */
     readonly version: string;
+    /** Running DSH Host semantic version, when readable. */
+    readonly dshVersion?: string;
     /** True when Host/process environment variables suppress telemetry. */
     readonly telemetrySuppressedByEnv?: boolean;
 }
@@ -273,6 +275,20 @@ export interface MarketInstalledEntry {
     /** The entry's fiber phase, or null while no fiber exists. */
     readonly phase: 'pending' | 'loading' | 'active' | 'failed' | 'disposed' | 'unloading' | null;
 }
+/** One package whose declared DSH requirements reject the running DSH version. */
+export interface MarketIncompatiblePlugin {
+    readonly name: string;
+    readonly version: string;
+    readonly runtimeVersion?: string;
+    readonly requirements?: Readonly<Record<string, string>>;
+    readonly peers?: Readonly<Record<string, string>>;
+}
+/** Structured management/load refusal reported by the Host pluginManager for an installed bundle. */
+export interface MarketHostError {
+    readonly code: string;
+    readonly diagnostic?: string;
+    readonly incompatible?: readonly MarketIncompatiblePlugin[];
+}
 /** One user-installed plugin package, with the live state of its entries. */
 export interface MarketInstalledPackage {
     readonly packageName: string;
@@ -316,6 +332,8 @@ export interface MarketInstalledPackage {
     readonly entries: readonly MarketInstalledEntry[];
     /** Why the bundle could not be read (uninstall stays available); '' when read. */
     readonly error: string;
+    /** Host-reported compatibility/platform/load refusal for this bundle, when any. */
+    readonly hostError?: MarketHostError;
     /**
      * A same-session uninstall of this package left stop rows in the profile's
      * patch layer that are still holding its entries down: the sweep record is
@@ -380,6 +398,12 @@ export declare const marketPluginSchema: z.ZodReadonly<z.ZodObject<{
             install: z.ZodString;
             profile: z.ZodString;
             note: z.ZodString;
+            dshEngine: z.ZodOptional<z.ZodString>;
+            compatFallback: z.ZodOptional<z.ZodReadonly<z.ZodObject<{
+                selectedVersion: z.ZodString;
+                latestVersion: z.ZodString;
+                latestEngine: z.ZodOptional<z.ZodString>;
+            }, z.core.$strip>>>;
         }, z.core.$strip>>;
         tasks: z.ZodArray<z.ZodString>;
         requirements: z.ZodArray<z.ZodString>;
@@ -443,6 +467,12 @@ export declare const marketFeaturedSchema: z.ZodReadonly<z.ZodObject<{
                     install: z.ZodString;
                     profile: z.ZodString;
                     note: z.ZodString;
+                    dshEngine: z.ZodOptional<z.ZodString>;
+                    compatFallback: z.ZodOptional<z.ZodReadonly<z.ZodObject<{
+                        selectedVersion: z.ZodString;
+                        latestVersion: z.ZodString;
+                        latestEngine: z.ZodOptional<z.ZodString>;
+                    }, z.core.$strip>>>;
                 }, z.core.$strip>>;
                 tasks: z.ZodArray<z.ZodString>;
                 requirements: z.ZodArray<z.ZodString>;
@@ -491,6 +521,12 @@ export declare const marketCatalogSchema: z.ZodReadonly<z.ZodObject<{
                 install: z.ZodString;
                 profile: z.ZodString;
                 note: z.ZodString;
+                dshEngine: z.ZodOptional<z.ZodString>;
+                compatFallback: z.ZodOptional<z.ZodReadonly<z.ZodObject<{
+                    selectedVersion: z.ZodString;
+                    latestVersion: z.ZodString;
+                    latestEngine: z.ZodOptional<z.ZodString>;
+                }, z.core.$strip>>>;
             }, z.core.$strip>>;
             tasks: z.ZodArray<z.ZodString>;
             requirements: z.ZodArray<z.ZodString>;
@@ -552,6 +588,12 @@ export declare const marketCatalogSchema: z.ZodReadonly<z.ZodObject<{
                         install: z.ZodString;
                         profile: z.ZodString;
                         note: z.ZodString;
+                        dshEngine: z.ZodOptional<z.ZodString>;
+                        compatFallback: z.ZodOptional<z.ZodReadonly<z.ZodObject<{
+                            selectedVersion: z.ZodString;
+                            latestVersion: z.ZodString;
+                            latestEngine: z.ZodOptional<z.ZodString>;
+                        }, z.core.$strip>>>;
                     }, z.core.$strip>>;
                     tasks: z.ZodArray<z.ZodString>;
                     requirements: z.ZodArray<z.ZodString>;
@@ -610,6 +652,12 @@ export declare const marketCatalogSchema: z.ZodReadonly<z.ZodObject<{
                         install: z.ZodString;
                         profile: z.ZodString;
                         note: z.ZodString;
+                        dshEngine: z.ZodOptional<z.ZodString>;
+                        compatFallback: z.ZodOptional<z.ZodReadonly<z.ZodObject<{
+                            selectedVersion: z.ZodString;
+                            latestVersion: z.ZodString;
+                            latestEngine: z.ZodOptional<z.ZodString>;
+                        }, z.core.$strip>>>;
                     }, z.core.$strip>>;
                     tasks: z.ZodArray<z.ZodString>;
                     requirements: z.ZodArray<z.ZodString>;
@@ -664,6 +712,12 @@ export declare const marketCatalogResultSchema: z.ZodReadonly<z.ZodObject<{
                     install: z.ZodString;
                     profile: z.ZodString;
                     note: z.ZodString;
+                    dshEngine: z.ZodOptional<z.ZodString>;
+                    compatFallback: z.ZodOptional<z.ZodReadonly<z.ZodObject<{
+                        selectedVersion: z.ZodString;
+                        latestVersion: z.ZodString;
+                        latestEngine: z.ZodOptional<z.ZodString>;
+                    }, z.core.$strip>>>;
                 }, z.core.$strip>>;
                 tasks: z.ZodArray<z.ZodString>;
                 requirements: z.ZodArray<z.ZodString>;
@@ -725,6 +779,12 @@ export declare const marketCatalogResultSchema: z.ZodReadonly<z.ZodObject<{
                             install: z.ZodString;
                             profile: z.ZodString;
                             note: z.ZodString;
+                            dshEngine: z.ZodOptional<z.ZodString>;
+                            compatFallback: z.ZodOptional<z.ZodReadonly<z.ZodObject<{
+                                selectedVersion: z.ZodString;
+                                latestVersion: z.ZodString;
+                                latestEngine: z.ZodOptional<z.ZodString>;
+                            }, z.core.$strip>>>;
                         }, z.core.$strip>>;
                         tasks: z.ZodArray<z.ZodString>;
                         requirements: z.ZodArray<z.ZodString>;
@@ -783,6 +843,12 @@ export declare const marketCatalogResultSchema: z.ZodReadonly<z.ZodObject<{
                             install: z.ZodString;
                             profile: z.ZodString;
                             note: z.ZodString;
+                            dshEngine: z.ZodOptional<z.ZodString>;
+                            compatFallback: z.ZodOptional<z.ZodReadonly<z.ZodObject<{
+                                selectedVersion: z.ZodString;
+                                latestVersion: z.ZodString;
+                                latestEngine: z.ZodOptional<z.ZodString>;
+                            }, z.core.$strip>>>;
                         }, z.core.$strip>>;
                         tasks: z.ZodArray<z.ZodString>;
                         requirements: z.ZodArray<z.ZodString>;
@@ -848,10 +914,12 @@ export declare const marketSkillsResultSchema: z.ZodReadonly<z.ZodObject<{
     complete: z.ZodBoolean;
     error: z.ZodString;
 }, z.core.$strip>>;
+export declare const DSH_VERSION_MAX_LENGTH = 80;
 /** Strict wire codec for the deployment facts the browser needs. */
 export declare const marketEnvironmentSchema: z.ZodReadonly<z.ZodObject<{
     profile: z.ZodString;
     version: z.ZodString;
+    dshVersion: z.ZodOptional<z.ZodString>;
     telemetrySuppressedByEnv: z.ZodOptional<z.ZodBoolean>;
 }, z.core.$strip>>;
 /** Strict wire codec for the resolved settings section. */
@@ -995,6 +1063,19 @@ export declare const marketInstalledEntrySchema: z.ZodReadonly<z.ZodObject<{
         unloading: "unloading";
     }>, z.ZodNull]>;
 }, z.core.$strip>>;
+export declare const marketHostErrorSchema: z.ZodReadonly<z.ZodObject<{
+    code: z.ZodString;
+    diagnostic: z.ZodOptional<z.ZodString>;
+    incompatible: z.ZodOptional<z.ZodReadonly<z.ZodArray<z.ZodReadonly<z.ZodObject<{
+        name: z.ZodString;
+        version: z.ZodString;
+        runtimeVersion: z.ZodOptional<z.ZodString>;
+        requirements: z.ZodOptional<z.ZodReadonly<z.ZodRecord<z.ZodString, z.ZodString>>>;
+        peers: z.ZodOptional<z.ZodReadonly<z.ZodRecord<z.ZodString, z.ZodString>>>;
+    }, z.core.$strip>>>>>;
+}, z.core.$strip>>;
+/** Normalize an arbitrary Host management error into the bounded wire shape. */
+export declare function normalizeHostError(raw: unknown): MarketHostError | undefined;
 /** Strict wire codec for one installed package. */
 export declare const marketInstalledPackageSchema: z.ZodReadonly<z.ZodObject<{
     packageName: z.ZodString;
@@ -1027,6 +1108,17 @@ export declare const marketInstalledPackageSchema: z.ZodReadonly<z.ZodObject<{
         }>, z.ZodNull]>;
     }, z.core.$strip>>>>;
     error: z.ZodString;
+    hostError: z.ZodOptional<z.ZodReadonly<z.ZodObject<{
+        code: z.ZodString;
+        diagnostic: z.ZodOptional<z.ZodString>;
+        incompatible: z.ZodOptional<z.ZodReadonly<z.ZodArray<z.ZodReadonly<z.ZodObject<{
+            name: z.ZodString;
+            version: z.ZodString;
+            runtimeVersion: z.ZodOptional<z.ZodString>;
+            requirements: z.ZodOptional<z.ZodReadonly<z.ZodRecord<z.ZodString, z.ZodString>>>;
+            peers: z.ZodOptional<z.ZodReadonly<z.ZodRecord<z.ZodString, z.ZodString>>>;
+        }, z.core.$strip>>>>>;
+    }, z.core.$strip>>>;
     heldDown: z.ZodBoolean;
 }, z.core.$strip>>;
 /** Strict wire codec for the installed-panel read. */
@@ -1062,6 +1154,17 @@ export declare const marketInstalledResultSchema: z.ZodReadonly<z.ZodObject<{
             }>, z.ZodNull]>;
         }, z.core.$strip>>>>;
         error: z.ZodString;
+        hostError: z.ZodOptional<z.ZodReadonly<z.ZodObject<{
+            code: z.ZodString;
+            diagnostic: z.ZodOptional<z.ZodString>;
+            incompatible: z.ZodOptional<z.ZodReadonly<z.ZodArray<z.ZodReadonly<z.ZodObject<{
+                name: z.ZodString;
+                version: z.ZodString;
+                runtimeVersion: z.ZodOptional<z.ZodString>;
+                requirements: z.ZodOptional<z.ZodReadonly<z.ZodRecord<z.ZodString, z.ZodString>>>;
+                peers: z.ZodOptional<z.ZodReadonly<z.ZodRecord<z.ZodString, z.ZodString>>>;
+            }, z.core.$strip>>>>>;
+        }, z.core.$strip>>>;
         heldDown: z.ZodBoolean;
     }, z.core.$strip>>>>;
     profile: z.ZodString;

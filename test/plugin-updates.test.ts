@@ -516,3 +516,46 @@ test('DSH 0.2.2-rc.1 BundleInfo.updatable fallback enables registry probe, check
   assert.equal(calls.length, 1)
   assert.equal(calls[0]?.[0], 'demo')
 })
+
+test('incompatible update candidates populate blockedKind for both host-too-old and plugin-too-old', async () => {
+  const manager = host({
+    listVersions: async () => ok(listed([
+      version('3.0.0', {
+        incompatible: { name: 'demo', version: '3.0.0', runtimeVersion: '0.2.2-rc.1', requirements: { 'engines.dsh': '>=0.3.0' } },
+      }),
+      version('0.5.0', {
+        incompatible: { name: 'demo', version: '0.5.0', runtimeVersion: '0.2.2-rc.1', requirements: { 'engines.dsh': '^0.1.0' } },
+      }),
+      version('2.0.0'),
+    ])),
+  })
+  const updater = createPluginUpdater(() => manager, () => undefined, () => '0.2.2-rc.1')
+  await updater.check('demo')
+  const choices = updater.getSnapshot().choices
+  assert.equal(choices.find(c => c.version === '3.0.0')?.blockedKind, 'host-too-old')
+  assert.equal(choices.find(c => c.version === '0.5.0')?.blockedKind, 'plugin-too-old')
+  assert.equal(choices.find(c => c.version === '2.0.0')?.blockedKind, undefined)
+
+  // Git-sourced incompatible candidate also receives blockedKind (falling back to getDshVersion).
+  const gitManager = host({
+    listBundles: async () => ok([{ name: 'demo', version: '1.0.0', installed: true, update: 'git' }]),
+  })
+  const gitUpdater = createPluginUpdater(
+    () => gitManager,
+    () => ({
+      listIndexes: async () => ok([{ url: 'https://example.test/index.json', title: { en: 'Test' }, enabled: true } as never]),
+      search: async () => ok(page([
+        gitEntry('demo', {
+          compatibility: {
+            compatible: false,
+            exempted: false,
+            requirements: { 'engines.dsh': '>=0.3.0' },
+          } as never,
+        }),
+      ])),
+    }),
+    () => '0.2.2-rc.1',
+  )
+  await gitUpdater.check('demo')
+  assert.equal(gitUpdater.getSnapshot().choices[0]?.blockedKind, 'host-too-old')
+})

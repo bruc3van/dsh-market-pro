@@ -236,8 +236,12 @@ export function matchesSkill(skill: MarketSkill, query: string, extra: readonly 
 }
 
 /** The status a package row shows, from its own live facts. */
-export function stateOf(item: MarketInstalledPackage): 'readFailed' | 'unregistered' | 'disabled' | 'failed' | 'running' | 'installed' {
+export function stateOf(item: MarketInstalledPackage): 'readFailed' | 'incompatible' | 'notRunning' | 'unregistered' | 'disabled' | 'failed' | 'running' | 'installed' {
   if (item.error !== '') return 'readFailed'
+  if (item.hostError?.code === 'incompatible-version') return 'incompatible'
+  if (item.hostError !== undefined && item.bundleEnabled !== false && !item.entries.some(entry => entry.enabled)) {
+    return 'notRunning'
+  }
   if (item.unregistered) return 'unregistered'
   if (item.bundleEnabled === false) return 'disabled'
   // A bundle whose patch declares no entry rows is neither running nor

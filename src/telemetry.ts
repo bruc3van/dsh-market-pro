@@ -16,7 +16,7 @@
  *   network failures without touching the marketplace UI or console error logs.
  */
 import { randomUUID } from 'node:crypto'
-import { createRequire } from 'node:module'
+import { detectDshVersion } from './hostRuntime.ts'
 import { parseGitHubRepoSlug } from './installInfo.ts'
 import { FEATURED_MCP_SERVERS } from './mcpFeatured.ts'
 import { findFeaturedSkillByExactId } from './skillsFeatured.ts'
@@ -30,7 +30,7 @@ import type {
 import { PACKAGE_NAME_PATTERN } from './shapes.ts'
 import { classifyInstallError } from './telemetryError.ts'
 
-export { classifyInstallError }
+export { classifyInstallError, detectDshVersion }
 
 export const DEFAULT_TELEMETRY_ENDPOINT = 'https://dsh-market-pro.com/api/telemetry'
 const REQUEST_TIMEOUT_MS = 3_000
@@ -109,28 +109,6 @@ export function isTelemetryEnvSuppressed(env: Readonly<Record<string, string | u
   const ci = (env.CI ?? '').trim().toLowerCase()
   if (ci === '1' || ci === 'true') return true
   return false
-}
-
-/** Best-effort read of the running DSH host package version. */
-export function detectDshVersion(): string {
-  const req = createRequire(import.meta.url)
-  const candidates = [
-    '@deepseek-ai/dsh-app-boot/package.json',
-    '@deepseek-ai/dsh-plugin-manager/package.json',
-    '@deepseek-ai/dsh-settings/package.json',
-    '@deepseek-ai/dsh-typert-protocol/package.json',
-  ]
-  for (const specifier of candidates) {
-    try {
-      const pkg = req(specifier) as { version?: unknown }
-      if (typeof pkg.version === 'string' && pkg.version.trim() !== '') {
-        return pkg.version.trim().slice(0, 40)
-      }
-    } catch {
-      /* Try next host package. */
-    }
-  }
-  return 'unknown'
 }
 
 /** Detect whether the host process is running inside a desktop wrapper. */

@@ -1,9 +1,17 @@
 import { MarketButton } from './MarketButton.tsx'
 import { useEffect, useId, useRef, useState, useSyncExternalStore } from 'react'
 import { IconCloseOutlineRegular, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
+import { evaluateTargetsCompatibility } from '../compatibility.ts'
 import type { MarketInstalledPackage, MarketPlugin } from '../contract.ts'
 import { isSafeVersion } from '../shapes.ts'
 import type { MarketLocale } from './copy.ts'
+import {
+  compatBadgeText,
+  formatFallbackNoticeText,
+  formatInstallIncompatHeading,
+  formatPreInstallCompatText,
+} from './compatCopy.ts'
+import { InstallStatusBanner } from './InstallStatusBanner.tsx'
 import { installChoices, installLabel } from './installTargets.ts'
 import { ownedByTarget } from './owned.ts'
 import {
@@ -15,9 +23,10 @@ import { installedReviewTargets, type ReviewTarget } from './reviewPrompt.ts'
 import { PluginLogo } from './PluginLogo.tsx'
 
 /** One shared installation remains observable if the recommendation page remounts. */
-export function DirectInstallPanel({ item, installer, ownedIndex, t, onClose, onInstalled, onReview, onAgentInstall, reviewBusy, reviewAvailable, reviewMessage }: {
+export function DirectInstallPanel({ item, installer, ownedIndex, dshVersion, t, onClose, onInstalled, onReview, onAgentInstall, reviewBusy, reviewAvailable, reviewMessage }: {
   item: MarketPlugin | null; installer: DirectInstaller
   ownedIndex?: ReadonlyMap<string, MarketInstalledPackage>
+  dshVersion?: string
   t: MarketLocale
   onClose: () => void; onInstalled: () => void
   onReview: (targets: ReviewTarget[]) => Promise<boolean>
@@ -30,6 +39,8 @@ export function DirectInstallPanel({ item, installer, ownedIndex, t, onClose, on
   const [dismissed, setDismissed] = useState(false)
   const ownedIndexRef = useRef(ownedIndex)
   ownedIndexRef.current = ownedIndex
+  const dshVersionRef = useRef(dshVersion)
+  dshVersionRef.current = dshVersion
   const userTouchedRef = useRef(false)
   const id = useId()
   const open = !dismissed && (item !== null || (state.phase !== 'idle' && state.origin !== 'manual'))
@@ -42,36 +53,53 @@ export function DirectInstallPanel({ item, installer, ownedIndex, t, onClose, on
   useEffect(() => {
     userTouchedRef.current = false
     const initialTargets = installChoices(item?.installInfo?.targets ?? [])
-    setSelected(reconcileSelectedTargets(initialTargets, [], ownedIndexRef.current, false))
+    setSelected(reconcileSelectedTargets(initialTargets, [], ownedIndexRef.current, false, dshVersionRef.current, item?.installInfo?.requirements))
     setSubmitted(false)
     if (item) setDismissed(false)
   }, [item])
   useEffect(() => {
     if (showResult || !item) return
     const itemTargets = installChoices(item.installInfo?.targets ?? [])
-    setSelected(previous => reconcileSelectedTargets(itemTargets, previous, ownedIndex, userTouchedRef.current))
-  }, [item, ownedIndex, showResult])
+    setSelected(previous => reconcileSelectedTargets(itemTargets, previous, ownedIndex, userTouchedRef.current, dshVersion, item.installInfo?.requirements))
+  }, [item, ownedIndex, showResult, dshVersion])
   useEffect(() => {
     if (state.origin !== 'manual' && shouldRefreshInstalledAfterDirect(state)) onInstalled()
   }, [state, onInstalled])
   const targetOwned = (spec: string): MarketInstalledPackage | undefined =>
     ownedIndex ? ownedByTarget(ownedIndex, spec) : undefined
+  const targetsEval = evaluateTargetsCompatibility(targets, dshVersion, info?.requirements)
   const chosen = targets.filter((target, i) =>
-    selected.includes(i) && (showResult || targetOwned(target.install) === undefined))
+    selected.includes(i) && (showResult || (targetOwned(target.install) === undefined && targetsEval.targetIssues[i] === undefined)))
   const available = info?.mode === 'command' && targets.length > 0
   const singleAlreadyInstalled = !showResult && available && targets.length === 1
     ? targetOwned(targets[0]!.install)
     : undefined
   const allAlreadyInstalled = !showResult && available && targets.length > 0
     && targets.every(target => targetOwned(target.install) !== undefined)
-  const detailTargets = singleAlreadyInstalled !== undefined ? targets : chosen
+  const remainingEntries = !showResult && available
+    ? targets
+      .map((target, index) => ({ target, issue: targetsEval.targetIssues[index] }))
+      .filter(({ target }) => targetOwned(target.install) === undefined)
+    : []
+  const remainingCompatIssue = remainingEntries.length > 0 && remainingEntries.every(entry => entry.issue !== undefined)
+    ? evaluateTargetsCompatibility(
+      remainingEntries.map(entry => entry.target),
+      dshVersion,
+      targets.length === 1 ? info?.requirements : undefined,
+    ).blockingIssue
+    : undefined
+  const allRemainingIncompatible = !showResult && available && !allAlreadyInstalled && remainingCompatIssue !== undefined
+  const fallbackTargets = remainingEntries
+    .filter(entry => entry.issue === undefined && entry.target.compatFallback !== undefined)
+    .map(entry => entry.target)
+  const detailTargets = singleAlreadyInstalled !== undefined || (targets.length === 1 && remainingCompatIssue !== undefined) ? targets : chosen
   const manual = available ? '' : info?.manual
   const showDetails = detailTargets.length > 0 || Boolean(info?.requirements.length || info?.note || manual)
   const needsApproval = showResult && state.phase === 'failed' && state.pendingBuilds.length > 0
+  const isIncompatFailure = showResult && state.phase === 'failed' && state.errorCode === 'incompatible-version'
   const finished = showResult && state.phase === 'done'
   const canDismiss = !busy || (state.phase === 'unknown' && !state.recovering)
   const start = () => { if (chosen.length) { setSubmitted(true); void installer.start(chosen.map(target => target.install)) } }
-  const outcome = state.application as 'applied' | 'restart-required' | 'overridden' | 'cancelled' | undefined
   const reviewTargets = showResult && !busy ? installedReviewTargets(state) : []
   const reviewButton = reviewTargets.length > 0 ? <MarketButton
     size="md"
@@ -107,14 +135,31 @@ export function DirectInstallPanel({ item, installer, ownedIndex, t, onClose, on
           : t('installedHereUnknown')}
       </strong>
     </div>}
-    {showResult && <div className="dsh_market_installStatus" role="status" aria-live="polite">
-      <strong>{needsApproval ? t('direct.authorization') : finished && state.queue.length > 1 ? t('direct.batchDone') : finished && outcome ? t(`direct.${outcome}`) : t(`direct.${state.phase}`)}</strong>
-      {needsApproval && <>
-        <p>{t('direct.buildHint')}</p>
-        <ul className="dsh_market_buildList">{state.pendingBuilds.map(name => <li key={name}>{name}</li>)}</ul>
-      </>}
-      {state.message && <details className="dsh_market_installDiagnostic"><summary>{t('direct.diagnostic')}</summary><pre className="dsh_market_directMessage">{state.message}</pre></details>}
-    </div>}
+    {remainingCompatIssue !== undefined && (
+      <div className="dsh_market_compatBanner" role="alert">
+        <strong>{formatInstallIncompatHeading(remainingCompatIssue.direction, t)}</strong>
+        <p>{formatPreInstallCompatText(remainingCompatIssue, t)}</p>
+      </div>
+    )}
+    {fallbackTargets.length > 0 && fallbackTargets.map(target => (
+      <div key={`fb-${target.install}`} className="dsh_market_compatBanner" data-tone="info" role="status">
+        <strong>{t('compat.fallbackTitle')}</strong>
+        <p>{formatFallbackNoticeText(target.compatFallback!, dshVersion, t)}</p>
+      </div>
+    ))}
+    {showResult && (
+      <InstallStatusBanner
+        phase={state.phase}
+        application={state.application}
+        errorCode={state.errorCode}
+        incompatible={state.incompatible}
+        pendingBuilds={state.pendingBuilds}
+        message={state.message}
+        queueLength={state.queue.length}
+        dshVersion={dshVersion}
+        t={t}
+      />
+    )}
     {showResult && state.queue.length > 1 && <ul className="dsh_market_installQueue" aria-label={t('direct.progress')}>
       {state.queue.map(entry => <li key={entry.spec}>
         <span>{installLabel(entry.spec)}</span>
@@ -132,9 +177,13 @@ export function DirectInstallPanel({ item, installer, ownedIndex, t, onClose, on
       <legend>{t('direct.target')}</legend><p>{t('direct.multiHint')}</p>
       {targets.map((entry, i) => {
         const alreadyInstalled = targetOwned(entry.install)
-        return <label key={entry.install} className="dsh_market_installChoice" data-installed={alreadyInstalled ? 'true' : undefined}>
-          <input type="checkbox" name={`${id}-component`} value={i} disabled={alreadyInstalled !== undefined}
-            checked={alreadyInstalled === undefined && selected.includes(i)}
+        const compatIssue = alreadyInstalled === undefined ? targetsEval.targetIssues[i] : undefined
+        const choiceDisabled = alreadyInstalled !== undefined || compatIssue !== undefined
+        return <label key={entry.install} className="dsh_market_installChoice"
+          data-installed={alreadyInstalled ? 'true' : undefined}
+          data-incompatible={compatIssue ? compatIssue.direction : undefined}>
+          <input type="checkbox" name={`${id}-component`} value={i} disabled={choiceDisabled}
+            checked={!choiceDisabled && selected.includes(i)}
             onChange={() => {
               userTouchedRef.current = true
               setSelected(previous => previous.includes(i) ? previous.filter(index => index !== i) : [...previous, i])
@@ -146,6 +195,11 @@ export function DirectInstallPanel({ item, installer, ownedIndex, t, onClose, on
               {isSafeVersion(alreadyInstalled.version)
                 ? t('installedHere', { version: alreadyInstalled.version })
                 : t('installedHereUnknown')}
+            </span>
+          )}
+          {compatIssue !== undefined && (
+            <span className="dsh_market_choiceCompat" title={formatPreInstallCompatText(compatIssue, t)}>
+              {compatBadgeText(compatIssue.direction, t)}
             </span>
           )}
         </label>
@@ -177,9 +231,16 @@ export function DirectInstallPanel({ item, installer, ownedIndex, t, onClose, on
         : busy ? <MarketButton size="md" intent="secondary" disabled={state.phase !== 'installing'} onClick={() => { void installer.cancel() }}>{t('direct.cancel')}</MarketButton>
         : allAlreadyInstalled ? <MarketButton size="md" intent="primary" onClick={dismiss}>{t('direct.close')}</MarketButton>
         : (available || (showResult && state.phase === 'failed')) ? <>
+          {visibleItem && (allRemainingIncompatible || isIncompatFailure) && (
+            <a className="dsh_market_link" href={visibleItem.url} target="_blank" rel="noreferrer">
+              {t(visibleItem.fullName ? 'repo' : 'package.page')}
+            </a>
+          )}
           <MarketButton size="md" intent="secondary" onClick={dismiss}>{t(showResult ? 'direct.close' : 'direct.dismiss')}</MarketButton>
           {reviewButton}
-          <MarketButton size="md" intent="primary" disabled={!chosen.length && !showResult} onClick={showResult && state.phase === 'failed' ? () => { void installer.retry() } : start}>{showResult && state.phase === 'failed' ? t('direct.retry') : `${t('direct.confirm')}${chosen.length > 1 ? ` (${chosen.length})` : ''}`}</MarketButton>
+          {!isIncompatFailure && (
+            <MarketButton size="md" intent="primary" disabled={!chosen.length && !showResult} onClick={showResult && state.phase === 'failed' ? () => { void installer.retry() } : start}>{showResult && state.phase === 'failed' ? t('direct.retry') : `${t('direct.confirm')}${chosen.length > 1 ? ` (${chosen.length})` : ''}`}</MarketButton>
+          )}
         </>
         : <>
           {visibleItem && <a className="dsh_market_link" href={visibleItem.url} target="_blank" rel="noreferrer">{t(visibleItem.fullName ? 'repo' : 'package.page')}</a>}

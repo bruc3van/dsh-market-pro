@@ -13,9 +13,17 @@ import type {
   MarketPlugin,
   McpHostContext,
 } from './contract.ts'
+import {
+  evaluateTargetsCompatibility,
+  type CompatibilityDirection,
+} from './compatibility.ts'
+import { clip, INVISIBLE_INJECTION_PATTERN, sanitizeUntrustedText } from './aiSanitize.ts'
+import { buildAiEnvironment, type AiEnvironmentResult } from './aiEnvironment.ts'
 import { packageNameFromInstallSpec } from './installInfo.ts'
 import { ownedBy, ownedIndexOf } from './ownedMatch.ts'
 import { FEATURED_CATEGORY, SUBSCRIPTION_CATEGORY } from './shapes.ts'
+
+export { INVISIBLE_INJECTION_PATTERN, sanitizeUntrustedText, buildAiEnvironment, type AiEnvironmentResult }
 
 export type AiSearchScope = 'all' | 'featured'
 export type AiSearchSort = 'relevance' | 'active' | 'stars' | 'updated'
@@ -50,6 +58,12 @@ export interface AiCatalogEntrySummary {
   readonly installStatus: AiInstallStatus
   readonly installTargets?: readonly AiInstallTargetSummary[]
   readonly hasExtraDetails?: true
+  readonly compatibility?: {
+    readonly status: CompatibilityDirection | 'fallback'
+    readonly required?: string
+    readonly selectedVersion?: string
+    readonly latestVersion?: string
+  }
   readonly installed: boolean
   readonly installedVersion?: string
 }
@@ -77,6 +91,7 @@ export interface AiSearchOptions {
   readonly sort?: AiSearchSort
   readonly offset?: number
   readonly limit?: number
+  readonly dshVersion?: string
 }
 
 export interface AiSearchResult {
@@ -106,72 +121,15 @@ export interface AiOverviewResult {
   readonly mcpToolCount: number
 }
 
-export interface AiEnvironmentResult {
-  readonly profile: string
-  readonly installedError: string
-  readonly installedPackages: readonly {
-    readonly packageName: string
-    readonly version: string
-    readonly enabled: boolean
-    readonly repository?: string
-    readonly self?: true
-    readonly inBox?: true
-  }[]
-  readonly mcp: {
-    readonly managerActive: boolean
-    readonly toolGroups: readonly {
-      readonly server: string
-      readonly toolCount: number
-      readonly sampleTools: readonly string[]
-    }[]
-    readonly unmanagedServers: readonly {
-      readonly serverName: string
-      readonly transport: string
-      readonly enabled: boolean
-      readonly phase: string | null
-    }[]
-    readonly toolsError?: string
-  }
-}
-
-const DAY_MS = 86_400_000
-const ACTIVE_DECAY_DAYS = 30
-const ACTIVE_DECAY_EXPONENT = 1.5
-const ISO_DAY_PATTERN = /^(\d{4})-(\d{2})-(\d{2})(?:$|[T ])/
-
 export const DEFAULT_AI_LIMIT = 8
 export const MAX_AI_LIMIT = 25
 export const MAX_AI_QUERIES = 6
 export const MAX_AI_DETAIL_TARGETS = 5
 
-/** Zero-width, BiDi override, and Unicode tag-block characters used in invisible prompt injection. */
-export const INVISIBLE_INJECTION_PATTERN = /[\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff\u{e0000}-\u{e007f}]/gu
-
-/**
- * Strip control, zero-width, BiDi override, and Unicode tag-block characters
- * (used for invisible prompt injection), neutralize `<` / `>` so third-party
- * text can never forge or close framing tags like `</untrusted_market_data>`
- * or `</skill_instructions>`, collapse whitespace, and cap length by code point.
- */
-export function sanitizeUntrustedText(value: unknown, limit: number): string {
-  if (typeof value !== 'string' || Number.isNaN(limit) || limit <= 0) return ''
-  const cleaned = value
-    .replace(/[\u0000-\u001f\u007f-\u009f]/gu, ' ')
-    .replace(INVISIBLE_INJECTION_PATTERN, '')
-    .replaceAll('<', '＜')
-    .replaceAll('>', '＞')
-    .replace(/\s+/g, ' ')
-    .trim()
-  if (cleaned === '' || !Number.isFinite(limit)) return cleaned
-  const maxLen = Math.floor(limit)
-  if (maxLen <= 0) return ''
-  const points = [...cleaned]
-  return points.length > maxLen ? `${points.slice(0, maxLen - 1).join('')}…` : cleaned
-}
-
-function clip(value: unknown, limit: number): string {
-  return sanitizeUntrustedText(value, limit)
-}
+const DAY_MS = 86_400_000
+const ACTIVE_DECAY_DAYS = 30
+const ACTIVE_DECAY_EXPONENT = 1.5
+const ISO_DAY_PATTERN = /^(\d{4})-(\d{2})-(\d{2})(?:$|[T ])/
 
 function daysInMonth(year: number, month: number): number {
   if (month === 2) return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0) ? 29 : 28
@@ -250,6 +208,37 @@ function hasExtraDetailsOf(item: MarketPlugin, maxTargets: number): boolean {
     || info.targets.length > maxTargets
 }
 
+function summarizeCatalogCompatibility(
+  item: MarketPlugin,
+  dshVersion?: string,
+): AiCatalogEntrySummary['compatibility'] | undefined {
+  if (!dshVersion || item.installInfo?.mode !== 'command' || item.installInfo.targets.length === 0) {
+    return undefined
+  }
+  const evaluation = evaluateTargetsCompatibility(
+    item.installInfo.targets,
+    dshVersion,
+    item.installInfo.requirements,
+  )
+  if (evaluation.blockingIssue !== undefined) {
+    return {
+      status: evaluation.blockingIssue.direction,
+      required: clip(`DSH ${evaluation.blockingIssue.requiredRange}`, 120),
+    }
+  }
+  const firstFallbackIdx = evaluation.fallbackIndices[0]
+  if (firstFallbackIdx !== undefined) {
+    const fallbackTarget = item.installInfo.targets[firstFallbackIdx]!.compatFallback!
+    return {
+      status: 'fallback',
+      selectedVersion: clip(fallbackTarget.selectedVersion, 60),
+      latestVersion: clip(fallbackTarget.latestVersion, 60),
+      ...(fallbackTarget.latestEngine ? { required: clip(`DSH ${fallbackTarget.latestEngine}`, 120) } : {}),
+    }
+  }
+  return undefined
+}
+
 function toSummary(
   item: MarketPlugin,
   lookup: InstalledLookup,
@@ -257,6 +246,7 @@ function toSummary(
   maxTargets = 2,
   lang?: AiLang,
   isDetail = false,
+  dshVersion?: string,
 ): AiCatalogEntrySummary {
   const status = installStatusOf(item)
   const owned = matchInstalled(lookup, item)
@@ -284,6 +274,7 @@ function toSummary(
   const includeCategoryZh = categoryZh !== '' && (lang !== 'en' || categoryEn === '')
   const includeCategoryEn = categoryEn !== '' && (lang !== 'zh' || categoryZh === '')
   const hasExtraDetails = !isDetail && hasExtraDetailsOf(item, maxTargets)
+  const compatibility = summarizeCatalogCompatibility(item, dshVersion)
   return {
     fullName: item.fullName,
     ...(item.packageName ? { packageName: item.packageName } : {}),
@@ -307,6 +298,7 @@ function toSummary(
     installStatus: status,
     ...(targets !== undefined && targets.length > 0 ? { installTargets: targets } : {}),
     ...(hasExtraDetails ? { hasExtraDetails: true as const } : {}),
+    ...(compatibility !== undefined ? { compatibility } : {}),
     installed: owned !== undefined,
     ...(owned !== undefined && owned.version !== '' ? { installedVersion: clip(owned.version, 60) } : {}),
   }
@@ -721,7 +713,7 @@ export function searchAiCatalog(
       matchMode: 'all',
       stale,
       ...(filtered.length === 0 && !categoryKnown ? { invalidCategory: true as const, availableCategories } : {}),
-      entries: slice.map(row => toSummary(row.item, lookup, row.featuredReason, 2, lang)),
+      entries: slice.map(row => toSummary(row.item, lookup, row.featuredReason, 2, lang, false, options.dshVersion)),
     }
   }
 
@@ -773,7 +765,7 @@ export function searchAiCatalog(
     matchMode: useBroad ? 'broad' : 'exact',
     stale,
     ...(filtered.length === 0 && !categoryKnown ? { invalidCategory: true as const, availableCategories } : {}),
-    entries: slice.map(entry => toSummary(entry.row.item, lookup, entry.row.featuredReason, 2, lang)),
+    entries: slice.map(entry => toSummary(entry.row.item, lookup, entry.row.featuredReason, 2, lang, false, options.dshVersion)),
   }
 }
 
@@ -796,6 +788,7 @@ export function lookupAiCatalogDetail(
   installedPackages: readonly MarketInstalledPackage[],
   target: string,
   lang?: AiLang,
+  dshVersion?: string,
 ): AiCatalogEntryDetail | null {
   const key = target.trim().toLowerCase()
   if (key === '') return null
@@ -846,7 +839,7 @@ export function lookupAiCatalogDetail(
 
   if (matchedItem === undefined) return null
 
-  const summary = toSummary(matchedItem, lookup, featuredReason, 10, lang, true)
+  const summary = toSummary(matchedItem, lookup, featuredReason, 10, lang, true, dshVersion)
   const owned = matchInstalled(lookup, matchedItem)
   const keywords = matchedItem.keywords?.map(word => clip(word, 50)).filter(word => word !== '').slice(0, 15)
   const tasks = matchedItem.installInfo?.tasks.map(task => clip(task, 120)).filter(task => task !== '').slice(0, 8)
@@ -873,6 +866,7 @@ export function lookupAiCatalogDetails(
   installedPackages: readonly MarketInstalledPackage[],
   targets: readonly string[],
   lang?: AiLang,
+  dshVersion?: string,
 ): { readonly entries: readonly AiCatalogEntryDetail[]; readonly notFound: readonly string[] } {
   const entries: AiCatalogEntryDetail[] = []
   const notFound: string[] = []
@@ -887,7 +881,7 @@ export function lookupAiCatalogDetails(
     seenInputs.add(dedup)
     processed += 1
     if (processed > MAX_AI_DETAIL_TARGETS) break
-    const found = lookupAiCatalogDetail(catalog, installedPackages, trimmed, lang)
+    const found = lookupAiCatalogDetail(catalog, installedPackages, trimmed, lang, dshVersion)
     if (found !== null) {
       const identity = found.packageName
         ? `package:${found.packageName.toLowerCase()}`
@@ -903,39 +897,4 @@ export function lookupAiCatalogDetails(
     }
   }
   return { entries, notFound }
-}
-
-/** Build a secret-free, sanitized summary of installed plugins and MCP servers in this profile. */
-export function buildAiEnvironment(
-  profile: string,
-  installed: MarketInstalledResult,
-  mcp: McpHostContext,
-): AiEnvironmentResult {
-  return {
-    profile: clip(profile, 80),
-    installedError: clip(installed.error, 200),
-    installedPackages: installed.packages.slice(0, 100).map(pkg => ({
-      packageName: clip(pkg.packageName, 120),
-      version: clip(pkg.version, 60),
-      enabled: pkg.enabled,
-      ...(pkg.repository !== '' ? { repository: clip(pkg.repository, 140) } : {}),
-      ...(pkg.self ? { self: true as const } : {}),
-      ...(pkg.inBox ? { inBox: true as const } : {}),
-    })),
-    mcp: {
-      managerActive: mcp.managerActive,
-      toolGroups: mcp.tools.slice(0, 40).map(group => ({
-        server: clip(group.server, 80),
-        toolCount: group.tools.length,
-        sampleTools: group.tools.slice(0, 8).map(tool => clip(tool.name, 80)),
-      })),
-      unmanagedServers: mcp.unmanaged.slice(0, 40).map(server => ({
-        serverName: clip(server.serverName, 80),
-        transport: server.transport,
-        enabled: server.enabled,
-        phase: server.phase,
-      })),
-      ...(mcp.toolsError !== '' ? { toolsError: clip(mcp.toolsError, 200) } : {}),
-    },
-  }
 }

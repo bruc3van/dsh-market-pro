@@ -210,6 +210,7 @@ export function apply(ctx: ClientContext): void {
     settingsReady: false,
     profile: null as string | null,
     version: '',
+    dshVersion: '',
     telemetrySuppressedByEnv: false,
   })
   let settingsGeneration = 0
@@ -290,6 +291,7 @@ export function apply(ctx: ClientContext): void {
         ...scope.getSnapshot(),
         profile: result.value.profile,
         version: result.value.version,
+        dshVersion: result.value.dshVersion ?? '',
         telemetrySuppressedByEnv: result.value.telemetrySuppressedByEnv === true,
       })
     } catch (error) {
@@ -554,6 +556,7 @@ export function apply(ctx: ClientContext): void {
   const pluginUpdater = createPluginUpdater(
     () => ctx.reflect.get('remote.pluginManager') as UpdateHost | undefined,
     () => ctx.reflect.get('remote.pluginMarket') as UpdateMarketHost | undefined,
+    () => scope.getSnapshot().dshVersion,
   )
   ctx.effect(() => ctx.remote.$on('plugin-manager/update-state', progress => pluginUpdater.progress(progress)), 'dsh-market-pro: update progress')
 

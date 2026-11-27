@@ -68,6 +68,13 @@ import {
 import { PluginLogo } from './PluginLogo.tsx'
 import { buildInstallPrompt, buildReviewPrompt, type ReviewTarget } from './reviewPrompt.ts'
 import { useSearchDock } from './useSearchDock.ts'
+import {
+  catalogItemCompatibility,
+  compatBadgeText,
+  formatHostErrorText,
+  formatPreInstallCompatText,
+  remainingTargetsCompatibility,
+} from './compatCopy.ts'
 
 /** The live snapshot the section renders from: the switch plus the deployment facts. */
 export interface SafeMarketSnapshot {
@@ -78,6 +85,8 @@ export interface SafeMarketSnapshot {
   readonly profile: string | null
   /** The market's own version, from the same `describe`; '' until it answers. */
   readonly version: string
+  /** Running DSH Host semantic version, when readable. */
+  readonly dshVersion?: string
   /** True when Host/process environment variables suppress telemetry. */
   readonly telemetrySuppressedByEnv?: boolean
 }
@@ -441,6 +450,8 @@ function InstalledCard({ t, english, item, matched, installed, snapshot, card, i
     disabled: t('installed.disabled'),
     failed: t('installed.failedState'),
     readFailed: t('installed.readFailedState'),
+    incompatible: t('installed.incompatibleState'),
+    notRunning: t('installed.notRunningState'),
     installed: t('installed.installedState'),
     unregistered: t('installed.unregisteredState'),
   }
@@ -506,6 +517,14 @@ function InstalledCard({ t, english, item, matched, installed, snapshot, card, i
       </div>
       {description !== '' && <p className="dsh_market_desc" title={description}>{description}</p>}
       {item.error !== '' && <p className="dsh_market_cardError">{t('installed.readFailed', { reason: item.error })}</p>}
+      {item.error === '' && item.hostError !== undefined && (
+        <p className="dsh_market_cardError">
+          {formatHostErrorText(item.hostError, t, 'installed', {
+            hasUpdate: Boolean(availableVersion),
+            fallbackRuntimeVersion: snapshot.dshVersion,
+          })}
+        </p>
+      )}
       {item.heldDown && item.entries.length > 0
         && <p className="dsh_market_cardNotice">{t('installed.heldDown')}</p>}
       {card?.status === 'error' && <p className="dsh_market_cardError">{card.message}</p>}
@@ -557,10 +576,12 @@ function InstalledCard({ t, english, item, matched, installed, snapshot, card, i
               {!item.self && !item.unregistered && (
                 <MarketButton
                   intent="secondary"
-                  disabled={busyRow || anyBusy || installBusy || (item.error !== ''
-                    // An unreadable package can still be switched off by the Host, never on.
-                    ? item.bundleEnabled !== true
-                    : item.bundleEnabled === undefined && item.entries.length === 0)}
+                  disabled={busyRow || anyBusy || installBusy
+                    || (!item.enabled && (item.hostError?.code === 'incompatible-version' || item.hostError?.code === 'unsupported-platform'))
+                    || (item.error !== ''
+                      // An unreadable package can still be switched off by the Host, never on.
+                      ? item.bundleEnabled !== true
+                      : item.bundleEnabled === undefined && item.entries.length === 0)}
                   onClick={() => { toggle(item) }}
                 >
                   {toggling
@@ -878,6 +899,7 @@ function InstalledCards({ t, installed, needle, installedFilter, updatableCount,
 function OfficialExperimentalCards({
   t,
   english,
+  dshVersion,
   officialBundles,
   needle,
   officialFilter,
@@ -888,6 +910,7 @@ function OfficialExperimentalCards({
 }: {
   readonly t: MarketLocale
   readonly english: boolean
+  readonly dshVersion?: string
   readonly officialBundles: OfficialBundlesController
   readonly needle: string
   readonly officialFilter: 'all' | 'enabled' | 'disabled'
@@ -918,7 +941,12 @@ function OfficialExperimentalCards({
         ? t('official.notice.overridden', { name: shortName(state.notice.packageName) })
         : state.notice.kind === 'removed'
           ? t('official.notice.removed', { name: shortName(state.notice.packageName) })
-          : t('official.notice.error', { name: shortName(state.notice.packageName), reason: state.notice.message })
+          : t('official.notice.error', {
+              name: shortName(state.notice.packageName),
+              reason: state.notice.error !== undefined
+                ? formatHostErrorText(state.notice.error, t, 'official', { fallbackRuntimeVersion: dshVersion })
+                : state.notice.message,
+            })
 
   return (
     <>
@@ -1016,7 +1044,10 @@ function OfficialExperimentalCards({
                 )}
                 {bundle.error !== undefined && (
                   <p className="dsh_market_cardError">
-                    {bundle.error.diagnostic || bundle.error.code}
+                    {formatHostErrorText(bundle.error, t, 'official', {
+                      hasUpdate: display.updatable,
+                      fallbackRuntimeVersion: dshVersion,
+                    })}
                   </p>
                 )}
                 {bundle.readOnlyReason !== undefined && bundle.error === undefined && (
@@ -1525,6 +1556,7 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
           <OfficialExperimentalCards
             t={t}
             english={english}
+            dshVersion={snapshot.dshVersion}
             officialBundles={officialBundles}
             needle={needle}
             officialFilter={officialFilter}
@@ -1655,6 +1687,13 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
           {paged.items.map(({ item, reason }) => {
             const owned = ownedBy(ownedIndex, item)
             const moreTargets = owned !== undefined && hasRemainingTargets(ownedIndex, item)
+            const remainingCompat = moreTargets
+              ? remainingTargetsCompatibility(ownedIndex, item, snapshot.dshVersion)
+              : undefined
+            const compatIssue = owned === undefined
+              ? catalogItemCompatibility(item, snapshot.dshVersion)
+              : remainingCompat
+            const canInstallMore = moreTargets && remainingCompat === undefined
             return (
               <li key={marketKey(item)} className="dsh_market_card dsh_market_catalogCard">
                 <div className="dsh_market_head">
@@ -1686,6 +1725,13 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
                 </div>
                 <p className="dsh_market_meta">
                   <span className="dsh_market_categoryTag">{english ? item.categoryEn : item.categoryZh}</span>
+                  {compatIssue !== undefined && (
+                    <Tooltip label={formatPreInstallCompatText(compatIssue, t)} side="top" portal maxWidth={300}>
+                      <span className="dsh_market_compatBadge">
+                        {compatBadgeText(compatIssue.direction, t)}
+                      </span>
+                    </Tooltip>
+                  )}
                   <span>{[
                     item.owner,
                     item.pushedAt.slice(0, 10),
@@ -1700,12 +1746,12 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
                   {owned !== undefined
                     ? (
                       <>
-                        <MarketButton intent={moreTargets ? 'secondary' : 'primary'}
+                        <MarketButton intent={canInstallMore ? 'secondary' : 'primary'}
                           onClick={() => {
                             scrollResultsToTop()
                             setCategory(INSTALLED_FILTER)
                           }}>{t('direct.manage')}</MarketButton>
-                        {moreTargets && (
+                        {canInstallMore && (
                           <MarketButton intent="primary" disabled={!directInstaller || installBusy}
                             onClick={() => setDirectItem(item)}>{t('direct.install')}</MarketButton>
                         )}
@@ -2117,12 +2163,12 @@ export function MarketSection({
           {t('batchUpdate.resume')}
         </button>
       )}
-      {directInstaller && <DirectInstallPanel item={directItem} installer={directInstaller} ownedIndex={ownedIndex} t={t}
+      {directInstaller && <DirectInstallPanel item={directItem} installer={directInstaller} ownedIndex={ownedIndex} dshVersion={snapshot.dshVersion} t={t}
         onClose={closeInstallPanel} onInstalled={refreshInstalled}
         onReview={reviewInstalled} onAgentInstall={directItem ? () => agentInstall(directItem) : undefined}
         reviewBusy={installBusy} reviewAvailable={snapshot.profile !== null}
         reviewMessage={reviewResult?.status === 'error' || reviewResult?.status === 'needs-workspace' ? reviewResult.message : ''} />}
-      {directInstaller && <ManualInstallPanel open={overlay.kind === 'manual-install'} installer={directInstaller} t={t}
+      {directInstaller && <ManualInstallPanel open={overlay.kind === 'manual-install'} installer={directInstaller} dshVersion={snapshot.dshVersion} t={t}
         onClose={closeManualPanel}
         onInstalled={handleManualInstalled}
         onReview={reviewInstalled} reviewBusy={installBusy} reviewAvailable={snapshot.profile !== null}

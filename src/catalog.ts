@@ -2,10 +2,11 @@
  * Remote metadata is validated before entering the client wire contract.
  */
 import { brotliDecompressSync, gunzipSync, inflateSync } from 'node:zlib'
+import { readCategoryTable, resolveCompleteCatalogLists } from './catalogHydration.ts'
 import { parseInstallInfo } from './installInfo.ts'
 import type { MarketCatalog, MarketCategory, MarketFeatured, MarketFeaturedEntry, MarketPlugin } from './contract.ts'
 import { FEATURED_CATEGORY, SUBSCRIPTION_CATEGORY, isMarketIcon, isSafeBranchName, REPOSITORY_SLUG_PATTERN } from './shapes.ts'
-import { categoriesOf, deriveSubscription } from './subscription.ts'
+import { categoriesOf } from './subscription.ts'
 import { extractFileFromTgzResponse } from './tarball.ts'
 
 /** Default feed and mirrors (including China-reachable npmmirror tarball) serve the same npm package dataset. */
@@ -69,8 +70,9 @@ const SCHEMA_VERSION = 2
  * 7 — schema-4 compact feed support, subscription icon/keyword hydration, and npmmirror failover.
  * 8 — the editorial pick cap grows from 100 to 1000.
  * 9 — `publishedAt`, the feed's own publish stamp used for cross-mirror freshness comparison.
+ * 10 — DSH runtime compatibility target selection (`dshEngine`, `compatFallback`) hydrated across subscription and repository cards.
  */
-export const CATALOG_FORMAT = 9
+export const CATALOG_FORMAT = 10
 
 /** The editorial list is capped. Published subscription packages are not. */
 const FEATURED_LIMIT = 1000
@@ -166,6 +168,8 @@ export interface CatalogOptions {
   readonly hedgeDelayMs?: number
   /** Grace window before hedging a source whose headers already arrived but whose body download stalled. */
   readonly bodyHedgeDelayMs?: number
+  /** Running DSH Host semantic version used for compatibility selection during catalog derivation. */
+  readonly dshVersion?: string
 }
 
 /**
@@ -291,7 +295,7 @@ function deriveFeatured(value: unknown, declared: unknown, rows: ReadonlyMap<str
  * @returns the parsed and validated catalog.
  * @throws when the body is not a market this plugin understands.
  */
-export function deriveMarket(body: unknown, marketSize: number): MarketCatalog {
+export function deriveMarket(body: unknown, marketSize: number, dshVersion?: string): MarketCatalog {
   const envelope = body as {
     schema_version?: unknown; entries?: unknown; category_table?: unknown; source_fetched_at?: unknown; source_repo_count?: unknown; featured?: unknown; featured_count?: unknown
     subscription?: unknown; subscription_updated_at?: unknown; published_at?: unknown
@@ -303,17 +307,7 @@ export function deriveMarket(body: unknown, marketSize: number): MarketCatalog {
   }
   const isCompact = schema === 4
   const isCompleteCatalog = schema === 3 || schema === 4
-  const categoryTable: Array<[string, string, string]> = []
-  if (isCompact && Array.isArray(envelope.category_table)) {
-    for (const tuple of envelope.category_table as unknown[]) {
-      if (Array.isArray(tuple) && typeof tuple[0] === 'string') {
-        const key = text(tuple[0], 60)
-        categoryTable.push([key, text(tuple[1], 60) || key, text(tuple[2], 60) || key])
-      } else {
-        categoryTable.push(['', '', ''])
-      }
-    }
-  }
+  const categoryTable = isCompact ? readCategoryTable(envelope.category_table, text) : []
   const rows = Array.isArray(envelope.entries) ? envelope.entries as RawEntry[] : []
   if (rows.length === 0) throw new Error('the published market carried no entries')
 
@@ -383,77 +377,18 @@ export function deriveMarket(body: unknown, marketSize: number): MarketCatalog {
   let featured: MarketFeatured | undefined
   let subscription: MarketFeatured | undefined
   if (isCompleteCatalog) {
-    subscription = deriveSubscription(envelope.subscription, text(envelope.subscription_updated_at, 40), byName)
-    // Hydrate deduplicated plugin icons and search keywords from the embedded
-    // subscription onto repository rows so compact feeds avoid duplicating ~1.7 MiB
-    // of base64 icons without losing card artwork or package-name search.
-    const subIconByRepo = new Map<string, string>()
-    const subKeywordsByRepo = new Map<string, Set<string>>()
-    for (const entry of subscription.entries) {
-      const key = entry.item.fullName.toLowerCase()
-      if (key === '') continue
-      if (entry.item.icon && !subIconByRepo.has(key)) subIconByRepo.set(key, entry.item.icon)
-      const words = subKeywordsByRepo.get(key) ?? new Set<string>()
-      for (const word of [entry.item.packageName, entry.item.titleZh, entry.item.titleEn, ...(entry.item.keywords ?? [])]) {
-        if (typeof word === 'string' && word !== '') words.add(word)
-      }
-      subKeywordsByRepo.set(key, words)
-    }
-    for (let i = 0; i < items.length; i += 1) {
-      const item = items[i]!
-      const key = item.fullName.toLowerCase()
-      const icon = item.icon ?? subIconByRepo.get(key)
-      const extraKeywords = subKeywordsByRepo.get(key)
-      if (icon === item.icon && extraKeywords === undefined) continue
-      const mergedKeywords = extraKeywords === undefined
-        ? item.keywords
-        : [...new Set([...(item.keywords ?? []), ...extraKeywords])].slice(0, 200)
-      const hydrated: MarketPlugin = {
-        ...item,
-        ...(icon === undefined ? {} : { icon }),
-        ...(mergedKeywords === undefined ? {} : { keywords: mergedKeywords }),
-      }
-      items[i] = hydrated
-      byName.set(key, hydrated)
-    }
-    // Editorial picks prefer the published plugin card and its install target,
-    // then fall back to the repository row. The editorial description wins.
-    const editorial = envelope.featured !== undefined && envelope.featured !== null
-    if (editorial) {
-      const rowsForPicks = new Map(byName)
-      const copy = new Map<string, string>()
-      const rawEntries = (envelope.featured as { entries?: unknown }).entries
-      for (const raw of Array.isArray(rawEntries) ? rawEntries : []) {
-        if (raw === null || typeof raw !== 'object') continue
-        const pick = raw as { full_name?: unknown; description?: unknown }
-        const slug = repositorySlug(pick.full_name)
-        if (slug === null) continue
-        const description = text(pick.description, DESCRIPTION_LIMIT)
-        if (description !== '') copy.set(slug.toLowerCase(), description)
-      }
-      for (const entry of subscription.entries) {
-        const key = entry.item.fullName.toLowerCase()
-        if (key !== '') rowsForPicks.set(key, entry.item)
-      }
-      const picks = deriveFeatured(envelope.featured, undefined, rowsForPicks, copy)
-      if (picks !== undefined) {
-        featured = picks
-        // Icons and keywords have already been hydrated onto `items` and `picks`,
-        // and the client never renders `subscription` as a separate scope when
-        // editorial picks are present. Dropping it here saves ~6 MiB on disk and RPC.
-        subscription = undefined
-      } else {
-        // No editorial pick survived the wire pass. `subscription` only travels
-        // alongside an editorial list (see MarketCatalog), so fall back exactly
-        // like a feed without picks: the subscription becomes the pick list.
-        featured = subscription
-        subscription = undefined
-      }
-    } else {
-      // Older schema-3 feed: the subscription is the only pick list.
-      featured = subscription
-      subscription = undefined
-    }
+    ;({ featured, subscription } = resolveCompleteCatalogLists({
+      rawSubscription: envelope.subscription,
+      rawEditorial: envelope.featured,
+      subscriptionUpdatedAt: text(envelope.subscription_updated_at, 40),
+      items,
+      byName,
+      dshVersion,
+      descriptionLimit: DESCRIPTION_LIMIT,
+      clipText: text,
+      repositorySlug,
+      deriveFeatured,
+    }))
   } else {
     featured = deriveFeatured(envelope.featured, envelope.featured_count, byName)
   }
@@ -809,14 +744,14 @@ export function createCatalogSource(options: CatalogOptions): CatalogSource {
       const parsed = JSON.parse(extracted.toString('utf8')) as unknown
       return {
         kind: 'fresh',
-        catalog: deriveMarket(parsed, options.marketSize),
+        catalog: deriveMarket(parsed, options.marketSize, options.dshVersion),
         marketEtag: versionTag,
         activeBase: base,
       }
     }
     return {
       kind: 'fresh',
-      catalog: deriveMarket(body, options.marketSize),
+      catalog: deriveMarket(body, options.marketSize, options.dshVersion),
       marketEtag: response.headers.get('etag') ?? '',
       activeBase: base,
     }

@@ -29,6 +29,8 @@ export interface SafeMarketSnapshot {
     readonly profile: string | null;
     /** The market's own version, from the same `describe`; '' until it answers. */
     readonly version: string;
+    /** Running DSH Host semantic version, when readable. */
+    readonly dshVersion?: string;
     /** True when Host/process environment variables suppress telemetry. */
     readonly telemetrySuppressedByEnv?: boolean;
 }

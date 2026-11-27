@@ -42,8 +42,11 @@ import type { ChangeResult } from '@deepseek-ai/dsh-plugin-manager/types'
 import { spawn } from 'node:child_process'
 import { mkdir, readFile, rm } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import { formatRequirementsText } from './compatibility.ts'
 import { isMarketIcon, PACKAGE_NAME_PATTERN } from './shapes.ts'
 import {
+  normalizeHostError,
+  type MarketHostError,
   type MarketInstalledEntry,
   type MarketInstalledPackage,
   type MarketInstalledResult,
@@ -197,6 +200,16 @@ function messageOf(error: unknown): string {
 
 function requireApplied(result: ChangeResult): void {
   if (result.application !== 'applied' && result.application !== 'restart-required') {
+    if (result.error?.code === 'incompatible-version' && result.error.incompatible?.length) {
+      const detail = result.error.incompatible
+        .map((item) => {
+          const legacyPeers = (item as { readonly peers?: Readonly<Record<string, string>> }).peers
+          const req = formatRequirementsText(item.requirements ?? legacyPeers)
+          return `${item.name}@${item.version}${req ? ` (${req})` : ''}`
+        })
+        .join(', ')
+      throw new Error(`incompatible-version: ${detail}`)
+    }
     throw new Error(result.error?.diagnostic || result.error?.code || result.application)
   }
 }
@@ -362,6 +375,7 @@ export function createInstalledManager(options: InstalledManagerOptions): Instal
     seats: string[]
     hostIcons: Map<string, string>
     hostMeta: Map<string, BundleLocaleMeta>
+    hostErrors: Map<string, MarketHostError>
   }> => {
     const manifest = await readManifest(profileDir)
     const bundles = userBundles(manifest)
@@ -369,10 +383,11 @@ export function createInstalledManager(options: InstalledManagerOptions): Instal
     const seats = desktopSeatBundles(manifest, profileDir)
     const hostIcons = new Map<string, string>()
     const hostMeta = new Map<string, BundleLocaleMeta>()
+    const hostErrors = new Map<string, MarketHostError>()
     // A deselected dependency whose package can no longer be read declares no
     // bundle we can see, but the Host still lists it with its load error.
     // Keep it in the panel so the residue stays reachable for Uninstall.
-    // Also capture any package icon and localized display text the Host already resolved for installed bundles.
+    // Also capture any package icon, localized display text, and Host load/compatibility errors.
     const host = options.pluginManager?.()
     if (typeof host?.listBundles === 'function') {
       const known = new Set([...bundles, ...unregistered, ...seats])
@@ -383,11 +398,13 @@ export function createInstalledManager(options: InstalledManagerOptions): Instal
         }
         const localized = hostLocaleMetaOf(row.meta)
         if (localized !== undefined) hostMeta.set(row.name, localized)
+        const hostError = normalizeHostError(row.error)
+        if (hostError !== undefined) hostErrors.set(row.name, hostError)
         if (row.installed && !row.enabled && !row.official && row.source !== undefined && row.error !== undefined
           && !known.has(row.name)) unregistered.push(row.name)
       }
     }
-    return { manifest, bundles, unregistered, seats, hostIcons, hostMeta }
+    return { manifest, bundles, unregistered, seats, hostIcons, hostMeta, hostErrors }
   }
 
   const assertInstalled = (bundles: readonly string[], packageName: string): void => {
@@ -430,8 +447,9 @@ export function createInstalledManager(options: InstalledManagerOptions): Instal
     let seats: string[]
     let hostIcons: Map<string, string>
     let hostMeta: Map<string, BundleLocaleMeta>
+    let hostErrors: Map<string, MarketHostError>
     try {
-      ;({ manifest, bundles, unregistered, seats, hostIcons, hostMeta } = await readUserBundles())
+      ;({ manifest, bundles, unregistered, seats, hostIcons, hostMeta, hostErrors } = await readUserBundles())
     } catch (error) {
       return { packages: [], profile: options.profile, error: messageOf(error) }
     }
@@ -450,6 +468,7 @@ export function createInstalledManager(options: InstalledManagerOptions): Instal
       seen.add(packageName)
       const self = packageName === options.selfName
       const bundleEnabled = hostControlsBundles && !flags.inBox ? !flags.unregistered : undefined
+      const hostError = !flags.inBox ? hostErrors.get(packageName) : undefined
       const dependencySpec = typeof manifest.dependencies?.[packageName] === 'string'
         ? manifest.dependencies[packageName]
         : undefined
@@ -491,6 +510,7 @@ export function createInstalledManager(options: InstalledManagerOptions): Instal
             : bundleEnabled && (liveEnabled || !entries.some(entry => entry.present)),
           entries,
           error: '',
+          ...(hostError !== undefined ? { hostError } : {}),
           heldDown: heldDown(packageName),
         })
       } catch (error) {
@@ -506,7 +526,7 @@ export function createInstalledManager(options: InstalledManagerOptions): Instal
           inBox: flags.inBox, unregistered: flags.unregistered && bundleEnabled === undefined,
           ...(bundleEnabled === undefined ? {} : { bundleEnabled }),
           enabled: bundleEnabled ?? false, entries: [],
-          error: messageOf(error), heldDown: heldDown(packageName),
+          error: messageOf(error), ...(hostError !== undefined ? { hostError } : {}), heldDown: heldDown(packageName),
         })
       }
     }

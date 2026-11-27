@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState, useSyncExternalStore } from 'react'
 import { IconCloseOutlineRegular, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { MarketLocale } from './copy.ts'
+import { InstallStatusBanner } from './InstallStatusBanner.tsx'
 import { MarketButton } from './MarketButton.tsx'
 import { MarketSelector } from './InstallModeSelector.tsx'
 import {
@@ -97,6 +98,7 @@ function formatInspectError(
 export function ManualInstallPanel({
   open: requestedOpen,
   installer,
+  dshVersion,
   t,
   onClose,
   onInstalled,
@@ -107,6 +109,7 @@ export function ManualInstallPanel({
 }: {
   readonly open: boolean
   readonly installer: DirectInstaller
+  readonly dshVersion?: string
   readonly t: MarketLocale
   readonly onClose: () => void
   readonly onInstalled: () => void
@@ -288,8 +291,8 @@ export function ManualInstallPanel({
   }
 
   const needsApproval = showResult && state.phase === 'failed' && state.pendingBuilds.length > 0
+  const isIncompatFailure = showResult && state.phase === 'failed' && state.errorCode === 'incompatible-version'
   const finished = showResult && state.phase === 'done'
-  const outcome = state.application as 'applied' | 'restart-required' | 'overridden' | 'cancelled' | undefined
   const reviewTargets = showResult && !busy ? installedReviewTargets(state) : []
   const reviewButton = reviewTargets.length > 0
     ? (
@@ -477,29 +480,18 @@ export function ManualInstallPanel({
         )}
 
         {showResult && (
-          <div id={errorId} className="dsh_market_installStatus" role="status" aria-live="polite">
-            <strong>
-              {needsApproval
-                ? t('direct.authorization')
-                : finished && outcome
-                  ? t(`direct.${outcome}`)
-                  : t(`direct.${state.phase}`)}
-            </strong>
-            {needsApproval && (
-              <>
-                <p>{t('direct.buildHint')}</p>
-                <ul className="dsh_market_buildList">
-                  {state.pendingBuilds.map(name => <li key={name}>{name}</li>)}
-                </ul>
-              </>
-            )}
-            {state.message && (
-              <details className="dsh_market_installDiagnostic" open={state.phase === 'failed'}>
-                <summary>{t('direct.diagnostic')}</summary>
-                <pre className="dsh_market_directMessage">{state.message}</pre>
-              </details>
-            )}
-          </div>
+          <InstallStatusBanner
+            id={errorId}
+            phase={state.phase}
+            application={state.application}
+            errorCode={state.errorCode}
+            incompatible={state.incompatible}
+            pendingBuilds={state.pendingBuilds}
+            message={state.message}
+            dshVersion={dshVersion}
+            diagnosticDefaultOpen={state.phase === 'failed' && !isIncompatFailure}
+            t={t}
+          />
         )}
 
         {reviewTargets.length > 0 && reviewMessage && <p role="status">{reviewMessage}</p>}
@@ -559,9 +551,11 @@ export function ManualInstallPanel({
                 </MarketButton>
               )}
               <MarketButton size="md" intent="secondary" onClick={dismiss}>{t('direct.close')}</MarketButton>
-              <MarketButton size="md" intent="primary" onClick={() => { void installer.retry() }}>
-                {t('direct.retry')}
-              </MarketButton>
+              {!isIncompatFailure && (
+                <MarketButton size="md" intent="primary" onClick={() => { void installer.retry() }}>
+                  {t('direct.retry')}
+                </MarketButton>
+              )}
             </>
           )}
         </fieldset>

@@ -43,6 +43,8 @@ import { registerMarketAiMcpTool } from './aiMcpTools.ts'
 import { registerMarketAiSkillsTool } from './aiSkillsTools.ts'
 import { adoptDomainState, initialDomainState, safeMarketDomainSpec, type SafeMarketDomainState } from './store.ts'
 import { packageNameFromInstallSpec, parseGitHubRepoSlug } from './installInfo.ts'
+import { isValidSemver } from './compatibility.ts'
+import { detectDshVersion } from './hostRuntime.ts'
 import { classifyInstallError, createTelemetryReporter, isTelemetryEnvSuppressed } from './telemetry.ts'
 import { TYPERT_MANIFEST } from './typert.ts'
 import type { InstallFeaturedSkillResult, MarketPlugin, SafeMarketSettingsUpdate } from './contract.ts'
@@ -131,6 +133,8 @@ export function applyMarket(ctx: Context, resolved: Config): () => void {
   }
 
   const selfVersion = readSelfVersion()
+  const rawDshVersion = detectDshVersion()
+  const dshVersion = isValidSemver(rawDshVersion) ? rawDshVersion : ''
   const hostTelemetryDisabled = (ctx.get('profileContext')?.telemetryDisabledEnv ?? '').trim() !== ''
   const telemetrySuppressedByEnv = hostTelemetryDisabled || isTelemetryEnvSuppressed()
   const resolvePublicPluginTarget = (candidate: string): string | null => {
@@ -163,6 +167,7 @@ export function applyMarket(ctx: Context, resolved: Config): () => void {
   }
   const telemetry = createTelemetryReporter({
     pluginVersion: selfVersion,
+    dshVersion: rawDshVersion,
     isEnabled: () => !hostTelemetryDisabled && readSettings().telemetryEnabled,
     resolvePublicPluginTarget,
     storage: {
@@ -201,6 +206,7 @@ export function applyMarket(ctx: Context, resolved: Config): () => void {
   const usable = (candidate: SafeMarketDomainState): boolean =>
     candidate.catalog !== null && candidate.catalogFormat === CATALOG_FORMAT
     && candidate.marketSize === resolved.marketSize && candidate.catalogBase === resolved.catalogBase
+    && candidate.dshVersion === dshVersion
   const cache: CatalogCache = {
     ready: domainReady,
     read: () => (
@@ -217,6 +223,7 @@ export function applyMarket(ctx: Context, resolved: Config): () => void {
         catalogFormat: CATALOG_FORMAT,
         marketSize: resolved.marketSize,
         catalogBase: resolved.catalogBase,
+        dshVersion,
       })
     },
   }
@@ -226,6 +233,7 @@ export function applyMarket(ctx: Context, resolved: Config): () => void {
     marketSize: resolved.marketSize,
     cache,
     disposeSignal: disposeController.signal,
+    ...(dshVersion !== '' ? { dshVersion } : {}),
   })
 
   // The installed panel uses native bundle management when available. Its
@@ -334,6 +342,7 @@ export function applyMarket(ctx: Context, resolved: Config): () => void {
   }
   const aiTool = registerMarketAiTool(ctx, {
     profile: profile.name,
+    ...(dshVersion !== '' ? { dshVersion } : {}),
     readSettings,
     readCatalog: (force, signal) => catalog.read(force, signal),
     listInstalled: () => installed.list(),
@@ -409,7 +418,7 @@ export function applyMarket(ctx: Context, resolved: Config): () => void {
     readSettings,
     writeSettings,
     (sessionId, signal) => readSkills(ctx, sessionId, signal),
-    { profile: profile.name, version: selfVersion, telemetrySuppressedByEnv },
+    { profile: profile.name, version: selfVersion, ...(dshVersion !== '' ? { dshVersion } : {}), telemetrySuppressedByEnv },
     installed,
     readMcp,
     (name, signal) => probeManagedMcp(ctx, ctx.loader.entries() as Iterable<McpLoaderEntry>, name, signal),

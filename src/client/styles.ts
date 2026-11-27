@@ -120,10 +120,61 @@ export const cssText = `
   .dsh_market_directPanel .dsh_market_installChoice:hover { background: var(--dsw-alias-interactive-bg-hover); }
 }
 .dsh_market_installChoice:has(input:checked) { background: var(--dsw-alias-interactive-bg-hover); border-color: var(--dsw-alias-label-secondary); }
-.dsh_market_directPanel .dsh_market_installChoice[data-installed="true"] { opacity: 0.72; cursor: default; }
+.dsh_market_directPanel .dsh_market_installChoice[data-installed="true"],
+.dsh_market_directPanel .dsh_market_installChoice[data-incompatible] { opacity: 0.72; cursor: default; }
 .dsh_market_installChoice input { flex: none; margin: 0; accent-color: var(--dsw-alias-label-primary); }
 .dsh_market_installChoice span { min-width: 0; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
-.dsh_market_installChoice .dsh_market_choiceOwned { margin-left: auto; font-family: inherit; }
+.dsh_market_installChoice .dsh_market_choiceOwned,
+.dsh_market_installChoice .dsh_market_choiceCompat { margin-left: auto; font-family: inherit; }
+.dsh_market_choiceCompat {
+  flex: none;
+  padding: 2px 7px;
+  border-radius: var(--dsw-radius-xs);
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 12%, transparent);
+  color: var(--dsw-alias-state-error-primary);
+  font-size: 11px;
+  line-height: 16px;
+}
+.dsh_market_compatBanner {
+  margin-top: 16px;
+  padding: 12px 14px;
+  border-radius: var(--dsw-radius-md);
+  border: 0.5px solid color-mix(in srgb, var(--dsw-alias-state-error-primary) 36%, transparent);
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 8%, transparent);
+}
+.dsh_market_compatBanner[data-tone="info"] {
+  border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary) 32%, transparent);
+  background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 8%, transparent);
+}
+.dsh_market_compatBanner > strong {
+  display: block;
+  font-size: 13px;
+  line-height: 19px;
+  font-weight: 500;
+  color: var(--dsw-alias-state-error-primary);
+}
+.dsh_market_compatBanner[data-tone="info"] > strong {
+  color: var(--dsw-alias-state-business-primary);
+}
+.dsh_market_directPanel .dsh_market_compatBanner > p {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-secondary);
+}
+.dsh_market_compatBadge {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  padding: 1px 6px;
+  border-radius: var(--dsw-radius-xs);
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: 500;
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 12%, transparent);
+  color: var(--dsw-alias-state-error-primary);
+  cursor: help;
+}
 .dsh_market_directPanel .dsh_market_installChoice span p { margin: 2px 0 0; font-family: inherit; }
 
 /* "Installation details": a disclosure with a rotating chevron over the
@@ -1404,7 +1455,9 @@ export const cssText = `
   color: var(--dsw-alias-label-tertiary);
 }
 .dsh_market_installedState[data-state="failed"],
-.dsh_market_installedState[data-state="readFailed"] {
+.dsh_market_installedState[data-state="readFailed"],
+.dsh_market_installedState[data-state="incompatible"],
+.dsh_market_installedState[data-state="notRunning"] {
   color: var(--dsw-alias-state-error-primary);
 }
 

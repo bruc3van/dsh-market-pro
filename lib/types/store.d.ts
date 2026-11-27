@@ -41,6 +41,12 @@ export declare const safeMarketDomainState: z.ZodObject<{
                     install: z.ZodString;
                     profile: z.ZodString;
                     note: z.ZodString;
+                    dshEngine: z.ZodOptional<z.ZodString>;
+                    compatFallback: z.ZodOptional<z.ZodReadonly<z.ZodObject<{
+                        selectedVersion: z.ZodString;
+                        latestVersion: z.ZodString;
+                        latestEngine: z.ZodOptional<z.ZodString>;
+                    }, z.core.$strip>>>;
                 }, z.core.$strip>>;
                 tasks: z.ZodArray<z.ZodString>;
                 requirements: z.ZodArray<z.ZodString>;
@@ -102,6 +108,12 @@ export declare const safeMarketDomainState: z.ZodObject<{
                             install: z.ZodString;
                             profile: z.ZodString;
                             note: z.ZodString;
+                            dshEngine: z.ZodOptional<z.ZodString>;
+                            compatFallback: z.ZodOptional<z.ZodReadonly<z.ZodObject<{
+                                selectedVersion: z.ZodString;
+                                latestVersion: z.ZodString;
+                                latestEngine: z.ZodOptional<z.ZodString>;
+                            }, z.core.$strip>>>;
                         }, z.core.$strip>>;
                         tasks: z.ZodArray<z.ZodString>;
                         requirements: z.ZodArray<z.ZodString>;
@@ -160,6 +172,12 @@ export declare const safeMarketDomainState: z.ZodObject<{
                             install: z.ZodString;
                             profile: z.ZodString;
                             note: z.ZodString;
+                            dshEngine: z.ZodOptional<z.ZodString>;
+                            compatFallback: z.ZodOptional<z.ZodReadonly<z.ZodObject<{
+                                selectedVersion: z.ZodString;
+                                latestVersion: z.ZodString;
+                                latestEngine: z.ZodOptional<z.ZodString>;
+                            }, z.core.$strip>>>;
                         }, z.core.$strip>>;
                         tasks: z.ZodArray<z.ZodString>;
                         requirements: z.ZodArray<z.ZodString>;
@@ -193,6 +211,7 @@ export declare const safeMarketDomainState: z.ZodObject<{
     catalogFormat: z.ZodDefault<z.ZodNumber>;
     marketSize: z.ZodNumber;
     catalogBase: z.ZodString;
+    dshVersion: z.ZodDefault<z.ZodString>;
     pendingUninstall: z.ZodDefault<z.ZodArray<z.ZodObject<{
         packageName: z.ZodString;
         entryIds: z.ZodArray<z.ZodString>;
@@ -245,6 +264,12 @@ export declare const safeMarketDomainSpec: {
                             install: z.ZodString;
                             profile: z.ZodString;
                             note: z.ZodString;
+                            dshEngine: z.ZodOptional<z.ZodString>;
+                            compatFallback: z.ZodOptional<z.ZodReadonly<z.ZodObject<{
+                                selectedVersion: z.ZodString;
+                                latestVersion: z.ZodString;
+                                latestEngine: z.ZodOptional<z.ZodString>;
+                            }, z.core.$strip>>>;
                         }, z.core.$strip>>;
                         tasks: z.ZodArray<z.ZodString>;
                         requirements: z.ZodArray<z.ZodString>;
@@ -306,6 +331,12 @@ export declare const safeMarketDomainSpec: {
                                     install: z.ZodString;
                                     profile: z.ZodString;
                                     note: z.ZodString;
+                                    dshEngine: z.ZodOptional<z.ZodString>;
+                                    compatFallback: z.ZodOptional<z.ZodReadonly<z.ZodObject<{
+                                        selectedVersion: z.ZodString;
+                                        latestVersion: z.ZodString;
+                                        latestEngine: z.ZodOptional<z.ZodString>;
+                                    }, z.core.$strip>>>;
                                 }, z.core.$strip>>;
                                 tasks: z.ZodArray<z.ZodString>;
                                 requirements: z.ZodArray<z.ZodString>;
@@ -364,6 +395,12 @@ export declare const safeMarketDomainSpec: {
                                     install: z.ZodString;
                                     profile: z.ZodString;
                                     note: z.ZodString;
+                                    dshEngine: z.ZodOptional<z.ZodString>;
+                                    compatFallback: z.ZodOptional<z.ZodReadonly<z.ZodObject<{
+                                        selectedVersion: z.ZodString;
+                                        latestVersion: z.ZodString;
+                                        latestEngine: z.ZodOptional<z.ZodString>;
+                                    }, z.core.$strip>>>;
                                 }, z.core.$strip>>;
                                 tasks: z.ZodArray<z.ZodString>;
                                 requirements: z.ZodArray<z.ZodString>;
@@ -397,6 +434,7 @@ export declare const safeMarketDomainSpec: {
             catalogFormat: z.ZodDefault<z.ZodNumber>;
             marketSize: z.ZodNumber;
             catalogBase: z.ZodString;
+            dshVersion: z.ZodDefault<z.ZodString>;
             pendingUninstall: z.ZodDefault<z.ZodArray<z.ZodObject<{
                 packageName: z.ZodString;
                 entryIds: z.ZodArray<z.ZodString>;
@@ -437,6 +475,12 @@ export declare const safeMarketDomainSpec: {
                             install: string;
                             profile: string;
                             note: string;
+                            dshEngine?: string | undefined;
+                            compatFallback?: Readonly<{
+                                selectedVersion: string;
+                                latestVersion: string;
+                                latestEngine?: string | undefined;
+                            }> | undefined;
                         }[];
                         tasks: string[];
                         requirements: string[];
@@ -488,6 +532,12 @@ export declare const safeMarketDomainSpec: {
                                     install: string;
                                     profile: string;
                                     note: string;
+                                    dshEngine?: string | undefined;
+                                    compatFallback?: Readonly<{
+                                        selectedVersion: string;
+                                        latestVersion: string;
+                                        latestEngine?: string | undefined;
+                                    }> | undefined;
                                 }[];
                                 tasks: string[];
                                 requirements: string[];
@@ -539,6 +589,12 @@ export declare const safeMarketDomainSpec: {
                                     install: string;
                                     profile: string;
                                     note: string;
+                                    dshEngine?: string | undefined;
+                                    compatFallback?: Readonly<{
+                                        selectedVersion: string;
+                                        latestVersion: string;
+                                        latestEngine?: string | undefined;
+                                    }> | undefined;
                                 }[];
                                 tasks: string[];
                                 requirements: string[];
@@ -562,6 +618,7 @@ export declare const safeMarketDomainSpec: {
             catalogFormat: number;
             marketSize: number;
             catalogBase: string;
+            dshVersion: string;
             pendingUninstall: {
                 packageName: string;
                 entryIds: string[];

@@ -12,6 +12,7 @@ import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import { z } from 'zod'
 import { registerDynamicAiTool } from './aiRegistry.ts'
+import { classifyIncompatibleItems, type CompatibilityDirection, type IncompatibleRequirementItem } from './compatibility.ts'
 import { isInstallSpec } from './installInfo.ts'
 import { PACKAGE_NAME } from './shapes.ts'
 import { blocksHotUpdates, selectionWasRestored, updateKeepingSelection, type SelectionRestore } from './pluginUpdateRecovery.ts'
@@ -179,7 +180,7 @@ export interface HostPluginManagerUpdateFace {
       readonly prerelease: boolean
       readonly deprecated?: string
       readonly bundle: boolean
-      readonly incompatible?: { readonly requirements: Readonly<Record<string, string>> }
+      readonly incompatible?: IncompatibleRequirementItem
     }[]
   } | {
     readonly status: 'refused'
@@ -200,7 +201,11 @@ export interface HostPluginManagerUpdateFace {
       readonly restartReason?: string
       readonly stage?: string
       readonly target?: string
-      readonly error?: { readonly code?: string; readonly diagnostic?: string }
+      readonly error?: {
+        readonly code?: string
+        readonly diagnostic?: string
+        readonly incompatible?: readonly IncompatibleRequirementItem[]
+      }
       readonly packageResult?: { readonly output?: string }
       readonly output?: string
     }
@@ -244,12 +249,7 @@ export interface HostPluginManagerUpdateFace {
     readonly error?: {
       readonly code: string
       readonly diagnostic?: string
-      readonly incompatible?: readonly {
-        readonly name: string
-        readonly version: string
-        readonly requirements?: Readonly<Record<string, string>>
-        readonly peers?: Readonly<Record<string, string>>
-      }[]
+      readonly incompatible?: readonly IncompatibleRequirementItem[]
     }
     readonly warnings?: readonly string[]
     readonly packageResult?: { readonly output?: string; readonly kind?: string; readonly timedOut?: boolean }
@@ -304,6 +304,7 @@ export interface PluginAiInstallOutcome {
 
 export interface MarketAiToolDeps {
   readonly profile: string
+  readonly dshVersion?: string
   readonly readSettings: () => SafeMarketSettings
   readonly readCatalog: (force: boolean, signal?: AbortSignal) => Promise<MarketCatalogResult>
   readonly listInstalled: () => Promise<MarketInstalledResult>
@@ -591,8 +592,19 @@ async function resolvePinnedUpdates(
           unavailable.push({ packageName: bundle.name, version: targetVersion, reason: `Confirmed version ${targetVersion} is not available as a newer release on the registry.` })
           continue
         }
-        if (!match.bundle || match.incompatible !== undefined) {
-          unavailable.push({ packageName: bundle.name, version: targetVersion, reason: `Confirmed version ${targetVersion} is incompatible with this DSH host or lacks a bundle declaration.` })
+        if (!match.bundle) {
+          unavailable.push({ packageName: bundle.name, version: targetVersion, reason: `Confirmed version ${targetVersion} lacks a dsh.bundle declaration.` })
+          continue
+        }
+        if (match.incompatible !== undefined) {
+          const info = classifyIncompatibleItems([match.incompatible], deps.dshVersion)
+          const req = info.requirementsText ? ` (${sanitizeUntrustedText(info.requirementsText, 120)})` : ''
+          const reason = info.direction === 'host-too-old'
+            ? `Confirmed version ${targetVersion} requires a newer DSH host${req}; upgrade DSH first.`
+            : info.direction === 'plugin-too-old'
+              ? `Confirmed version ${targetVersion} only supports older DSH releases${req} and is incompatible with this DSH host.`
+              : `Confirmed version ${targetVersion} is incompatible with this DSH host${req}.`
+          unavailable.push({ packageName: bundle.name, version: targetVersion, reason })
           continue
         }
         plan.push({
@@ -1032,7 +1044,7 @@ export function createMarketAiToolDefinition(deps: MarketAiToolDeps): Record<str
       if (args.action === 'environment') {
         const installed = await deps.listInstalled()
         exec?.signal?.throwIfAborted()
-        return JSON.stringify(buildAiEnvironment(deps.profile, installed, deps.readMcp()))
+        return JSON.stringify(buildAiEnvironment(deps.profile, installed, deps.readMcp(), deps.dshVersion))
       }
 
       if (args.action === 'check_updates') {
@@ -1104,6 +1116,7 @@ export function createMarketAiToolDefinition(deps: MarketAiToolDeps): Record<str
           readonly restore?: string
           readonly selectionRestore?: SelectionRestore
           readonly deferred?: 'restart'
+          readonly compatibilityDirection?: CompatibilityDirection
           readonly error?: string
         }[] = []
         let applied = 0
@@ -1153,6 +1166,9 @@ export function createMarketAiToolDefinition(deps: MarketAiToolDeps): Record<str
             const failureReason = app === 'applied' || app === 'restart-required'
               ? undefined
               : extractUpdateFailureReason(outcome.result)
+            const compatDirection = app !== 'applied' && app !== 'restart-required' && outcome.result.error?.code === 'incompatible-version'
+              ? classifyIncompatibleItems(outcome.result.error.incompatible, deps.dshVersion).direction
+              : undefined
             results.push({
               packageName: item.packageName,
               from: outcome.from || item.installed,
@@ -1161,6 +1177,7 @@ export function createMarketAiToolDefinition(deps: MarketAiToolDeps): Record<str
               ...(item.self ? { self: true } : {}),
               ...(outcome.restore ? { restore: outcome.restore.application } : {}),
               ...(selectionRestore !== undefined ? { selectionRestore } : {}),
+              ...(compatDirection !== undefined ? { compatibilityDirection: compatDirection } : {}),
               ...(failureReason !== undefined ? { error: failureReason } : {}),
             })
           } catch (error) {
@@ -1340,13 +1357,25 @@ export function createMarketAiToolDefinition(deps: MarketAiToolDeps): Record<str
             ...(installResult.packageResult?.kind !== undefined ? { packageKind: installResult.packageResult.kind } : {}),
             ...(installResult.packageResult?.timedOut !== undefined ? { timedOut: installResult.packageResult.timedOut } : {}),
           })
+          const isIncompat = installResult.error?.code === 'incompatible-version'
+          const compatDirection: CompatibilityDirection | undefined = isIncompat
+            ? classifyIncompatibleItems(installResult.error?.incompatible, deps.dshVersion).direction
+            : undefined
+          const nextStep = compatDirection === 'host-too-old'
+            ? 'Explain that the running DSH client is older than the version this plugin requires, and advise the user to upgrade DSH before installing. Do not retry blindly.'
+            : compatDirection === 'plugin-too-old'
+              ? 'Explain that this plugin version only supports older DSH releases and is incompatible with the running DSH; suggest checking the repository or a newer compatible release without retrying blindly.'
+              : compatDirection === 'mismatch'
+                ? 'Explain the DSH version mismatch and exact requirements to the user without retrying blindly.'
+                : 'Report the failure reason and errorCode to the user without retrying blindly.'
           return JSON.stringify({
             outcome: 'failed' as const,
             installed: false,
             target: spec,
             ...(installResult.error?.code ? { errorCode: installResult.error.code } : {}),
+            ...(compatDirection !== undefined ? { compatibilityDirection: compatDirection } : {}),
             error: diagnostics.modelError,
-            nextStep: 'Report the failure reason and errorCode to the user without retrying blindly.',
+            nextStep,
           })
         }
         return JSON.stringify({
@@ -1396,6 +1425,7 @@ export function createMarketAiToolDefinition(deps: MarketAiToolDeps): Record<str
             sort: args.sort,
             offset: args.offset,
             limit: args.limit,
+            dshVersion: deps.dshVersion,
           }))
         case 'search':
           return JSON.stringify(searchAiCatalog(catalogResult.catalog, catalogResult.stale, installed.packages, {
@@ -1410,6 +1440,7 @@ export function createMarketAiToolDefinition(deps: MarketAiToolDeps): Record<str
             sort: args.sort,
             offset: args.offset,
             limit: args.limit,
+            dshVersion: deps.dshVersion,
           }))
         case 'detail': {
           if (args.targets !== undefined && args.targets.length > 0) {
@@ -1417,7 +1448,7 @@ export function createMarketAiToolDefinition(deps: MarketAiToolDeps): Record<str
               ...(args.target?.trim() ? [args.target.trim()] : []),
               ...args.targets,
             ]
-            const result = lookupAiCatalogDetails(catalogResult.catalog, installed.packages, batch, args.lang)
+            const result = lookupAiCatalogDetails(catalogResult.catalog, installed.packages, batch, args.lang, deps.dshVersion)
             const status = result.entries.length === 0 ? 'not-found' : result.notFound.length > 0 ? 'partial' : 'found'
             return JSON.stringify({
               status,
@@ -1427,7 +1458,7 @@ export function createMarketAiToolDefinition(deps: MarketAiToolDeps): Record<str
             })
           }
           const target = args.target?.trim() ?? ''
-          const entry = lookupAiCatalogDetail(catalogResult.catalog, installed.packages, target, args.lang)
+          const entry = lookupAiCatalogDetail(catalogResult.catalog, installed.packages, target, args.lang, deps.dshVersion)
           if (entry === null) {
             const safeTarget = sanitizeUntrustedText(target, 120)
             return JSON.stringify({

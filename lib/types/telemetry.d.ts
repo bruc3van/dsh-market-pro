@@ -1,6 +1,7 @@
+import { detectDshVersion } from './hostRuntime.ts';
 import type { TelemetryClientEvent, TelemetryErrorCode, TelemetryHostKind, TelemetryOs } from './contract.ts';
 import { classifyInstallError } from './telemetryError.ts';
-export { classifyInstallError };
+export { classifyInstallError, detectDshVersion };
 export declare const DEFAULT_TELEMETRY_ENDPOINT = "https://dsh-market-pro.com/api/telemetry";
 export interface TelemetryStoragePort {
     read(): {
@@ -58,8 +59,6 @@ export interface TelemetryReporter {
 export declare function telemetryDay(now?: Date): string;
 /** Respect standard opt-out, DSH host opt-out, and CI environment variables. */
 export declare function isTelemetryEnvSuppressed(env?: Readonly<Record<string, string | undefined>>): boolean;
-/** Best-effort read of the running DSH host package version. */
-export declare function detectDshVersion(): string;
 /** Detect whether the host process is running inside a desktop wrapper. */
 export declare function detectHostKind(env?: Readonly<Record<string, string | undefined>>, versions?: Readonly<Record<string, string | undefined>>): TelemetryHostKind;
 export declare function detectOs(platform?: string): TelemetryOs;

@@ -1,3 +1,5 @@
+/** Feed installation metadata is data, never a shell command. */
+import { type CompatFallbackInfo } from './compatibility.ts';
 /** Maximum length accepted for a normalized repository subdirectory on the wire. */
 export declare const MAX_REPO_DIRECTORY_LENGTH = 1024;
 /** A GitHub repository and optional normalized subdirectory path. */
@@ -24,13 +26,17 @@ export declare function parseGitHubRepoSlug(value: string, options?: {
  */
 export declare function parseGitHubInstallSpec(spec: string): GitHubLocator | null;
 export declare function isInstallSpec(value: string): boolean;
+export type CompatFallbackTargetInfo = CompatFallbackInfo;
+export interface InstallTargetInfo {
+    install: string;
+    profile: string;
+    note: string;
+    dshEngine?: string;
+    compatFallback?: CompatFallbackTargetInfo;
+}
 export interface InstallInfo {
     mode: 'command' | 'manual';
-    targets: {
-        install: string;
-        profile: string;
-        note: string;
-    }[];
+    targets: InstallTargetInfo[];
     tasks: string[];
     requirements: string[];
     note: string;

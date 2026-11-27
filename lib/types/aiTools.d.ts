@@ -1,4 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis';
+import { type IncompatibleRequirementItem } from './compatibility.ts';
 import type { MarketCatalogResult, MarketInstalledResult, McpHostContext, SafeMarketSettings } from './contract.ts';
 export declare const MARKET_TOOL_NAME = "dsh_market_pro";
 /**
@@ -41,9 +42,7 @@ export interface HostPluginManagerUpdateFace {
             readonly prerelease: boolean;
             readonly deprecated?: string;
             readonly bundle: boolean;
-            readonly incompatible?: {
-                readonly requirements: Readonly<Record<string, string>>;
-            };
+            readonly incompatible?: IncompatibleRequirementItem;
         }[];
     } | {
         readonly status: 'refused';
@@ -69,6 +68,7 @@ export interface HostPluginManagerUpdateFace {
             readonly error?: {
                 readonly code?: string;
                 readonly diagnostic?: string;
+                readonly incompatible?: readonly IncompatibleRequirementItem[];
             };
             readonly packageResult?: {
                 readonly output?: string;
@@ -113,12 +113,7 @@ export interface HostPluginManagerUpdateFace {
         readonly error?: {
             readonly code: string;
             readonly diagnostic?: string;
-            readonly incompatible?: readonly {
-                readonly name: string;
-                readonly version: string;
-                readonly requirements?: Readonly<Record<string, string>>;
-                readonly peers?: Readonly<Record<string, string>>;
-            }[];
+            readonly incompatible?: readonly IncompatibleRequirementItem[];
         };
         readonly warnings?: readonly string[];
         readonly packageResult?: {
@@ -179,6 +174,7 @@ export interface PluginAiInstallOutcome {
 }
 export interface MarketAiToolDeps {
     readonly profile: string;
+    readonly dshVersion?: string;
     readonly readSettings: () => SafeMarketSettings;
     readonly readCatalog: (force: boolean, signal?: AbortSignal) => Promise<MarketCatalogResult>;
     readonly listInstalled: () => Promise<MarketInstalledResult>;

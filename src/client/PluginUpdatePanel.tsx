@@ -1,6 +1,7 @@
 import { MarketButton } from './MarketButton.tsx'
 import { useId } from 'react'
 import { IconCloseOutlineRegular, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
+import { formatUpdateChoiceBlocked } from './compatCopy.ts'
 import type { MarketLocale } from './copy.ts'
 import { isBundleInUse, type PluginUpdater, type UpdateState } from './pluginUpdates.ts'
 
@@ -39,7 +40,7 @@ export function PluginUpdatePanel({ open, state, updater, t, onClose }: {
                 {choice.version === recommended && <em className="dsh_market_updateBadge">{t('update.recommended')}</em>}
                 {choice.prerelease && <> · {t('update.prerelease')}</>}
                 {choice.deprecated !== undefined && <p>{t('update.deprecated', { reason: choice.deprecated })}</p>}
-                {choice.blocked && <p>{t('update.blocked', { reason: choice.blocked })}</p>}
+                {choice.blocked && <p>{formatUpdateChoiceBlocked(choice, t)}</p>}
               </span>
             </label>)}
           </div>

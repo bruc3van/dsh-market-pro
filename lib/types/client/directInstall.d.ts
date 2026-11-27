@@ -1,5 +1,6 @@
+import { type IncompatibleRequirementItem } from '../compatibility.ts';
 import { type InstallInfo } from '../installInfo.ts';
-import type { MarketInstalledPackage } from '../contract.ts';
+import type { MarketIncompatiblePlugin, MarketInstalledPackage } from '../contract.ts';
 type Reply<T> = {
     ok: true;
     value: T;
@@ -16,18 +17,13 @@ interface InstallResult {
     error?: {
         code: string;
         diagnostic?: string;
-        incompatible?: {
-            name: string;
-            version: string;
-            requirements?: Record<string, string>;
-            /** Before DSH 0.2.1-alpha.4. */
-            peers?: Record<string, string>;
-        }[];
+        incompatible?: readonly IncompatibleRequirementItem[];
     };
     packageResult?: {
         output?: string;
         kind?: string;
         timedOut?: boolean;
+        incompatible?: readonly IncompatibleRequirementItem[];
     };
 }
 export interface PluginRegistriesSnapshot {
@@ -78,6 +74,8 @@ export interface DirectState {
     manualTitle?: string;
     registry?: string | null;
     message: string;
+    errorCode?: string;
+    incompatible?: readonly MarketIncompatiblePlugin[];
     inspectError?: InspectRefusal;
     application?: string;
     pendingBuilds: string[];
@@ -135,7 +133,7 @@ export type DirectInstaller = ReturnType<typeof createDirectInstaller>;
  * drop any target that is now installed, and if the user has not manually edited
  * selection yet, automatically advance to the first uninstalled target.
  */
-export declare function reconcileSelectedTargets(targets: readonly InstallInfo['targets'][number][], selected: readonly number[], ownedIndex: ReadonlyMap<string, MarketInstalledPackage> | undefined, userTouched: boolean): number[];
+export declare function reconcileSelectedTargets(targets: readonly InstallInfo['targets'][number][], selected: readonly number[], ownedIndex: ReadonlyMap<string, MarketInstalledPackage> | undefined, userTouched: boolean, dshVersion?: string, fallbackRequirements?: readonly string[]): number[];
 /**
  * Whether a settled direct-install snapshot warrants re-reading the profile's
  * installed list. Avoids redundant reloads on `inspect` refusals or script

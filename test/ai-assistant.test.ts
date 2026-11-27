@@ -1687,3 +1687,174 @@ test('dsh_market_pro install_plugin hardens approvals, spec validation, diagnost
   assert.equal(cancelledRequestIds.length, 1)
   assert.equal(outcomes.length, 0)
 })
+
+test('aiSearch, buildAiEnvironment, and install_plugin expose bidirectional compatibility metadata', async () => {
+  const pluginNew = makePlugin({
+    fullName: 'acme/future-plugin',
+    name: 'future-plugin',
+    packageName: 'future-plugin',
+    category: 'dsh:subscription',
+    installStatus: 'command',
+    installInfo: {
+      mode: 'command',
+      targets: [{ install: 'future-plugin@2.0.0', profile: 'web', note: '', dshEngine: '>=0.3.0' }],
+      tasks: [],
+      requirements: ['dsh >=0.3.0'],
+      note: '',
+      manual: '',
+    },
+  })
+  const pluginFallback = makePlugin({
+    fullName: 'acme/legacy-fallback',
+    name: 'legacy-fallback',
+    packageName: 'legacy-fallback',
+    category: 'dsh:subscription',
+    installStatus: 'command',
+    installInfo: {
+      mode: 'command',
+      targets: [{
+        install: 'legacy-fallback@1.7.0',
+        profile: 'web',
+        note: '',
+        dshEngine: '^0.2.0',
+        compatFallback: { selectedVersion: '1.7.0', latestVersion: '1.17.0', latestEngine: '>=0.3.0' },
+      }],
+      tasks: [],
+      requirements: [],
+      note: '',
+      manual: '',
+    },
+  })
+  const catalog: MarketCatalog = {
+    items: [pluginNew, pluginFallback],
+    categories: [{ key: 'tools', zh: '工具', en: 'Tools', count: 2 }],
+    featured: { titleZh: '精选', titleEn: 'Picks', updatedAt: '2026-11-26', count: 2, entries: [] },
+    fetchedAt: '2026-11-26T00:00:00Z',
+    refreshedAt: '2026-11-26T00:00:00Z',
+    scanned: 2,
+  }
+  const installed: MarketInstalledResult = {
+    profile: 'web',
+    error: '',
+    packages: [{
+      packageName: 'broken-old',
+      version: '0.1.0',
+      description: 'old plugin',
+      repository: '',
+      self: false,
+      inBox: false,
+      unregistered: false,
+      enabled: false,
+      entries: [],
+      error: 'incompatible-version',
+      hostError: {
+        code: 'incompatible-version',
+        incompatible: [{ name: 'broken-old', version: '0.1.0', runtimeVersion: '0.2.2-rc.1', requirements: { 'engines.dsh': '^0.1.0' } }],
+      },
+      heldDown: false,
+    }],
+  }
+
+  const env = buildAiEnvironment('web', installed, { managerActive: true, tools: [], unmanaged: [], toolsError: '' }, '0.2.2-rc.1')
+  assert.equal(env.dshVersion, '0.2.2-rc.1')
+  assert.equal(env.installedPackages[0]?.hostError?.code, 'incompatible-version')
+  assert.equal(env.installedPackages[0]?.hostError?.direction, 'plugin-too-old')
+
+  const search = searchAiCatalog(catalog, false, installed.packages, { query: 'future-plugin', scope: 'all', dshVersion: '0.2.2-rc.1' })
+  assert.deepEqual(search.entries[0]?.compatibility, {
+    status: 'host-too-old',
+    required: 'DSH ＞=0.3.0',
+  })
+
+  const detail = lookupAiCatalogDetail(catalog, installed.packages, 'acme/legacy-fallback', 'zh', '0.2.2-rc.1')
+  assert.deepEqual(detail?.compatibility, {
+    status: 'fallback',
+    selectedVersion: '1.7.0',
+    latestVersion: '1.17.0',
+    required: 'DSH ＞=0.3.0',
+  })
+
+  for (const scenario of [
+    { engine: '>=0.3.0', expectedDir: 'host-too-old' },
+    { engine: '^0.1.0', expectedDir: 'plugin-too-old' },
+  ] as const) {
+    const tool = createMarketAiToolDefinition({
+      profile: 'web',
+      dshVersion: '0.2.2-rc.1',
+      readSettings: () => ({ enabled: true, aiAssistantEnabled: true }),
+      readCatalog: async () => ({ catalog, stale: false, error: '' }),
+      listInstalled: async () => installed,
+      readMcp: () => ({ managerActive: true, tools: [], unmanaged: [], toolsError: '' }),
+      getApprover: () => ({ request: async () => 'allowed-once' as const }),
+      pluginManager: () => ({
+        listBundles: async () => [],
+        inspect: async () => ({ status: 'accepted', kind: 'registry', name: 'demo', version: '1.0.0', registry: null }),
+        installBundle: async () => ({
+          changed: false,
+          application: 'failed',
+          error: {
+            code: 'incompatible-version',
+            incompatible: [{ name: 'demo', version: '1.0.0', runtimeVersion: '0.2.2-rc.1', requirements: { 'engines.dsh': scenario.engine } }],
+          },
+        }),
+        cancelInstall: async () => ({ status: 'cancelled' }),
+      }),
+    })
+    const raw = await tool.execute({ action: 'install_plugin', target: 'demo@1.0.0' }, { agent: { id: 'a1' } })
+    const parsed = JSON.parse(raw) as { compatibilityDirection?: string; nextStep: string }
+    assert.equal(parsed.compatibilityDirection, scenario.expectedDir)
+    assert.ok(parsed.nextStep.length > 0)
+  }
+
+  // update_plugins exposes directional unavailability reason & execution compatibilityDirection.
+  const updateTool = createMarketAiToolDefinition({
+    profile: 'web',
+    dshVersion: '0.2.2-rc.1',
+    readSettings: () => ({ enabled: true, aiAssistantEnabled: true }),
+    readCatalog: async () => ({ catalog, stale: false, error: '' }),
+    listInstalled: async () => installed,
+    readMcp: () => ({ managerActive: true, tools: [], unmanaged: [], toolsError: '' }),
+    getApprover: () => ({ request: async () => 'allowed-once' as const }),
+    pluginManager: () => ({
+      listBundles: async () => [{ name: 'demo', version: '1.0.0', installed: true, update: 'registry' }],
+      listVersions: async () => ({
+        status: 'listed',
+        installed: '1.0.0',
+        registry: 'https://registry.npmjs.org/',
+        versions: [
+          {
+            version: '3.0.0',
+            prerelease: false,
+            bundle: true,
+            incompatible: { name: 'demo', version: '3.0.0', requirements: { 'engines.dsh': '>=0.3.0' } },
+          },
+          { version: '2.0.0', prerelease: false, bundle: true },
+        ],
+      }),
+      updateBundle: async () => ({
+        from: '1.0.0',
+        to: '2.0.0',
+        step: 'install',
+        result: {
+          changed: false,
+          application: 'failed',
+          error: {
+            code: 'incompatible-version',
+            incompatible: [{ name: 'demo', version: '2.0.0', requirements: { 'engines.dsh': '^0.1.0' } }],
+          },
+        },
+      }),
+    }),
+  })
+  const blockedPlan = JSON.parse(await updateTool.execute({
+    action: 'update_plugins',
+    updates: [{ packageName: 'demo', version: '3.0.0' }],
+  }, { agent: { id: 'a1' } })) as { unavailable?: readonly { reason: string }[] }
+  assert.match(blockedPlan.unavailable?.[0]?.reason ?? '', /requires a newer DSH host/)
+
+  const failedExec = JSON.parse(await updateTool.execute({
+    action: 'update_plugins',
+    updates: [{ packageName: 'demo', version: '2.0.0' }],
+  }, { agent: { id: 'a1' } })) as { results: readonly { compatibilityDirection?: string }[] }
+  assert.equal(failedExec.results[0]?.compatibilityDirection, 'plugin-too-old')
+})

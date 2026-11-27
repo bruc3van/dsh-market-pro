@@ -68,6 +68,8 @@ export const safeMarketDomainState = z.object({
   marketSize: z.number().int().min(1),
   /** The catalog base the reduction came from, for the same reason. */
   catalogBase: z.string(),
+  /** Running DSH Host version the catalog reduction was derived for. */
+  dshVersion: z.string().default(''),
   /**
    * LEGACY — the pending-uninstall record an older build kept here. The
    * current build reads it once at boot to seed the file-backed seat (see
@@ -99,6 +101,7 @@ export const initialDomainState: SafeMarketDomainState = {
   catalogFormat: 1,
   marketSize: 1,
   catalogBase: '',
+  dshVersion: '',
   pendingUninstall: [],
   telemetryId: '',
   telemetryLastPingDay: '',
@@ -167,5 +170,6 @@ export function adoptDomainState(
     catalogFormat: stored.catalogFormat,
     marketSize: stored.marketSize,
     catalogBase: stored.catalogBase,
+    dshVersion: stored.dshVersion,
   }
 }

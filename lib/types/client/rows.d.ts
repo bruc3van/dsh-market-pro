@@ -72,4 +72,4 @@ export declare function pageOf<T>(items: readonly T[], requested: number, size?:
 /** Whether one skill survives the current query (including optional curated card copy). */
 export declare function matchesSkill(skill: MarketSkill, query: string, extra?: readonly string[]): boolean;
 /** The status a package row shows, from its own live facts. */
-export declare function stateOf(item: MarketInstalledPackage): 'readFailed' | 'unregistered' | 'disabled' | 'failed' | 'running' | 'installed';
+export declare function stateOf(item: MarketInstalledPackage): 'readFailed' | 'incompatible' | 'notRunning' | 'unregistered' | 'disabled' | 'failed' | 'running' | 'installed';

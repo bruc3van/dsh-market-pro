@@ -1,4 +1,5 @@
 /** Feed installation metadata is data, never a shell command. */
+import { extractDshEngineFromRequirements, type CompatFallbackInfo } from './compatibility.ts'
 import { REPOSITORY_SLUG_PATTERN } from './shapes.ts'
 
 const NPM_INSTALL_SPEC_PATTERN = /^((?:@[a-z0-9._-]+\/)?[a-z0-9][a-z0-9._-]*)(?:@[a-zA-Z0-9.*^~+_-][a-zA-Z0-9.*^~+_-]*)?$/
@@ -96,9 +97,19 @@ export function isInstallSpec(value: string): boolean {
       && (!url.hash || (/^#(?:[A-Za-z0-9_./-]+)?(?:&?path:\/?[A-Za-z0-9_./-]*)?$/.test(url.hash) && !url.hash.includes('..')))
   } catch { return false }
 }
+export type CompatFallbackTargetInfo = CompatFallbackInfo
+
+export interface InstallTargetInfo {
+  install: string
+  profile: string
+  note: string
+  dshEngine?: string
+  compatFallback?: CompatFallbackTargetInfo
+}
+
 export interface InstallInfo {
   mode: 'command' | 'manual'
-  targets: { install: string; profile: string; note: string }[]
+  targets: InstallTargetInfo[]
   tasks: string[]
   requirements: string[]
   note: string
@@ -114,7 +125,23 @@ export function parseInstallInfo(value: unknown): InstallInfo | undefined {
   for (const entry of Array.isArray(raw.targets) ? raw.targets.slice(0, 30) : []) {
     if (!entry || typeof entry !== 'object' || typeof entry.install !== 'string' || !isInstallSpec(entry.install)) continue
     if (targets.some(t => t.install === entry.install && t.profile === text(entry.profile))) continue
-    targets.push({ install: entry.install, profile: text(entry.profile), note: text(entry.note) })
+    const dshEngine = typeof (entry as { dshEngine?: unknown }).dshEngine === 'string'
+      && (entry as { dshEngine: string }).dshEngine.trim() !== ''
+      ? (entry as { dshEngine: string }).dshEngine.trim().slice(0, 400)
+      : undefined
+    targets.push({
+      install: entry.install,
+      profile: text(entry.profile),
+      note: text(entry.note),
+      ...(dshEngine !== undefined ? { dshEngine } : {}),
+    })
   }
-  return { mode: raw.mode, targets, tasks: strings(raw.tasks), requirements: strings(raw.requirements), note: text(raw.note), manual: text(raw.manual_instructions) }
+  const requirements = strings(raw.requirements)
+  if (raw.mode === 'command' && targets.length === 1 && targets[0]!.dshEngine === undefined) {
+    const fallbackEngine = extractDshEngineFromRequirements(requirements)
+    if (fallbackEngine !== undefined) {
+      targets[0] = { ...targets[0]!, dshEngine: fallbackEngine }
+    }
+  }
+  return { mode: raw.mode, targets, tasks: strings(raw.tasks), requirements, note: text(raw.note), manual: text(raw.manual_instructions) }
 }

@@ -1,3 +1,4 @@
+import type { IncompatibleRequirementItem } from '../compatibility.ts';
 type Reply<T> = {
     ok: true;
     value: T;
@@ -16,12 +17,7 @@ export interface HostBundleRow {
 export interface HostBundleError {
     readonly code: string;
     readonly diagnostic?: string;
-    readonly incompatible?: readonly {
-        readonly name: string;
-        readonly version: string;
-        readonly runtimeVersion?: string;
-        readonly requirements?: Readonly<Record<string, string>>;
-    }[];
+    readonly incompatible?: readonly IncompatibleRequirementItem[];
 }
 export interface HostBundleInfo {
     readonly name: string;
@@ -52,10 +48,7 @@ export interface HostBundleInfo {
 export interface HostBundleChangeResult {
     readonly application: 'applied' | 'restart-required' | 'overridden' | 'failed' | 'cancelled';
     readonly restartReason?: string;
-    readonly error?: {
-        readonly code: string;
-        readonly diagnostic?: string;
-    };
+    readonly error?: HostBundleError;
 }
 export interface OfficialBundleHost {
     listBundles(): Promise<Reply<readonly HostBundleInfo[]>>;
@@ -104,6 +97,7 @@ export type OfficialBundlesNotice = {
     readonly kind: 'error';
     readonly packageName: string;
     readonly message: string;
+    readonly error?: HostBundleError;
 };
 export interface OfficialBundlesState {
     readonly status: 'idle' | 'loading' | 'ready' | 'unavailable' | 'error';

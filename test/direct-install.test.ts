@@ -478,3 +478,70 @@ test('directInstaller startManual supports local paths, custom registries, and p
     enabled: false,
   })
 })
+
+test('DirectState records structured incompatible error details and reconcileSelectedTargets filters incompatible targets', async () => {
+  const incompatible = [{
+    name: 'demo',
+    version: '2.0.0',
+    runtimeVersion: '0.2.2-rc.1',
+    requirements: { 'engines.dsh': '>=0.3.0' },
+  }]
+  const installer = createDirectInstaller(() => host({
+    installBundle: async () => ({
+      ok: true,
+      value: { application: 'failed', error: { code: 'incompatible-version', incompatible } },
+    }),
+  }))
+
+  await installer.start('demo@2.0.0')
+  const failed = installer.getSnapshot()
+  assert.equal(failed.phase, 'failed')
+  assert.equal(failed.errorCode, 'incompatible-version')
+  assert.deepEqual(failed.incompatible, incompatible)
+
+  // Starting a fresh install clears stale incompatibility error fields immediately.
+  installer.reset()
+  assert.equal(installer.getSnapshot().errorCode, undefined)
+  assert.equal(installer.getSnapshot().incompatible, undefined)
+
+  const targets = [
+    { install: 'new-only@2.0.0', profile: 'web', note: '', dshEngine: '>=0.3.0' },
+    { install: 'compat-pkg@1.0.0', profile: 'web', note: '', dshEngine: '>=0.2.0-rc.1 <0.3.0' },
+  ]
+
+  // Only compatible target survives automatic selection when dshVersion is provided.
+  assert.deepEqual(reconcileSelectedTargets(targets, [], undefined, false, '0.2.2-rc.1'), [1])
+  assert.deepEqual(reconcileSelectedTargets(targets, [0, 1], undefined, true, '0.2.2-rc.1'), [1])
+
+  // Single-target parseInstallInfo inherits `DSH ...` from requirements; multi-target leaves per-target engines clean.
+  const singleParsed = parseInstallInfo({
+    mode: 'command',
+    targets: [{ install: 'only-one@1.0.0', profile: 'web', note: '' }],
+    requirements: ['DSH >=0.3.0'],
+  })
+  assert.equal(singleParsed?.targets[0]?.dshEngine, '>=0.3.0')
+  assert.deepEqual(reconcileSelectedTargets(singleParsed!.targets, [], undefined, false, '0.2.2-rc.1', singleParsed!.requirements), [])
+
+  // Natural-language prose in `requirements` must not be promoted into a blocking `dshEngine`.
+  const proseParsed = parseInstallInfo({
+    mode: 'command',
+    targets: [{ install: 'prose-pkg@1.0.0', profile: 'web', note: '' }],
+    requirements: ['DSH >= 0.1.0-rc.6（宿主需包含 @deepseek-ai/dsh-web-app 组合）'],
+  })
+  assert.equal(proseParsed?.targets[0]?.dshEngine, undefined)
+  assert.deepEqual(reconcileSelectedTargets(proseParsed!.targets, [], undefined, false, '0.2.2-rc.5', proseParsed!.requirements), [0])
+
+  // packageResult.incompatible fallback is captured when error.incompatible is omitted.
+  const fallbackInstaller = createDirectInstaller(() => host({
+    installBundle: async () => ({
+      ok: true,
+      value: {
+        application: 'failed',
+        error: { code: 'incompatible-version' },
+        packageResult: { incompatible },
+      } as never,
+    }),
+  }))
+  await fallbackInstaller.start('demo@2.0.0')
+  assert.deepEqual(fallbackInstaller.getSnapshot().incompatible, incompatible)
+})
