@@ -1320,9 +1320,15 @@ export const cssText = `
   -webkit-box-orient: vertical;
   overflow: hidden;
   margin: 0;
+  border-radius: var(--dsw-radius-xs);
   font-size: 13px;
   line-height: 18px;
   color: var(--dsw-alias-label-tertiary);
+}
+.dsh_market_desc[data-clipped="true"] { cursor: help; }
+.dsh_market_desc:focus-visible {
+  outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  outline-offset: 2px;
 }
 .dsh_market_foot {
   display: flex;

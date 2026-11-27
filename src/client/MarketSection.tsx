@@ -1,5 +1,6 @@
 import { IconInfoOutlineRegular, Switch, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import { MarketButton } from './MarketButton.tsx'
+import { MarketDescription } from './MarketDescription.tsx'
 import type { DirectInstaller } from './directInstall.ts'
 import { loadingProgressOf } from './catalogCache.ts'
 import { MarketSelector } from './InstallModeSelector.tsx'
@@ -515,7 +516,7 @@ function InstalledCard({ t, english, item, matched, installed, snapshot, card, i
           </Tooltip>
         )}
       </div>
-      {description !== '' && <p className="dsh_market_desc" title={description}>{description}</p>}
+      {description !== '' && <MarketDescription text={description} />}
       {item.error !== '' && <p className="dsh_market_cardError">{t('installed.readFailed', { reason: item.error })}</p>}
       {item.error === '' && item.hostError !== undefined && (
         <p className="dsh_market_cardError">
@@ -1040,7 +1041,7 @@ function OfficialExperimentalCards({
                   )}
                 </div>
                 {display.description !== '' && (
-                  <p className="dsh_market_desc" title={display.description}>{display.description}</p>
+                  <MarketDescription text={display.description} />
                 )}
                 {bundle.error !== undefined && (
                   <p className="dsh_market_cardError">
@@ -1694,6 +1695,7 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
               ? catalogItemCompatibility(item, snapshot.dshVersion)
               : remainingCompat
             const canInstallMore = moreTargets && remainingCompat === undefined
+            const description = english ? item.descriptionEn || item.description : item.description
             return (
               <li key={marketKey(item)} className="dsh_market_card dsh_market_catalogCard">
                 <div className="dsh_market_head">
@@ -1739,7 +1741,7 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
                     item.disabled ? t('repository.disabled') : '',
                   ].filter(part => part !== '').join(' · ')}</span>
                 </p>
-                {item.description !== '' && <p className="dsh_market_desc">{english ? item.descriptionEn || item.description : item.description}</p>}
+                {description !== '' && <MarketDescription text={description} />}
                 <div className="dsh_market_foot">
                   <a className="dsh_market_link" href={item.url} target="_blank" rel="noreferrer">{t(item.fullName ? 'repo' : 'package.page')}</a>
                   {/* Manage updates using the installed package's exact identity. */}

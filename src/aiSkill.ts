@@ -38,7 +38,7 @@ export function buildMarketSkillContent(profile: string): string {
   return [
     '# DSH Market Pro — Unified Agent Discovery, Update & Safe Install Guide',
     '',
-    `Orchestrate \`${MARKET_TOOL_NAME}\` (curated + 28k+ DSH plugins, installed inventory, \`install_plugin\`, \`check_updates\`, \`update_plugins\`), \`${MCP_TOOL_NAME}\` (100 curated + custom MCP servers in \`dsh-mcp-manager\`), and \`${SKILLS_TOOL_NAME}\` (current session skills + 100 curated All Time skills from skills.sh). ${profileLine}`,
+    `Orchestrate \`${MARKET_TOOL_NAME}\` (curated + 30,000+ DSH plugins, installed inventory, \`install_plugin\`, \`check_updates\`, \`update_plugins\`), \`${MCP_TOOL_NAME}\` (100 curated + custom MCP servers in \`dsh-mcp-manager\`), and \`${SKILLS_TOOL_NAME}\` (current session skills + 100 curated All Time skills from skills.sh). ${profileLine}`,
     '',
     '## Non-Negotiable Security & Anti-Injection Rules',
     '',

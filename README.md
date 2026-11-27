@@ -7,13 +7,13 @@
 [![npm downloads](https://img.shields.io/npm/dw/dsh-market-pro?style=flat-square)](https://www.npmjs.com/package/dsh-market-pro)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue?style=flat-square)](https://github.com/bruc3van/dsh-market-pro/blob/master/LICENSE)
 
-**面向 Agent 的 DSH 插件、技能与 MCP 市场：29,000+ 已核实插件、100 个精选技能与 100 个精选 MCP 目录，内置 `/market-pro` AI 选型助手、一键批量更新与安装后安全审查。**
+**面向 Agent 的 DSH 插件、技能与 MCP 市场：30,000+ 已核实插件、100 个精选技能与 100 个精选 MCP 目录，内置 `/market-pro` AI 选型助手、一键批量更新与安装后安全审查。**
 
 中文 | [English](https://github.com/bruc3van/dsh-market-pro/blob/master/README_EN.md) | [官网与全量目录](https://dsh-market-pro.com) | [GitHub](https://github.com/bruc3van/dsh-market-pro) | [npm](https://www.npmjs.com/package/dsh-market-pro)
 
-> **DSH Market Pro** is an AI-native plugin, Agent Skills, and MCP marketplace for **DeepSeek Harness (DSH)** — featuring 29,000+ verified plugins, 100 curated skills, 100 curated MCP servers, and the built-in `/market-pro` AI discovery assistant. Browse the full directory online at [dsh-market-pro.com](https://dsh-market-pro.com/en/) or read the [English README](https://github.com/bruc3van/dsh-market-pro/blob/master/README_EN.md).
+> **DSH Market Pro** is an AI-native plugin, Agent Skills, and MCP marketplace for **DeepSeek Harness (DSH)** — featuring 30,000+ verified plugins, 100 curated skills, 100 curated MCP servers, and the built-in `/market-pro` AI discovery assistant. Browse the full directory online at [dsh-market-pro.com](https://dsh-market-pro.com/en/) or read the [English README](https://github.com/bruc3van/dsh-market-pro/blob/master/README_EN.md).
 
-DeepSeek Harness（DSH）的 AI 原生第三方插件市场（官网与在线目录：[dsh-market-pro.com](https://dsh-market-pro.com)）。基于每日核实的社区目录 [awesome-dsh-plugin-pro](https://github.com/bruc3van/awesome-dsh-plugin-pro)（覆盖 29,000+ 社区插件）、内置 100 个精选 Agent 技能与 100 个精选 MCP 目录，不仅让你在一个界面里完成插件浏览与安装、版本更新、精选技能零依赖直装与删除管理、精选 MCP 一键添加、MCP 服务器托管配置与测试连接弹窗诊断、安装后 AI 审查，更直接赋予 **DSH Agent 对话内查市场、选插件、挑技能、配 MCP、给方案与安全安装** 的原生能力——告别人工翻找。
+DeepSeek Harness（DSH）的 AI 原生第三方插件市场（官网与在线目录：[dsh-market-pro.com](https://dsh-market-pro.com)）。基于每日核实的社区目录 [awesome-dsh-plugin-pro](https://github.com/bruc3van/awesome-dsh-plugin-pro)（覆盖 30,000+ 社区插件）、内置 100 个精选 Agent 技能与 100 个精选 MCP 目录，不仅让你在一个界面里完成插件浏览与安装、版本更新、精选技能零依赖直装与删除管理、精选 MCP 一键添加、MCP 服务器托管配置与测试连接弹窗诊断、安装后 AI 审查，更直接赋予 **DSH Agent 对话内查市场、选插件、挑技能、配 MCP、给方案与安全安装** 的原生能力——告别人工翻找。
 
 ![插件市场主界面](https://raw.githubusercontent.com/bruc3van/dsh-market-pro/master/assets/screenshots/marketplace.png)
 
@@ -22,7 +22,7 @@ DeepSeek Harness（DSH）的 AI 原生第三方插件市场（官网与在线目
 - **面向 Agent 的 AI 原生选型、直装与批量更新（统一内置 Skill `/market-pro` + 插件 · 技能 · MCP 三大工具）**：
   - 安装并启用 `dsh-market-pro` 后，默认自动向当前 DSH 会话注册统一内置技能 **`market-pro`** 以及三大底层工具 **`dsh_market_pro`**（插件选型、兼容性检查、`install_plugin` 安全直装与批量更新）、**`dsh_skills_pro`**（100 精选技能检索、盘点与原生审批直装）、**`dsh_mcp_pro`**（精选与自定义 MCP 托管安装），无需手工配置，卸载或停用插件时自动清理。
   - **直接对话即可挑插件、装插件、选技能、配 MCP、一键更插件**：在任意会话中自然语言描述需求，或输入 **`/market-pro`** 显式唤起（支持跨插件/技能/MCP 联合选型与去重）；也可以在市场顶部点击 **「AI 帮我选插件」**、**「AI 帮我选技能」** 或 **「AI 帮我选 MCP」** 一键发起对话。
-  - **精准检索、环境盘点与兼容性诊断**：支持中文分词回退、中英多同义词并查、已装/已配项过滤与批量详情核对，直接读取本地缓存的编辑精选、2.9 万+ 全量插件目录、100 个精选技能与内置 100 个精选 MCP 目录；联合盘点当前环境已安装的插件、技能与 MCP 避免重复推荐，并在检索、详情与更新前自动识别插件与当前 DSH 版本的双向兼容性及多版本自动回退版本。
+  - **精准检索、环境盘点与兼容性诊断**：支持中文分词回退、中英多同义词并查、已装/已配项过滤与批量详情核对，直接读取本地缓存的编辑精选、30,000+ 全量插件目录、100 个精选技能与内置 100 个精选 MCP 目录；联合盘点当前环境已安装的插件、技能与 MCP 避免重复推荐，并在检索、详情与更新前自动识别插件与当前 DSH 版本的双向兼容性及多版本自动回退版本。
   - **纵深防注入、原生审批与零明文密钥**：所有检索与更新探测严格只读，对第三方元数据执行隐形 Unicode 剥离、尖括号中和与 `<untrusted_market_data>` / `<untrusted_mcp_data>` / `<untrusted_skill_data>` 协议边界隔离；插件安装经你确认后直接通过 `dsh_market_pro` 的 `install_plugin` 发起 DSH 原生审批与构建脚本（`pendingBuilds`）显式授权（标准模式即可直接使用；仅在 API 不可用或安装本地/非 GitHub·Gitee 来源时回退至 `plugin_manager`），插件批量更新（`update_plugins`）严格绑定你确认过的精确包名与版本、强制走 DSH 原生审批（fail-closed）并完整列出每一项，技能直装（`install_featured`）与 MCP 安装/启停（`install_featured` / `install_custom` / `set_enabled`）同样强制走原生审批，拒绝一切明文密钥并自动绑定 `${credential:REF}` 凭据模板。
   - **随时可控，兼顾零 Token 偏好**：在市场顶部的 **设置** 页签中可随时一键关闭或开启 **AI 选型助手（插件 · 技能 · MCP）**，关闭后立即撤回内置技能与全部工具、回归零常驻 Token；同时也支持一键开关社区目录联网加载、查看/关闭匿名统计，并在设置页内置永久 GitHub Star 支持入口，修改即时生效并随当前 profile 持久化。顶部操作栏直接展示 **刷新** 与 **仓库**，并在检测到任意已安装插件有新版时展示 **一键更新 (N)**。
 - **精选、官方实验性与全量目录**：剔除蹭标签与非插件项目。打开即展示编辑精选，提供 **官方实验性** 子页签与宿主实时同步管理 DSH 内置可选/实验性插件（支持按启用状态筛选、按需安装并启用、版本更新与卸载进度反馈），同时提供完整社区目录，支持按分类筛选、关键词与包名搜索、「全部」目录按**活跃热门 / Star 最多 / 最近更新**排序，以及在局部视图搜不到时的**跨范围一键引导**。
@@ -49,7 +49,7 @@ DeepSeek Harness（DSH）的 AI 原生第三方插件市场（官网与在线目
 
 | 对比维度 | DSH Market Pro（本插件） | DSH 官方发现页 (`dsh-plugin-market`) | 常见纯 UI / 泛收录社区市场 | 独立发现型 Skill / MCP 服务 |
 |---|---|---|---|---|
-| **数据源与筛选质量** | **严选真插件 + 精选技能 + 精选 MCP**：每日核验并剔除蹭标签、空仓与非插件项目；提供**编辑精选 + 2.9 万+ 全量插件目录 + 100 个精选技能 + 100 个精选 MCP**，内置国内镜像容灾（含技能 jsDelivr 回退）与本地持久化缓存 | 仅读取用户手动添加的 format-1 订阅索引，自身不内置社区目录 | 部分目录按 GitHub topic 泛抓取，容易混入非插件或无法安装的仓库，需人工甄别 | 依赖第三方聚合 API 或外部 CLI，对 DSH 插件结构与安装目标覆盖有限 |
+| **数据源与筛选质量** | **严选真插件 + 精选技能 + 精选 MCP**：每日核验并剔除蹭标签、空仓与非插件项目；提供**编辑精选 + 30,000+ 全量插件目录 + 100 个精选技能 + 100 个精选 MCP**，内置国内镜像容灾（含技能 jsDelivr 回退）与本地持久化缓存 | 仅读取用户手动添加的 format-1 订阅索引，自身不内置社区目录 | 部分目录按 GitHub topic 泛抓取，容易混入非插件或无法安装的仓库，需人工甄别 | 依赖第三方聚合 API 或外部 CLI，对 DSH 插件结构与安装目标覆盖有限 |
 | **对话内 AI 选型与配置** | **安装即默认开启，标准模式可用**：统一内置 `/market-pro` 技能与 `dsh_market_pro` + `dsh_skills_pro` + `dsh_mcp_pro` 工具，支持跨形态选型、兼容性诊断、`install_plugin` 原生审批直装与一键批量更新插件，以及安全安装/启停 MCP | 提供 `plugin_market` 工具，但**默认仅在 Creator 模式启用**，无配套选型技能与 MCP 安装能力 | 多数侧重界面点击浏览，不提供对话内 Agent 自主查库选型 | 可在对话中检索，但需额外配置独立 MCP 子进程或外部 CLI，缺少可视化管理界面 |
 | **环境感知与去重** | 自动联合盘点当前 profile **已安装插件 + 托管/静态 MCP 与工具组**，自动过滤已装项并检查双向 DSH 版本兼容性与兼容替代版本 | 标注订阅条目的安装状态，不含 MCP/技能联合盘点 | 多以卡片已安装徽章为主，不参与对话级能力规划 | 通常无法直接读取当前 DSH profile 的已安装插件与托管 MCP 状态 |
 | **一站式管理范围** | **插件（精选/官方实验性/全量/手动添加）+ 技能 + 精选与托管 MCP + 市场设置**四合一（支持热启停、有新版筛选与右上角 `一键更新 (N)`、精选 MCP 一键添加、转托管、凭据管理与工具弹窗） | 聚焦插件发现与管理，不含技能页和 MCP 托管界面 | 侧重插件浏览、评分或社区讨论，通常需另装插件管理 MCP 与技能 | 仅聚焦单一类型（只搜 Skill 或只搜 MCP），不含宿主插件管理 |
@@ -214,7 +214,7 @@ Agent 会通过 `dsh_skills_pro` 完成安全闭环：
 
 ## 相关项目
 
-- **[DSH Market Pro 官网与全量目录](https://dsh-market-pro.com)**：在线浏览全部 29,000+ DSH 社区插件、100 个精选 MCP 与官方发现页订阅源。
+- **[DSH Market Pro 官网与全量目录](https://dsh-market-pro.com)**：在线浏览全部 30,000+ DSH 社区插件、100 个精选 MCP 与官方发现页订阅源。
 
 - **[DSH Desktop Pro](https://github.com/bruc3van/dsh-desktop-pro)**：让 Agent 安全常驻桌面的独立 DeepSeek Harness 客户端。
 - **[awesome-dsh-plugin-pro](https://github.com/bruc3van/awesome-dsh-plugin-pro)**：经过每日核实的 DSH 社区插件目录，也是本市场的数据来源。

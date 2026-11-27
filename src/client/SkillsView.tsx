@@ -2,6 +2,7 @@ import { IconCloseOutlineRegular, IconInfoOutlineRegular, Modal, StateDot, TextS
 import { MarketSelector } from './InstallModeSelector.tsx'
 import { MarketButton } from './MarketButton.tsx'
 import { PluginLogo } from './PluginLogo.tsx'
+import { MarketDescription } from './MarketDescription.tsx'
 import { useEffect, useId, useMemo, useRef, useState, type ReactElement } from 'react'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type {
@@ -657,7 +658,7 @@ function InstalledSkillCard({ t, skill, originId, folderAvailable, deletingAny, 
           </span>
         )}
       </div>
-      <p className="dsh_market_desc">{description}</p>
+      <MarketDescription text={description} />
       <div className="dsh_market_foot">
         {folderAvailable && sourcePath && (
           <Tooltip label={sourcePath} side="top" portal maxWidth={320}>
@@ -792,7 +793,7 @@ function FeaturedSkillCard({ t, item, installed, onOpenDetail, onViewInstalled }
           </span>
         )}
       </p>
-      <p className="dsh_market_desc" title={description}>{description}</p>
+      <MarketDescription text={description} />
       <div className="dsh_market_foot">
         <a className="dsh_market_link" href={featuredSkillGithubUrl(item)} target="_blank" rel="noreferrer">
           {t('skills.featured.github')}

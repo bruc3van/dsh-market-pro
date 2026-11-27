@@ -14,6 +14,7 @@ import {
 import { MarketSelector } from './InstallModeSelector.tsx'
 import { MarketButton } from './MarketButton.tsx'
 import { PluginLogo } from './PluginLogo.tsx'
+import { MarketDescription } from './MarketDescription.tsx'
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type MutableRefObject, type ReactElement } from 'react'
 import type { McpToolGroup, McpUnmanagedServer } from '../contract.ts'
 import { isMcpStarting } from '../mcpShapes.ts'
@@ -824,7 +825,7 @@ function FeaturedMcpCard({ t, item, match, liveStatus, writable, onAdd, onViewCo
           </span>
         )}
       </div>
-      <p className="dsh_market_desc" title={description}>{description}</p>
+      <MarketDescription text={description} />
       <div className="dsh_market_foot dsh_market_mcpFeaturedFooter">
         <a className="dsh_market_link" href={item.homepage} target="_blank" rel="noreferrer">
           {t('mcp.featured.homepage')}
@@ -1665,7 +1666,7 @@ function McpCard({ t, row, customDescription, snapshot, controller, writable, to
         {adoptInfo !== null && !adoptInfo.failed && <BadgeHint label={adoptInfo.badge} tip={adoptInfo.tip} />}
         {plaintextTip !== '' && <BadgeHint label={t('mcp.badge.plaintext')} tip={plaintextTip} tone="warn" />}
       </div>
-      <p className="dsh_market_desc" title={description}>{description}</p>
+      <MarketDescription text={description} />
       <div className="dsh_market_mcpBody">
         {kind === 'locked' && row.source !== 'retained' && <p className="dsh_market_cardError">{t('mcp.lockedHint')}</p>}
         {missing > 0 && (
@@ -1810,7 +1811,7 @@ function StaticCard({ t, server, tools, conflict, snapshot, controller, writable
           />
         )}
       </div>
-      <p className="dsh_market_desc">{description}</p>
+      <MarketDescription text={description} />
       <div className="dsh_market_mcpBody">
         {conflict && !adoptedStopped && <p className="dsh_market_cardError">{t('mcp.static.conflict', { name: server.serverName })}</p>}
         {error !== undefined && (
