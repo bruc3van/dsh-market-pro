@@ -1,10 +1,12 @@
 import type { MarketCatalog } from './contract.ts';
+import { type ParsedSelectionMeta } from './selectionMeta.ts';
 /** Default feed and mirrors (including China-reachable npmmirror tarball) serve the same npm package dataset. */
 export declare const DEFAULT_CATALOG_BASE = "https://cdn.jsdelivr.net/npm/awesome-dsh-plugin-feed@latest/data/market-catalog-v4.json";
 export declare const CN_MIRROR_CATALOG_BASE = "https://registry.npmmirror.com/awesome-dsh-plugin-feed/latest";
 export declare const MIRROR_CATALOG_BASE = "https://unpkg.com/awesome-dsh-plugin-feed@latest/data/market-catalog-v4.json";
 /** Whether `base` points to an official public catalog source (never a custom/private feed). */
 export declare function isOfficialCatalogBase(base: string): boolean;
+export declare const TARBALL_SELECTION_META_PATH = "package/data/plugin-selection-meta.json";
 /**
  * The shape {@link deriveMarket} produces. A stored catalog records the
  * format it was derived under, and the cache gate refuses any other: a
@@ -18,83 +20,51 @@ export declare function isOfficialCatalogBase(base: string): boolean;
  * 8 — the editorial pick cap grows from 100 to 1000.
  * 9 — `publishedAt`, the feed's own publish stamp used for cross-mirror freshness comparison.
  * 10 — DSH runtime compatibility target selection (`dshEngine`, `compatFallback`) hydrated across subscription and repository cards.
+ * 11 — `plugin-selection-meta.json` sidecar keywords and weak-description Chinese summary hydration.
  */
-export declare const CATALOG_FORMAT = 10;
-/**
- * Where a parsed catalog survives a restart. The catalog source neither opens
- * nor closes this — the plugin body owns the domain's lifecycle and hands the
- * source a narrow port, so a deployment without durable storage can still run
- * the market from memory alone.
- */
+export declare const CATALOG_FORMAT = 11;
+/** Where a parsed catalog survives a restart. */
 export interface CatalogCache {
-    /**
-     * The last parse, the ETag it was derived with, and the base that served
-     * it. A record written before the mirror existed has no serving base; the
-     * empty string reads as "the primary answered" (see `attempt` below).
-     */
     read: () => {
         catalog: MarketCatalog | null;
         marketEtag: string;
         activeBase: string;
     };
-    /** Persist a fresh parse. Failures are the cache's own business. */
     write: (next: {
         catalog: MarketCatalog;
         marketEtag: string;
         activeBase: string;
     }) => void;
-    /** Resolves once the backing durable store has finished loading (or degraded to memory-only). */
     ready?: Promise<void>;
 }
 /** Deployment-varying knobs the plugin config owns. */
 export interface CatalogOptions {
-    /** A complete schema-3 catalog or legacy schema-2 JSON feed URL. */
     readonly base: string;
-    /** Legacy schema-2 size limit; schema 3 is never truncated. */
     readonly marketSize: number;
-    /** Durable seat for the parse; absent means memory-only. */
     readonly cache?: CatalogCache;
-    /** Aborted when the owning plugin tears down, cancelling in-flight background refreshes. */
     readonly disposeSignal?: AbortSignal;
-    /** Delay before launching the next mirror concurrently when no response headers arrive. */
     readonly hedgeDelayMs?: number;
-    /** Grace window before hedging a source whose headers already arrived but whose body download stalled. */
     readonly bodyHedgeDelayMs?: number;
-    /** Running DSH Host semantic version used for compatibility selection during catalog derivation. */
     readonly dshVersion?: string;
 }
 /**
  * Drop the redundant `subscription` payload when an editorial `featured` list
- * is already present. The client never renders `subscription` separately, so
- * omitting it trims ~6 MiB from disk persistence, startup validation, and RPC.
+ * is already present.
  */
 export declare function stripUnusedSubscription(catalog: MarketCatalog): MarketCatalog;
 /**
  * Parse the published market into the catalog the browser renders. The
  * publisher's file order is preserved. Only legacy schema-2 feeds are
- * truncated to marketSize; schema 3 carries the complete reviewed catalog.
- * @param body - the parsed catalog JSON body.
- * @param marketSize - legacy schema-2 row limit.
- * @returns the parsed and validated catalog.
- * @throws when the body is not a market this plugin understands.
+ * truncated to marketSize; schema 3/4 carry the complete reviewed catalog.
  */
-export declare function deriveMarket(body: unknown, marketSize: number, dshVersion?: string): MarketCatalog;
+export declare function deriveMarket(body: unknown, marketSize: number, dshVersion?: string, selectionMeta?: ParsedSelectionMeta): MarketCatalog;
 /** The catalog reader: memory first, then the network. */
 export interface CatalogSource {
-    /**
-     * Read the catalog.
-     * @param force - bypass the refresh interval (a user gesture, not a poll).
-     * @param signal - caller lifetime.
-     */
     read: (force: boolean, signal?: AbortSignal) => Promise<{
         catalog: MarketCatalog | null;
         stale: boolean;
         error: string;
     }>;
-    /**
-     * Kick off a non-blocking background refresh when no fresh catalog is cached
-     * yet, so opening the market page hits memory immediately.
-     */
     warmup: () => void;
 }
 /**

@@ -8,17 +8,28 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
+import { searchAiCatalog } from '../src/aiSearch.ts'
 import {
+  CATALOG_FORMAT,
   CN_MIRROR_CATALOG_BASE,
   createCatalogSource,
   DEFAULT_CATALOG_BASE,
   deriveMarket,
   MIRROR_CATALOG_BASE,
+  TARBALL_SELECTION_META_PATH,
 } from '../src/catalog.ts'
+import { runMirrorRace } from '../src/catalogTransport.ts'
+import {
+  hydrateCatalogWithSelectionMeta,
+  isSidecarVersionSkewed,
+  isWeakDescription,
+  parseSelectionMeta,
+  selectionMetaUrlOf,
+} from '../src/selectionMeta.ts'
 import type { MarketCatalog, MarketPlugin } from '../src/contract.ts'
 import { marketCatalogSchema, marketPluginSchema } from '../src/contract.ts'
 import { FEATURED_CATEGORY, isSafeBranchName } from '../src/shapes.ts'
-import { extractFileFromTgzResponse } from '../src/tarball.ts'
+import { extractFileFromTgzResponse, extractFilesFromTgzResponse } from '../src/tarball.ts'
 
 /** One valid market row, already in wire shape. */
 function plugin(overrides: Partial<MarketPlugin> = {}): MarketPlugin {
@@ -1087,7 +1098,7 @@ function buildTar(files: readonly { name: string; content: Buffer }[]): Buffer {
   return Buffer.concat(blocks)
 }
 
-test('npmmirror streams only the v4 catalog entry from the tarball, cancels the rest, and skips re-download on matching version', async () => {
+test('npmmirror streams only the v4 catalog and sidecar entries from the tarball, cancels the rest, and skips re-download on matching version', async () => {
   const { gzipSync } = await import('node:zlib')
   const { randomBytes } = await import('node:crypto')
   const fetch = stubFetch()
@@ -1097,11 +1108,20 @@ test('npmmirror streams only the v4 catalog entry from the tarball, cancels the 
     const v4Body = Buffer.from(JSON.stringify({
       schema_version: 2,
       source_fetched_at: '2026-11-20',
-      entries: [entry({ full_name: 'tarball/winner', stargazers_count: 99 })],
+      entries: [entry({ full_name: 'tarball/winner', stargazers_count: 99, description: '' })],
+    }))
+    const sidecarBody = Buffer.from(JSON.stringify({
+      feed_version: '0.20261120.1',
+      published_at: '2026-11-20T08:00:00Z',
+      source_fetched_at: null,
+      meta: {
+        'tarball/winner': { s: '从压缩包侧车元数据补充的中文摘要', k: ['tarball', '压缩包侧车'] },
+      },
     }))
     // Follow with an incompressible second file so early stream cancellation is observable.
     const tgz = gzipSync(buildTar([
       { name: 'package/data/market-catalog-v4.json', content: v4Body },
+      { name: 'package/data/plugin-selection-meta.json', content: sidecarBody },
       { name: 'package/data/market-catalog.json', content: randomBytes(128 * 1024) },
     ]))
 
@@ -1132,7 +1152,9 @@ test('npmmirror streams only the v4 catalog entry from the tarball, cancels the 
     const first = await pending
     assert.equal(first.error, '')
     assert.equal(first.catalog?.items[0]?.fullName, 'tarball/winner')
-    assert.equal(cancelled, true, 'tarball HTTP stream is cancelled once market-catalog-v4.json finishes')
+    assert.equal(first.catalog?.items[0]?.description, '从压缩包侧车元数据补充的中文摘要')
+    assert.deepEqual(first.catalog?.items[0]?.keywords, ['tarball', '压缩包侧车'])
+    assert.equal(cancelled, true, 'tarball HTTP stream is cancelled once v4 catalog and sidecar finish')
 
     // Revalidating when /latest reports the same version/integrity skips downloading the tarball completely.
     const recheck = source.read(true)
@@ -1635,4 +1657,600 @@ test('npmmirror allows official *.npmmirror.com tarball subdomains while still b
   } finally {
     fetch.restore()
   }
+})
+
+// ——— plugin-selection-meta sidecar ———
+
+function compactV4Feed(overrides: Record<string, unknown> = {}) {
+  return {
+    schema_version: 4,
+    feed_version: '0.20261127.5',
+    published_at: '2026-11-27T08:37:28.661Z',
+    source_fetched_at: '2026-11-26T22:58:34.231Z',
+    source_repo_count: 1,
+    repository_count: 1,
+    subscription_updated_at: '2026-11-27T08:37:28.661Z',
+    category_table: [['utilities', '实用工具', 'Utilities']],
+    entries: [
+      { n: 'tw93/Mole', d: 'Tw93 的开源电脑清理工具，清理 macOS / Windows 磁盘缓存与残留。', s: 76325, c: 0, is: 'none' },
+      { n: 'kedeshuai/dsh-plugin', d: '233', s: 5, c: 0, is: 'none' },
+      { n: 'lzszq/dsh-scholar', d: 'dsh-scholar', s: 12, c: 0, is: 'none' },
+      { n: 'demo/hype', d: '主打一个全能神器插件', s: 9, c: 0, is: 'none' },
+      { n: 'demo/solid-en', d: 'Local-first AI math visualization desktop app for geometry and charts.', s: 50, c: 0, is: 'none' },
+    ],
+    subscription: {
+      format: 1,
+      metadata: { categories: { utilities: { title: { zh: '实用工具', en: 'Utilities' } } } },
+      plugins: [
+        {
+          name: 'mole-plugin',
+          title: { zh: 'Mole · 电脑清理', en: 'Mole · Computer Cleanup' },
+          description: { zh: '官方订阅文案：分析磁盘占用并清理。', en: 'Official subscription copy.' },
+          repository: { url: 'https://github.com/tw93/Mole' },
+          metadata: { category: 'utilities', keywords: ['Mole'] },
+          versions: [{ version: '1.0.0', source: { type: 'npm', registry: 'https://registry.npmjs.org/' } }],
+        },
+      ],
+    },
+    ...overrides,
+  }
+}
+
+test('parseSelectionMeta and selectionMetaUrlOf handle live envelope shape, bounds, and URL mapping', () => {
+  assert.equal(CATALOG_FORMAT, 11)
+  assert.equal(TARBALL_SELECTION_META_PATH, 'package/data/plugin-selection-meta.json')
+  assert.equal(selectionMetaUrlOf(DEFAULT_CATALOG_BASE), 'https://cdn.jsdelivr.net/npm/awesome-dsh-plugin-feed@latest/data/plugin-selection-meta.json')
+  assert.equal(selectionMetaUrlOf(MIRROR_CATALOG_BASE), 'https://unpkg.com/awesome-dsh-plugin-feed@latest/data/plugin-selection-meta.json')
+  assert.equal(selectionMetaUrlOf(CN_MIRROR_CATALOG_BASE), null)
+  assert.equal(selectionMetaUrlOf('https://example.test/not-market-catalog-v4.json'), null)
+  assert.equal(selectionMetaUrlOf('https://example.test/market-v2.json'), null)
+
+  const parsed = parseSelectionMeta({
+    feed_version: '0.20261127.6',
+    published_at: '2026-11-27T08:49:42.008Z',
+    source_fetched_at: null,
+    meta: {
+      'tw93/Mole': {
+        s: '清理 Mac 和 Windows 系统中的缓存、残留与应用垃圾，并提供命令行和原生桌面工具',
+        k: ['system cleaner', 'System Cleaner', 'macos', '缓存清理', ...Array.from({ length: 20 }, (_, i) => `kw-${i}`)],
+      },
+      'bad-slug': { s: 'ignored', k: ['x'] },
+      'empty/entry': { s: '  ', k: [] },
+    },
+  })!
+  assert.equal(parsed.sourceFetchedAt, '')
+  assert.equal(parsed.entries.size, 1)
+  const mole = parsed.entries.get('tw93/mole')!
+  assert.equal(mole.keywords.length, 15)
+  assert.deepEqual(mole.keywords.slice(0, 3), ['system cleaner', 'macos', '缓存清理'])
+  assert.equal(parseSelectionMeta(null), undefined)
+  assert.equal(parseSelectionMeta({ meta: {} }), undefined)
+})
+
+test('isSidecarVersionSkewed tolerates minor CDN TTL skew and rejects stale divergence and invalid dates', () => {
+  assert.equal(
+    isSidecarVersionSkewed(
+      { feedVersion: '0.20261127.5', publishedAt: '2026-11-27T08:37:28.661Z' },
+      { feedVersion: '0.20261127.6', publishedAt: '2026-11-27T08:49:42.008Z' },
+    ),
+    false,
+  )
+  assert.equal(
+    isSidecarVersionSkewed(
+      { feedVersion: '0.20261127.5', publishedAt: '2026-11-27T08:37:28.661Z' },
+      { feedVersion: '0.20261101.1', publishedAt: '2026-11-01T00:00:00.000Z' },
+    ),
+    true,
+  )
+  assert.equal(
+    isSidecarVersionSkewed(
+      { feedVersion: '0.20261127.5', publishedAt: '' },
+      { feedVersion: '0.20261110.1', publishedAt: '' },
+    ),
+    true,
+  )
+  // Invalid calendar date (Feb 31) must not roll over into March and falsely trigger skew.
+  assert.equal(
+    isSidecarVersionSkewed(
+      { feedVersion: '0.20260303.1', publishedAt: '' },
+      { feedVersion: '0.20260231.1', publishedAt: '' },
+    ),
+    false,
+  )
+})
+
+test('createCatalogSource fetches sidecar for direct schema-4 feeds, tolerates minor skew, and reuses 304 on refresh', async () => {
+  const fetch = stubFetch()
+  try {
+    const seat = stubCache()
+    const source = createCatalogSource({ base: DEFAULT_CATALOG_BASE, marketSize: 200, cache: seat.cache })
+    const first = source.read(false)
+    assert.equal(fetch.calls[0]!.url, DEFAULT_CATALOG_BASE)
+    fetch.parked[0]!.resolve(jsonResponse(compactV4Feed(), '"cat-v1"'))
+    await tick()
+    assert.equal(fetch.calls.length, 2)
+    assert.equal(fetch.calls[1]!.url, 'https://cdn.jsdelivr.net/npm/awesome-dsh-plugin-feed@latest/data/plugin-selection-meta.json')
+    fetch.parked[1]!.resolve(jsonResponse({
+      feed_version: '0.20261127.6',
+      published_at: '2026-11-27T08:49:42.008Z',
+      source_fetched_at: null,
+      meta: {
+        'tw93/mole': { s: '侧车摘要不应覆盖官方或详尽描述', k: ['system cleaner', '缓存清理'] },
+        'kedeshuai/dsh-plugin': { s: '提供嵌入式C白盒测试技能，生成桩和测试骨架。', k: ['c-test', '白盒测试'] },
+        'lzszq/dsh-scholar': { s: '把研究对话、代码与手稿组织成可恢复的计算研究项目。', k: ['research', '学术研究'] },
+        'demo/hype': { s: '把工作区日志整理为可视化时间线并导出报告。', k: ['timeline'] },
+        'demo/solid-en': { s: '本地优先的数学几何可视化桌面工具。', k: ['geometry'] },
+      },
+    }, '"meta-v1"'))
+
+    const res1 = await first
+    assert.equal(res1.error, '')
+    assert.equal(seat.writes.at(-1)?.marketEtag, '"cat-v1"')
+    const mole = res1.catalog?.items.find(i => i.fullName === 'tw93/Mole')
+    assert.equal(mole?.description, 'Tw93 的开源电脑清理工具，清理 macOS / Windows 磁盘缓存与残留。')
+    assert.ok(mole?.keywords?.includes('system cleaner'))
+    assert.ok(mole?.keywords?.includes('缓存清理'))
+    assert.equal(res1.catalog?.items.find(i => i.fullName === 'kedeshuai/dsh-plugin')?.description, '提供嵌入式C白盒测试技能，生成桩和测试骨架。')
+    assert.equal(res1.catalog?.items.find(i => i.fullName === 'lzszq/dsh-scholar')?.description, '把研究对话、代码与手稿组织成可恢复的计算研究项目。')
+    assert.equal(res1.catalog?.items.find(i => i.fullName === 'demo/hype')?.description, '把工作区日志整理为可视化时间线并导出报告。')
+    assert.equal(res1.catalog?.items.find(i => i.fullName === 'demo/solid-en')?.description, 'Local-first AI math visualization desktop app for geometry and charts.')
+    assert.ok(res1.catalog?.items.find(i => i.fullName === 'demo/solid-en')?.keywords?.includes('geometry'))
+
+    // Next catalog 200 triggers conditional sidecar request; 304 reuses cached sidecar in memory.
+    const second = source.read(true)
+    assert.equal(fetch.calls[2]!.url, DEFAULT_CATALOG_BASE)
+    fetch.parked[2]!.resolve(jsonResponse(compactV4Feed(), '"cat-v2"'))
+    await tick()
+    assert.equal(fetch.calls.length, 4)
+    assert.equal((fetch.calls[3]!.init?.headers as Record<string, string>)['if-none-match'], '"meta-v1"')
+    fetch.parked[3]!.resolve(NOT_MODIFIED())
+    const res2 = await second
+    assert.equal(res2.error, '')
+    assert.ok(res2.catalog?.items.find(i => i.fullName === 'tw93/Mole')?.keywords?.includes('缓存清理'))
+  } finally {
+    fetch.restore()
+  }
+})
+
+test('createCatalogSource skips npmmirror tarball on direct sidecar 404, fails over multi-mirror skew, and self-heals transient outages', async () => {
+  const fetch = stubFetch()
+  try {
+    // 1. All direct JSON sidecar mirrors return 404 (no npmmirror tarball download!) -> catalog succeeds & preserves ETag.
+    const seat404 = stubCache()
+    const source404 = createCatalogSource({ base: DEFAULT_CATALOG_BASE, marketSize: 200, cache: seat404.cache, hedgeDelayMs: 5_000 })
+    const p1 = source404.read(false)
+    fetch.parked[0]!.resolve(jsonResponse(compactV4Feed(), '"cat-404"'))
+    await tick()
+    assert.equal(fetch.calls[1]!.url, 'https://cdn.jsdelivr.net/npm/awesome-dsh-plugin-feed@latest/data/plugin-selection-meta.json')
+    fetch.parked[1]!.resolve(new Response(null, { status: 404 }))
+    await tick()
+    assert.equal(fetch.calls[2]!.url, 'https://unpkg.com/awesome-dsh-plugin-feed@latest/data/plugin-selection-meta.json')
+    fetch.parked[2]!.resolve(new Response(null, { status: 404 }))
+    const res1 = await p1
+    assert.equal(fetch.calls.length, 3, 'direct sidecar 404 never triggers npmmirror tarball download')
+    assert.equal(res1.error, '')
+    assert.equal(res1.catalog?.items.find(i => i.fullName === 'kedeshuai/dsh-plugin')?.description, '233')
+    assert.equal(seat404.writes[0]?.marketEtag, '"cat-404"')
+
+    // 2. Multi-mirror severe version skew (> 7 days) on jsDelivr fails over to fresh unpkg sidecar.
+    const seatSkew = stubCache()
+    const sourceSkew = createCatalogSource({ base: DEFAULT_CATALOG_BASE, marketSize: 200, cache: seatSkew.cache, hedgeDelayMs: 5_000 })
+    const p2 = sourceSkew.read(false)
+    fetch.parked[3]!.resolve(jsonResponse(compactV4Feed(), '"cat-skew"'))
+    await tick()
+    assert.equal(fetch.calls[4]!.url, 'https://cdn.jsdelivr.net/npm/awesome-dsh-plugin-feed@latest/data/plugin-selection-meta.json')
+    fetch.parked[4]!.resolve(jsonResponse({
+      feed_version: '0.20261101.1',
+      published_at: '2026-11-01T00:00:00.000Z',
+      source_fetched_at: null,
+      meta: { 'kedeshuai/dsh-plugin': { s: '过期侧车摘要', k: ['stale'] } },
+    }, '"meta-skew"'))
+    await tick()
+    assert.equal(fetch.calls[5]!.url, 'https://unpkg.com/awesome-dsh-plugin-feed@latest/data/plugin-selection-meta.json')
+    fetch.parked[5]!.resolve(jsonResponse({
+      feed_version: '0.20261127.5',
+      published_at: '2026-11-27T08:37:28.661Z',
+      source_fetched_at: null,
+      meta: { 'kedeshuai/dsh-plugin': { s: '镜像故障转移后的有效摘要', k: ['recovered'] } },
+    }, '"meta-unpkg"'))
+    const res2 = await p2
+    assert.equal(res2.error, '')
+    assert.equal(res2.catalog?.items.find(i => i.fullName === 'kedeshuai/dsh-plugin')?.description, '镜像故障转移后的有效摘要')
+    assert.deepEqual(res2.catalog?.items.find(i => i.fullName === 'kedeshuai/dsh-plugin')?.keywords, ['recovered'])
+
+    // 3. Transient sidecar outage (503) omits marketEtag so subsequent force refresh self-heals instead of sticking on 304.
+    const seatTransient = stubCache()
+    const sourceTransient = createCatalogSource({ base: 'https://custom.example.test/data/market-catalog-v4.json', marketSize: 200, cache: seatTransient.cache })
+    const p3 = sourceTransient.read(false)
+    fetch.parked[6]!.resolve(jsonResponse(compactV4Feed(), '"cat-temp"'))
+    await tick()
+    fetch.parked[7]!.resolve(new Response(null, { status: 503 }))
+    const res3 = await p3
+    assert.equal(res3.error, '')
+    assert.equal(seatTransient.writes[0]?.marketEtag, '', 'transient sidecar outage omits marketEtag so future refresh can self-heal')
+
+    const p4 = sourceTransient.read(true)
+    assert.equal((fetch.calls[8]!.init?.headers as Record<string, string>)['if-none-match'], undefined)
+    fetch.parked[8]!.resolve(jsonResponse(compactV4Feed(), '"cat-temp"'))
+    await tick()
+    fetch.parked[9]!.resolve(jsonResponse({
+      feed_version: '0.20261127.5',
+      published_at: '2026-11-27T08:37:28.661Z',
+      source_fetched_at: null,
+      meta: { 'kedeshuai/dsh-plugin': { s: '恢复后的侧车摘要', k: ['healed'] } },
+    }, '"meta-healed"'))
+    const res4 = await p4
+    assert.equal(res4.catalog?.items.find(i => i.fullName === 'kedeshuai/dsh-plugin')?.description, '恢复后的侧车摘要')
+    assert.equal(seatTransient.writes[1]?.marketEtag, '"cat-temp"')
+  } finally {
+    fetch.restore()
+  }
+})
+
+test('sidecar cross-mirror stale guard preserves newer cached sidecar and disposeSignal aborts without writing cache', async () => {
+  const fetch = stubFetch()
+  try {
+    const seat = stubCache()
+    const source = createCatalogSource({ base: DEFAULT_CATALOG_BASE, marketSize: 200, cache: seat.cache, hedgeDelayMs: 5_000 })
+
+    // Seed from unpkg at 2026-11-27T08:40:00Z.
+    const seed = source.read(false)
+    fetch.parked[0]!.reject(new Error('jsdelivr down'))
+    await tick()
+    fetch.parked[1]!.reject(new Error('cn down'))
+    await tick()
+    fetch.parked[2]!.resolve(jsonResponse(compactV4Feed(), '"cat-unpkg"'))
+    await tick()
+    assert.equal(fetch.calls[3]!.url, 'https://unpkg.com/awesome-dsh-plugin-feed@latest/data/plugin-selection-meta.json')
+    fetch.parked[3]!.resolve(jsonResponse({
+      feed_version: '0.20261127.6',
+      published_at: '2026-11-27T08:40:00.000Z',
+      source_fetched_at: null,
+      meta: { 'kedeshuai/dsh-plugin': { s: '更新的 unpkg 侧车', k: ['fresh-unpkg'] } },
+    }, '"meta-unpkg"'))
+    await seed
+
+    // Now jsDelivr catalog succeeds, jsDelivr sidecar serves an older publish (08:10Z), and unpkg sidecar fails ->
+    // stale guard rejects older jsDelivr sidecar and preserves newer cached unpkg sidecar.
+    const refresh = source.read(true)
+    assert.equal(fetch.calls[4]!.url, MIRROR_CATALOG_BASE)
+    fetch.parked[4]!.resolve(jsonResponse(compactV4Feed(), '"cat-v2"'))
+    await tick()
+    assert.equal(fetch.calls[5]!.url, 'https://unpkg.com/awesome-dsh-plugin-feed@latest/data/plugin-selection-meta.json')
+    fetch.parked[5]!.reject(new Error('unpkg sidecar down'))
+    await tick()
+    assert.equal(fetch.calls[6]!.url, 'https://cdn.jsdelivr.net/npm/awesome-dsh-plugin-feed@latest/data/plugin-selection-meta.json')
+    fetch.parked[6]!.resolve(jsonResponse({
+      feed_version: '0.20261127.4',
+      published_at: '2026-11-27T08:10:00.000Z',
+      source_fetched_at: null,
+      meta: { 'kedeshuai/dsh-plugin': { s: '落后的 jsDelivr 侧车', k: ['lagging'] } },
+    }, '"meta-lagging"'))
+    const res = await refresh
+    assert.equal(res.catalog?.items.find(i => i.fullName === 'kedeshuai/dsh-plugin')?.description, '更新的 unpkg 侧车')
+
+    // Dispose abort during sidecar fetch aborts without writing cache.
+    const controller = new AbortController()
+    const abortSeat = stubCache()
+    const abortSource = createCatalogSource({
+      base: 'https://custom.example.test/data/market-catalog-v4.json',
+      marketSize: 200,
+      cache: abortSeat.cache,
+      disposeSignal: controller.signal,
+    })
+    const abortPending = abortSource.read(false)
+    fetch.parked[7]!.resolve(jsonResponse(compactV4Feed(), '"cat-abort"'))
+    await tick()
+    assert.equal(fetch.calls[8]!.url, 'https://custom.example.test/data/plugin-selection-meta.json')
+    controller.abort(new Error('disposed during sidecar'))
+    fetch.parked[8]!.reject(new Error('disposed during sidecar'))
+    const abortedRes = await abortPending
+    assert.equal(abortedRes.catalog, null)
+    assert.equal(abortSeat.writes.length, 0)
+
+    // Dispose abort right as catalog race resolves (before entering sidecar branch) must not commit unhydrated catalog.
+    const edgeController = new AbortController()
+    const edgeSeat = stubCache()
+    const edgeSource = createCatalogSource({
+      base: 'https://custom.example.test/data/market-catalog-v4.json',
+      marketSize: 200,
+      cache: edgeSeat.cache,
+      disposeSignal: edgeController.signal,
+    })
+    const edgePending = edgeSource.read(false)
+    edgeController.abort(new Error('disposed right before catalog resolve'))
+    fetch.parked[9]!.resolve(jsonResponse(compactV4Feed(), '"cat-edge-abort"'))
+    const edgeRes = await edgePending
+    assert.equal(edgeRes.catalog, null)
+    assert.equal(edgeSeat.writes.length, 0)
+    assert.equal(fetch.calls.length, 10, 'aborted catalog read must not launch sidecar fetch')
+  } finally {
+    fetch.restore()
+  }
+})
+
+test('transient sidecar 503 preserves valid in-memory sidecar hydration while clearing marketEtag to self-heal', async () => {
+  const fetch = stubFetch()
+  try {
+    const seat = stubCache()
+    const source = createCatalogSource({
+      base: 'https://custom.example.test/data/market-catalog-v4.json',
+      marketSize: 200,
+      cache: seat.cache,
+    })
+    const p1 = source.read(false)
+    fetch.parked[0]!.resolve(jsonResponse(compactV4Feed(), '"cat-1"'))
+    await tick()
+    fetch.parked[1]!.resolve(jsonResponse({
+      feed_version: '0.20261127.6',
+      published_at: '2026-11-27T08:49:42.008Z',
+      source_fetched_at: null,
+      meta: {
+        'kedeshuai/dsh-plugin': { s: '内存兜底中文摘要', k: ['cached-sidecar-kw'] },
+      },
+    }, '"meta-1"'))
+    const res1 = await p1
+    assert.equal(res1.catalog?.items.find(i => i.fullName === 'kedeshuai/dsh-plugin')?.description, '内存兜底中文摘要')
+    assert.equal(seat.writes[0]?.marketEtag, '"cat-1"')
+
+    // Force refresh gets a new 200 catalog, then sidecar fails with 503 -> keeps in-memory hydration fallback, omits marketEtag.
+    const p2 = source.read(true)
+    fetch.parked[2]!.resolve(jsonResponse(compactV4Feed(), '"cat-2"'))
+    await tick()
+    fetch.parked[3]!.resolve(new Response(null, { status: 503 }))
+    const res2 = await p2
+    assert.equal(res2.error, '')
+    assert.equal(res2.catalog?.items.find(i => i.fullName === 'kedeshuai/dsh-plugin')?.description, '内存兜底中文摘要')
+    assert.deepEqual(res2.catalog?.items.find(i => i.fullName === 'kedeshuai/dsh-plugin')?.keywords, ['cached-sidecar-kw'])
+    assert.equal(seat.writes[1]?.marketEtag, '', 'marketEtag cleared so next refresh self-heals')
+  } finally {
+    fetch.restore()
+  }
+})
+
+test('runMirrorRace handles empty target lists and synchronous evaluate throws cleanly', async () => {
+  const exhausted = await runMirrorRace<string>({
+    targets: [],
+    hedgeDelayMs: 50,
+    bodyHedgeDelayMs: 100,
+    attempt: async () => 'unused',
+    evaluate: value => ({ accept: true, value }),
+    onExhausted: () => 'empty-fallback',
+  })
+  assert.equal(exhausted, 'empty-fallback')
+
+  await assert.rejects(
+    runMirrorRace<string>({
+      targets: ['https://a.test', 'https://b.test'],
+      hedgeDelayMs: 500,
+      bodyHedgeDelayMs: 1000,
+      attempt: async () => 'ok',
+      evaluate: () => { throw new Error('evaluate boom') },
+      onExhausted: () => 'never',
+    }),
+    /evaluate boom/,
+  )
+})
+
+test('extractFilesFromTgzResponse isolates primary catalog from post-primary overflow/corruption and malformed tarball sidecars', async () => {
+  const { gzipSync } = await import('node:zlib')
+  const v4Body = Buffer.from('{"schema_version":4}')
+  const oldTgz = gzipSync(buildTar([{ name: 'package/data/market-catalog-v4.json', content: v4Body }]))
+  const extracted = await extractFilesFromTgzResponse(
+    new Response(oldTgz, { status: 200 }),
+    ['package/data/market-catalog-v4.json', 'package/data/market-catalog.json'],
+    ['package/data/plugin-selection-meta.json'],
+    1024 * 1024,
+  )
+  assert.deepEqual(extracted.primary, v4Body)
+  assert.equal(extracted.optional.size, 0)
+
+  // Post-primary oversized entry (> maxBytes) must not fail extraction of the already-captured primary file.
+  const overflowTgz = gzipSync(buildTar([
+    { name: 'package/data/market-catalog-v4.json', content: v4Body },
+    { name: 'package/data/huge-legacy.json', content: Buffer.alloc(128 * 1024, 0x61) },
+  ]))
+  const recoveredOverflow = await extractFilesFromTgzResponse(
+    new Response(overflowTgz, { status: 200 }),
+    ['package/data/market-catalog-v4.json'],
+    ['package/data/plugin-selection-meta.json'],
+    64 * 1024,
+  )
+  assert.deepEqual(recoveredOverflow.primary, v4Body)
+  assert.equal(recoveredOverflow.optional.size, 0)
+  assert.equal(recoveredOverflow.optionalInterrupted, true)
+
+  // Post-primary corrupt gzip tail when scanning for absent optional sidecar must still return primary.
+  const largerTgz = gzipSync(buildTar([
+    { name: 'package/data/market-catalog-v4.json', content: v4Body },
+    { name: 'package/data/trailing.bin', content: Buffer.alloc(64 * 1024, 0x61) },
+  ]))
+  const corruptedTail = Buffer.from(largerTgz)
+  for (let i = corruptedTail.length - 8; i < corruptedTail.length; i += 1) {
+    corruptedTail[i] = (corruptedTail[i]! ^ 0xff) & 0xff
+  }
+  const recoveredTail = await extractFilesFromTgzResponse(
+    new Response(corruptedTail, { status: 200 }),
+    ['package/data/market-catalog-v4.json'],
+    ['package/data/plugin-selection-meta.json'],
+    1024 * 1024,
+  )
+  assert.deepEqual(recoveredTail.primary, v4Body)
+  assert.equal(recoveredTail.optionalInterrupted, true)
+
+  // External abortSignal during post-primary optional scanning must NOT swallow AbortError.
+  const abortCtrl = new AbortController()
+  let pullCount = 0
+  const abortAfterPrimary = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      pullCount += 1
+      if (pullCount === 1) {
+        controller.enqueue(largerTgz.subarray(0, 200))
+        return
+      }
+      abortCtrl.abort(new Error('caller disposed'))
+      controller.error(new Error('caller disposed'))
+    },
+  })
+  await assert.rejects(
+    extractFilesFromTgzResponse(
+      new Response(abortAfterPrimary, { status: 200 }),
+      ['package/data/market-catalog-v4.json'],
+      ['package/data/plugin-selection-meta.json'],
+      1024 * 1024,
+      abortCtrl.signal,
+    ),
+    /caller disposed/,
+  )
+
+  // Tarball containing malformed JSON or optional interruption clears marketEtag on interruption so next refresh self-heals.
+  const fetch = stubFetch()
+  try {
+    const badSeat = stubCache()
+    const source = createCatalogSource({ base: CN_MIRROR_CATALOG_BASE, marketSize: 200, cache: badSeat.cache })
+    const badJsonTgz = gzipSync(buildTar([
+      { name: 'package/data/market-catalog-v4.json', content: Buffer.from(JSON.stringify(compactV4Feed())) },
+      { name: 'package/data/plugin-selection-meta.json', content: Buffer.from('{not-json') },
+    ]))
+    const pending = source.read(false)
+    fetch.parked[0]!.resolve(new Response(JSON.stringify({
+      version: '0.20261127.5',
+      dist: { tarball: 'https://cdn.npmmirror.com/packages/awesome-dsh-plugin-feed/0.20261127.5/feed.tgz' },
+    }), { status: 200 }))
+    await tick()
+    fetch.parked[1]!.resolve(new Response(badJsonTgz, { status: 200 }))
+    const res = await pending
+    assert.equal(res.error, '')
+    assert.equal(res.catalog?.items.find(i => i.fullName === 'kedeshuai/dsh-plugin')?.description, '233')
+
+    // Interrupted optional tarball read omits marketEtag so subsequent /latest match self-heals.
+    const healSeat = stubCache()
+    const healSource = createCatalogSource({ base: CN_MIRROR_CATALOG_BASE, marketSize: 200, cache: healSeat.cache })
+    const healCatalogBytes = Buffer.from(JSON.stringify(compactV4Feed()))
+    const interruptedTgz = gzipSync(buildTar([
+      { name: 'package/data/market-catalog-v4.json', content: healCatalogBytes },
+      { name: 'package/data/trailing.bin', content: Buffer.alloc(64 * 1024, 0x62) },
+    ]))
+    const badEndTgz = Buffer.from(interruptedTgz)
+    for (let i = badEndTgz.length - 8; i < badEndTgz.length; i += 1) {
+      badEndTgz[i] = (badEndTgz[i]! ^ 0xff) & 0xff
+    }
+    const pHeal1 = healSource.read(false)
+    fetch.parked[2]!.resolve(new Response(JSON.stringify({
+      version: '0.20261127.6',
+      dist: { tarball: 'https://cdn.npmmirror.com/packages/awesome-dsh-plugin-feed/0.20261127.6/feed.tgz', integrity: 'sha512-same' },
+    }), { status: 200 }))
+    await tick()
+    fetch.parked[3]!.resolve(new Response(badEndTgz, { status: 200 }))
+    const healRes1 = await pHeal1
+    assert.equal(healRes1.error, '')
+    assert.equal(healSeat.writes[0]?.marketEtag, '', 'interrupted tarball sidecar omits versionTag so next refresh self-heals')
+  } finally {
+    fetch.restore()
+  }
+})
+
+test('isWeakDescription and hydrateCatalogWithSelectionMeta respect protection and disclaimer guards', () => {
+  assert.equal(isWeakDescription('', { name: 'x', fullName: 'o/x' }), true)
+  assert.equal(isWeakDescription('https://example.com', { name: 'x', fullName: 'o/x' }), true)
+  assert.equal(isWeakDescription('dsh-scholar', { name: 'dsh-scholar', fullName: 'lzszq/dsh-scholar' }), true)
+  assert.equal(isWeakDescription('DSH plugin', { name: 'x', fullName: 'o/x' }), true)
+  assert.equal(isWeakDescription('记忆经验', { name: 'dsh-memory', fullName: 'hong1413/dsh-memory' }), true)
+  assert.equal(isWeakDescription('Local-first AI math visualization desktop app.', { name: 'GeoChat', fullName: 'tiwe0/GeoChat' }), false)
+  assert.equal(isWeakDescription('HOI4 模组制作全能工具包，可以制作、检查、修改自己的模组。', { name: 'dsh-hoi4-modding', fullName: 'Kiant98/dsh-hoi4-modding' }), false)
+
+  const hugeDupMeta = parseSelectionMeta({
+    meta: {
+      'o/many': {
+        s: '摘要',
+        k: [...Array.from({ length: 50 }, () => 'dup-kw'), 'unique-1', 'unique-2', ...Array.from({ length: 500 }, (_, i) => `extra-${i}`)],
+      },
+    },
+  })!
+  assert.equal(hugeDupMeta.entries.get('o/many')?.keywords.length, 15)
+  assert.deepEqual(hugeDupMeta.entries.get('o/many')?.keywords.slice(0, 3), ['dup-kw', 'unique-1', 'unique-2'])
+
+  const parsedMeta = parseSelectionMeta({
+    feed_version: '0.20261127.6',
+    published_at: '2026-11-27T08:49:42Z',
+    source_fetched_at: null,
+    meta: {
+      'o/disclaimer': { s: '公开信息不足以判断具体业务。', k: ['fallback-kw'] },
+      'o/empty-disclaimer': { s: '描述只说是插件，无功能信息可查，按最中性类目归档。', k: ['empty-kw'] },
+      'o/sub': { s: '侧车摘要', k: ['sidecar-kw'] },
+    },
+  })!
+  const baseCatalog: MarketCatalog = {
+    items: [
+      plugin({ fullName: 'o/disclaimer', name: 'disclaimer', description: 'test' }),
+      plugin({ fullName: 'o/empty-disclaimer', name: 'empty-disclaimer', description: '' }),
+      plugin({ fullName: 'o/sub', name: 'sub', description: 'short' }),
+    ],
+    categories: [{ key: 'dev', zh: '开发', en: 'Dev', count: 3 }],
+    featured: {
+      titleZh: '编辑精选',
+      titleEn: "Editor's Picks",
+      updatedAt: '2026-11-27',
+      count: 2,
+      entries: [
+        { item: plugin({ fullName: 'o/sub', name: 'sub', packageName: '@o/sub-pkg', description: '官方订阅文案' }), reason: '' },
+        { item: plugin({ fullName: 'o/empty-disclaimer', name: 'empty-disclaimer', packageName: '@o/empty-pkg', description: '' }), reason: '' },
+      ],
+    },
+    fetchedAt: '2026-11-27T00:00:00Z',
+    refreshedAt: '2026-11-27T00:00:00Z',
+    scanned: 3,
+  }
+  const hydrated = hydrateCatalogWithSelectionMeta(baseCatalog, parsedMeta, new Set(['o/sub']))
+  // Uninformative disclaimer summary never replaces weak, empty, or featured descriptions, though keywords still attach.
+  assert.equal(hydrated.items[0]!.description, 'test')
+  assert.deepEqual(hydrated.items[0]!.keywords, ['fallback-kw'])
+  assert.equal(hydrated.items[1]!.description, '')
+  assert.deepEqual(hydrated.items[1]!.keywords, ['empty-kw'])
+  // Protected subscription repo never has its description overwritten, and monorepo package entry still gets keywords by fullName.
+  assert.equal(hydrated.items[2]!.description, 'short')
+  assert.deepEqual(hydrated.items[2]!.keywords, ['sidecar-kw'])
+  assert.equal(hydrated.featured!.entries[0]!.item.description, '官方订阅文案')
+  assert.deepEqual(hydrated.featured!.entries[0]!.item.keywords, ['sidecar-kw'])
+  assert.equal(hydrated.featured!.entries[1]!.item.description, '')
+  assert.deepEqual(hydrated.featured!.entries[1]!.item.keywords, ['empty-kw'])
+})
+
+test('searchAiCatalog matches and ranks plugins via hydrated sidecar keywords without weight changes', () => {
+  const parsedMeta = parseSelectionMeta({
+    feed_version: '0.20261127.6',
+    published_at: '2026-11-27T08:49:42Z',
+    source_fetched_at: null,
+    meta: {
+      'tw93/mole': {
+        s: '清理 Mac 和 Windows 系统中的缓存、残留与应用垃圾',
+        k: ['system cleaner', '缓存清理', 'macos'],
+      },
+    },
+  })!
+  const catalog = deriveMarket(compactV4Feed({
+    entries: [
+      { n: 'tw93/Mole', d: 'Open-source maintenance tool for desktop computers.', s: 100, c: 0, is: 'none' },
+      { n: 'other/unrelated', d: 'Unrelated tool.', s: 5000, c: 0, is: 'none' },
+    ],
+    subscription: {
+      format: 1,
+      metadata: { categories: { utilities: { title: { zh: '实用工具', en: 'Utilities' } } } },
+      plugins: [
+        {
+          name: 'mole-plugin',
+          title: { zh: 'Mole', en: 'Mole' },
+          description: { zh: '系统辅助插件', en: 'Desktop helper' },
+          repository: { url: 'https://github.com/tw93/Mole' },
+          metadata: { category: 'utilities', keywords: [] },
+          versions: [{ version: '1.0.0', source: { type: 'npm', registry: 'https://registry.npmjs.org/' } }],
+        },
+      ],
+    },
+  }), 200, undefined, parsedMeta)
+
+  const zhHit = searchAiCatalog(catalog, false, [], { query: '缓存清理' })
+  assert.equal(zhHit.entries[0]?.fullName, 'tw93/Mole')
+  const enHit = searchAiCatalog(catalog, false, [], { query: 'system cleaner' })
+  assert.equal(enHit.entries[0]?.fullName, 'tw93/Mole')
 })

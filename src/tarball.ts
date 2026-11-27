@@ -50,22 +50,32 @@ function parsePaxPath(data: Buffer): string | undefined {
   return undefined
 }
 
+export interface ExtractedTgzFiles {
+  readonly primary: Buffer
+  readonly optional: ReadonlyMap<string, Buffer>
+  readonly optionalInterrupted: boolean
+}
+
 /**
  * Extract the highest-priority matching file from a gzipped tar response
- * stream. When the primary target (`targetPaths[0]`) finishes, the underlying
- * HTTP stream is cancelled immediately so the remaining archive is never
- * downloaded. If a lower-priority fallback path appears earlier in the tar
- * stream, it is retained while scanning continues for the primary target.
+ * stream, optionally capturing sidecar files in the same single pass. When
+ * the primary target (`targetPaths[0]`) and all requested `optionalPaths`
+ * finish, the underlying HTTP stream is cancelled immediately so the remaining
+ * archive is never downloaded. Missing optional paths do not fail extraction.
  * @param response - HTTP 200 response whose body is a `.tgz` stream.
- * @param targetPaths - Normalized paths in descending preference order.
+ * @param targetPaths - Normalized primary paths in descending preference order.
+ * @param optionalPaths - Normalized optional sidecar paths to capture if present.
  * @param maxBytes - Upper bound for both compressed download and decompressed output.
- * @returns The extracted file bytes.
+ * @param abortSignal - Caller abort signal; post-primary errors never swallow an external abort.
+ * @returns The extracted primary bytes, matched optional files, and whether optional scanning aborted early.
  */
-export async function extractFileFromTgzResponse(
+export async function extractFilesFromTgzResponse(
   response: Response,
   targetPaths: readonly string[],
+  optionalPaths: readonly string[],
   maxBytes: number,
-): Promise<Buffer> {
+  abortSignal?: AbortSignal,
+): Promise<ExtractedTgzFiles> {
   const tooLarge = `catalog exceeds the ${String(Math.round(maxBytes / (1024 * 1024)))} MiB size limit`
   if (Number(response.headers.get('content-length')) > maxBytes) {
     void response.body?.cancel().catch(() => undefined)
@@ -79,6 +89,11 @@ export async function extractFileFromTgzResponse(
     const path = normalizedTargets[i]!
     if (!targetRank.has(path)) targetRank.set(path, i)
   }
+  const optionalSet = new Set<string>()
+  for (const rawPath of optionalPaths) {
+    const normalized = normalizeTarPath(rawPath)
+    if (normalized !== '' && !targetRank.has(normalized)) optionalSet.add(normalized)
+  }
   const reader = response.body.getReader()
   const gunzip = createGunzip()
 
@@ -88,20 +103,37 @@ export async function extractFileFromTgzResponse(
   let phase: 'header' | 'body' | 'padding' = 'header'
   let remainingBody = 0
   let remainingPad = 0
-  let captureKind: 'none' | 'target' | 'longname' | 'pax' = 'none'
+  let captureKind: 'none' | 'target' | 'optional' | 'longname' | 'pax' = 'none'
   let captureRank = Number.POSITIVE_INFINITY
+  let captureOptionalPath = ''
   let capturedChunks: Buffer[] = []
   let nextLongName: string | undefined
   let nextPaxPath: string | undefined
   let found: Buffer | undefined
   let foundRank = Number.POSITIVE_INFINITY
+  const optionalFound = new Map<string, Buffer>()
+  let optionalInterrupted = false
   let doneParsing = false
   let streamError: unknown
 
   const resetCapture = (): void => {
     captureKind = 'none'
     captureRank = Number.POSITIVE_INFINITY
+    captureOptionalPath = ''
     capturedChunks = []
+  }
+
+  const hasFinalPrimary = (): boolean => found !== undefined && foundRank === 0
+  const canSwallowPostPrimaryError = (): boolean => hasFinalPrimary() && !abortSignal?.aborted
+  const interruptOptional = (): void => {
+    optionalInterrupted = true
+    doneParsing = true
+  }
+
+  const checkDone = (): void => {
+    if (hasFinalPrimary() && optionalFound.size === optionalSet.size) {
+      doneParsing = true
+    }
   }
 
   const commitTarget = (bytes: Buffer): void => {
@@ -109,7 +141,14 @@ export async function extractFileFromTgzResponse(
       found = bytes
       foundRank = captureRank
     }
-    if (foundRank === 0) doneParsing = true
+    checkDone()
+  }
+
+  const commitOptional = (bytes: Buffer): void => {
+    if (captureOptionalPath !== '' && !optionalFound.has(captureOptionalPath)) {
+      optionalFound.set(captureOptionalPath, bytes)
+    }
+    checkDone()
   }
 
   const processDecompressed = (chunk: Buffer): void => {
@@ -147,6 +186,9 @@ export async function extractFileFromTgzResponse(
         if (rank !== undefined && rank < foundRank) {
           captureKind = 'target'
           captureRank = rank
+        } else if (isRegularFile && optionalSet.has(resolvedPath) && !optionalFound.has(resolvedPath)) {
+          captureKind = 'optional'
+          captureOptionalPath = resolvedPath
         } else if (isLongName) captureKind = 'longname'
         else if (isPax) captureKind = 'pax'
 
@@ -157,6 +199,10 @@ export async function extractFileFromTgzResponse(
         } else {
           if (captureKind === 'target') {
             commitTarget(Buffer.alloc(0))
+            resetCapture()
+            if (doneParsing) break
+          } else if (captureKind === 'optional') {
+            commitOptional(Buffer.alloc(0))
             resetCapture()
             if (doneParsing) break
           }
@@ -173,6 +219,10 @@ export async function extractFileFromTgzResponse(
         if (remainingBody === 0) {
           if (captureKind === 'target') {
             commitTarget(capturedChunks.length === 1 ? capturedChunks[0]! : Buffer.concat(capturedChunks))
+            resetCapture()
+            if (doneParsing) break
+          } else if (captureKind === 'optional') {
+            commitOptional(capturedChunks.length === 1 ? capturedChunks[0]! : Buffer.concat(capturedChunks))
             resetCapture()
             if (doneParsing) break
           } else if (captureKind === 'longname') {
@@ -215,8 +265,13 @@ export async function extractFileFromTgzResponse(
     } catch (error) {
       if (!finished) {
         finished = true
-        streamError = error
-        rejectDone(error)
+        if (canSwallowPostPrimaryError()) {
+          interruptOptional()
+          resolveDone()
+        } else {
+          streamError = error
+          rejectDone(error)
+        }
         gunzip.destroy()
       }
     }
@@ -224,8 +279,13 @@ export async function extractFileFromTgzResponse(
   gunzip.on('error', (error) => {
     if (!finished) {
       finished = true
-      streamError = error
-      rejectDone(error)
+      if (canSwallowPostPrimaryError()) {
+        interruptOptional()
+        resolveDone()
+      } else {
+        streamError = error
+        rejectDone(error)
+      }
     }
   })
   gunzip.on('end', () => {
@@ -238,10 +298,26 @@ export async function extractFileFromTgzResponse(
   try {
     for (;;) {
       if (doneParsing || streamError !== undefined) break
-      const { done, value } = await reader.read()
+      let readResult: ReadableStreamReadResult<Uint8Array>
+      try {
+        readResult = await reader.read()
+      } catch (error) {
+        if (canSwallowPostPrimaryError()) {
+          interruptOptional()
+          break
+        }
+        throw error
+      }
+      const { done, value } = readResult
       if (done) break
       compressedBytes += value.byteLength
-      if (compressedBytes > maxBytes) throw new Error(tooLarge)
+      if (compressedBytes > maxBytes) {
+        if (canSwallowPostPrimaryError()) {
+          interruptOptional()
+          break
+        }
+        throw new Error(tooLarge)
+      }
       await new Promise<void>((resolve, reject) => {
         if (doneParsing || streamError !== undefined) {
           resolve()
@@ -249,8 +325,14 @@ export async function extractFileFromTgzResponse(
         }
         const onErr = (err: unknown): void => {
           cleanup()
-          if (doneParsing || streamError !== undefined) resolve()
-          else reject(err)
+          if (doneParsing || streamError !== undefined) {
+            resolve()
+          } else if (canSwallowPostPrimaryError()) {
+            interruptOptional()
+            resolve()
+          } else {
+            reject(err)
+          }
         }
         const onClose = (): void => { cleanup(); resolve() }
         const cleanup = (): void => {
@@ -261,8 +343,16 @@ export async function extractFileFromTgzResponse(
         gunzip.once('close', onClose)
         gunzip.write(value, (err) => {
           cleanup()
-          if (err && !doneParsing && streamError === undefined) reject(err)
-          else resolve()
+          if (err && !doneParsing && streamError === undefined) {
+            if (canSwallowPostPrimaryError()) {
+              interruptOptional()
+              resolve()
+            } else {
+              reject(err)
+            }
+          } else {
+            resolve()
+          }
         })
       })
       if (doneParsing || streamError !== undefined) break
@@ -271,7 +361,7 @@ export async function extractFileFromTgzResponse(
       gunzip.end()
       await gunzipDone
     }
-    if (streamError !== undefined) throw streamError
+    if (streamError !== undefined && !canSwallowPostPrimaryError()) throw streamError
   } finally {
     gunzip.destroy()
     await reader.cancel().catch(() => undefined)
@@ -281,7 +371,27 @@ export async function extractFileFromTgzResponse(
   if (found === undefined) {
     throw new Error(`catalog tarball did not contain ${targetPaths.join(' or ')}`)
   }
-  return found
+  return { primary: found, optional: optionalFound, optionalInterrupted }
+}
+
+/**
+ * Extract the highest-priority matching file from a gzipped tar response
+ * stream. When the primary target (`targetPaths[0]`) finishes, the underlying
+ * HTTP stream is cancelled immediately so the remaining archive is never
+ * downloaded. If a lower-priority fallback path appears earlier in the tar
+ * stream, it is retained while scanning continues for the primary target.
+ * @param response - HTTP 200 response whose body is a `.tgz` stream.
+ * @param targetPaths - Normalized paths in descending preference order.
+ * @param maxBytes - Upper bound for both compressed download and decompressed output.
+ * @returns The extracted file bytes.
+ */
+export async function extractFileFromTgzResponse(
+  response: Response,
+  targetPaths: readonly string[],
+  maxBytes: number,
+): Promise<Buffer> {
+  const { primary } = await extractFilesFromTgzResponse(response, targetPaths, [], maxBytes)
+  return primary
 }
 
 export interface SubdirExtractLimits {

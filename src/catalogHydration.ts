@@ -5,19 +5,17 @@
 import { extractDshEngineFromRequirements } from './compatibility.ts'
 import type { MarketFeatured, MarketPlugin } from './contract.ts'
 import { packageNameFromInstallSpec, parseGitHubInstallSpec, type InstallTargetInfo } from './installInfo.ts'
+import { clipCatalogText, mergeUniqueKeywords, repositorySlug } from './selectionMeta.ts'
 import { deriveSubscription } from './subscription.ts'
 
 /** Decode compact schema-4 `category_table` tuples `[key, zh, en]`. */
-export function readCategoryTable(
-  rawTable: unknown,
-  clipText: (value: unknown, limit: number) => string,
-): Array<[string, string, string]> {
+export function readCategoryTable(rawTable: unknown): Array<[string, string, string]> {
   const table: Array<[string, string, string]> = []
   if (!Array.isArray(rawTable)) return table
   for (const tuple of rawTable) {
     if (Array.isArray(tuple) && typeof tuple[0] === 'string') {
-      const key = clipText(tuple[0], 60)
-      table.push([key, clipText(tuple[1], 60) || key, clipText(tuple[2], 60) || key])
+      const key = clipCatalogText(tuple[0], 60)
+      table.push([key, clipCatalogText(tuple[1], 60) || key, clipCatalogText(tuple[2], 60) || key])
     } else {
       table.push(['', '', ''])
     }
@@ -35,7 +33,7 @@ export function hydrateRepositoriesFromSubscription(
   subscription: MarketFeatured,
 ): void {
   const subIconByRepo = new Map<string, string>()
-  const subKeywordsByRepo = new Map<string, Set<string>>()
+  const subKeywordsByRepo = new Map<string, string[]>()
   const subTargetByPackage = new Map<string, InstallTargetInfo>()
   const subTargetByGitLocator = new Map<string, InstallTargetInfo>()
   const subRepoCount = new Map<string, number>()
@@ -61,11 +59,11 @@ export function hydrateRepositoriesFromSubscription(
     if (nextCount === 1 && subTarget !== undefined) subSingleTargetByRepo.set(key, subTarget)
     else subSingleTargetByRepo.delete(key)
     if (entry.item.icon && !subIconByRepo.has(key)) subIconByRepo.set(key, entry.item.icon)
-    const words = subKeywordsByRepo.get(key) ?? new Set<string>()
+    const words = subKeywordsByRepo.get(key) ?? []
     for (const word of [entry.item.packageName, entry.item.titleZh, entry.item.titleEn, ...(entry.item.keywords ?? [])]) {
-      if (typeof word === 'string' && word !== '') words.add(word)
+      if (typeof word === 'string' && word !== '') words.push(word)
     }
-    subKeywordsByRepo.set(key, words)
+    if (words.length > 0) subKeywordsByRepo.set(key, words)
   }
 
   for (let i = 0; i < items.length; i += 1) {
@@ -129,10 +127,8 @@ export function hydrateRepositoriesFromSubscription(
         }
       }
     }
-    if (icon === item.icon && extraKeywords === undefined && nextInstallInfo === item.installInfo) continue
-    const mergedKeywords = extraKeywords === undefined
-      ? item.keywords
-      : [...new Set([...(item.keywords ?? []), ...extraKeywords])].slice(0, 200)
+    const mergedKeywords = extraKeywords === undefined ? item.keywords : mergeUniqueKeywords(item.keywords, extraKeywords)
+    if (icon === item.icon && mergedKeywords === item.keywords && nextInstallInfo === item.installInfo) continue
     const hydrated: MarketPlugin = {
       ...item,
       ...(icon === undefined ? {} : { icon }),
@@ -153,18 +149,21 @@ export function resolveCompleteCatalogLists(options: {
   readonly byName: Map<string, MarketPlugin>
   readonly dshVersion: string | undefined
   readonly descriptionLimit: number
-  readonly clipText: (value: unknown, limit: number) => string
-  readonly repositorySlug: (value: unknown) => string | null
   readonly deriveFeatured: (
     value: unknown,
     declared: unknown,
     rows: ReadonlyMap<string, MarketPlugin>,
     copy?: Map<string, string>,
   ) => MarketFeatured | undefined
-}): { readonly featured: MarketFeatured; readonly subscription: undefined } {
-  const { rawSubscription, rawEditorial, subscriptionUpdatedAt, items, byName, dshVersion, descriptionLimit, clipText, repositorySlug, deriveFeatured } = options
+}): { readonly featured: MarketFeatured; readonly subscription: undefined; readonly protectedRepos: ReadonlySet<string> } {
+  const { rawSubscription, rawEditorial, subscriptionUpdatedAt, items, byName, dshVersion, descriptionLimit, deriveFeatured } = options
   const subscription = deriveSubscription(rawSubscription, subscriptionUpdatedAt, byName, dshVersion)
   hydrateRepositoriesFromSubscription(items, byName, subscription)
+  const protectedRepos = new Set<string>()
+  for (const entry of subscription.entries) {
+    const key = entry.item.fullName.toLowerCase()
+    if (key !== '' && entry.item.description.trim() !== '') protectedRepos.add(key)
+  }
   if (rawEditorial !== undefined && rawEditorial !== null) {
     const rowsForPicks = new Map(byName)
     const copy = new Map<string, string>()
@@ -174,15 +173,19 @@ export function resolveCompleteCatalogLists(options: {
       const pick = raw as { full_name?: unknown; description?: unknown }
       const slug = repositorySlug(pick.full_name)
       if (slug === null) continue
-      const description = clipText(pick.description, descriptionLimit)
-      if (description !== '') copy.set(slug.toLowerCase(), description)
+      const description = clipCatalogText(pick.description, descriptionLimit)
+      if (description !== '') {
+        const lower = slug.toLowerCase()
+        copy.set(lower, description)
+        protectedRepos.add(lower)
+      }
     }
     for (const entry of subscription.entries) {
       const key = entry.item.fullName.toLowerCase()
       if (key !== '') rowsForPicks.set(key, entry.item)
     }
     const picks = deriveFeatured(rawEditorial, undefined, rowsForPicks, copy)
-    return { featured: picks ?? subscription, subscription: undefined }
+    return { featured: picks ?? subscription, subscription: undefined, protectedRepos }
   }
-  return { featured: subscription, subscription: undefined }
+  return { featured: subscription, subscription: undefined, protectedRepos }
 }

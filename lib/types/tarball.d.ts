@@ -1,3 +1,22 @@
+export interface ExtractedTgzFiles {
+    readonly primary: Buffer;
+    readonly optional: ReadonlyMap<string, Buffer>;
+    readonly optionalInterrupted: boolean;
+}
+/**
+ * Extract the highest-priority matching file from a gzipped tar response
+ * stream, optionally capturing sidecar files in the same single pass. When
+ * the primary target (`targetPaths[0]`) and all requested `optionalPaths`
+ * finish, the underlying HTTP stream is cancelled immediately so the remaining
+ * archive is never downloaded. Missing optional paths do not fail extraction.
+ * @param response - HTTP 200 response whose body is a `.tgz` stream.
+ * @param targetPaths - Normalized primary paths in descending preference order.
+ * @param optionalPaths - Normalized optional sidecar paths to capture if present.
+ * @param maxBytes - Upper bound for both compressed download and decompressed output.
+ * @param abortSignal - Caller abort signal; post-primary errors never swallow an external abort.
+ * @returns The extracted primary bytes, matched optional files, and whether optional scanning aborted early.
+ */
+export declare function extractFilesFromTgzResponse(response: Response, targetPaths: readonly string[], optionalPaths: readonly string[], maxBytes: number, abortSignal?: AbortSignal): Promise<ExtractedTgzFiles>;
 /**
  * Extract the highest-priority matching file from a gzipped tar response
  * stream. When the primary target (`targetPaths[0]`) finishes, the underlying

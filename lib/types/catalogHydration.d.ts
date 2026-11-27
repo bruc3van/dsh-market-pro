@@ -1,6 +1,6 @@
 import type { MarketFeatured, MarketPlugin } from './contract.ts';
 /** Decode compact schema-4 `category_table` tuples `[key, zh, en]`. */
-export declare function readCategoryTable(rawTable: unknown, clipText: (value: unknown, limit: number) => string): Array<[string, string, string]>;
+export declare function readCategoryTable(rawTable: unknown): Array<[string, string, string]>;
 /**
  * Copy deduplicated artwork, search terms, and DSH compatibility targets from derived
  * subscription packages onto the corresponding `items` repository cards.
@@ -15,10 +15,9 @@ export declare function resolveCompleteCatalogLists(options: {
     readonly byName: Map<string, MarketPlugin>;
     readonly dshVersion: string | undefined;
     readonly descriptionLimit: number;
-    readonly clipText: (value: unknown, limit: number) => string;
-    readonly repositorySlug: (value: unknown) => string | null;
     readonly deriveFeatured: (value: unknown, declared: unknown, rows: ReadonlyMap<string, MarketPlugin>, copy?: Map<string, string>) => MarketFeatured | undefined;
 }): {
     readonly featured: MarketFeatured;
     readonly subscription: undefined;
+    readonly protectedRepos: ReadonlySet<string>;
 };

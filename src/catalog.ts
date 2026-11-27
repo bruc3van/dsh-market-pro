@@ -1,13 +1,32 @@
-/** Read the full catalog and published subscription (or a legacy v2 feed).
+/**
+ * Read the full catalog and published subscription (or a legacy v2 feed).
  * Remote metadata is validated before entering the client wire contract.
  */
-import { brotliDecompressSync, gunzipSync, inflateSync } from 'node:zlib'
 import { readCategoryTable, resolveCompleteCatalogLists } from './catalogHydration.ts'
+import {
+  errorText,
+  fetchFollowing,
+  isAllowedTarballUrl,
+  isStaleMirrorSnapshot,
+  MAX_CATALOG_BYTES,
+  readJson,
+  runMirrorRace,
+} from './catalogTransport.ts'
 import { parseInstallInfo } from './installInfo.ts'
 import type { MarketCatalog, MarketCategory, MarketFeatured, MarketFeaturedEntry, MarketPlugin } from './contract.ts'
-import { FEATURED_CATEGORY, SUBSCRIPTION_CATEGORY, isMarketIcon, isSafeBranchName, REPOSITORY_SLUG_PATTERN } from './shapes.ts'
+import {
+  clipCatalogText,
+  hydrateCatalogWithSelectionMeta,
+  isSidecarVersionSkewed,
+  parseSelectionMeta,
+  repositorySlug,
+  selectionMetaUrlOf,
+  sidecarFreshnessStampOf,
+  type ParsedSelectionMeta,
+} from './selectionMeta.ts'
+import { FEATURED_CATEGORY, SUBSCRIPTION_CATEGORY, isMarketIcon, isSafeBranchName } from './shapes.ts'
 import { categoriesOf } from './subscription.ts'
-import { extractFileFromTgzResponse } from './tarball.ts'
+import { extractFilesFromTgzResponse } from './tarball.ts'
 
 /** Default feed and mirrors (including China-reachable npmmirror tarball) serve the same npm package dataset. */
 export const DEFAULT_CATALOG_BASE = 'https://cdn.jsdelivr.net/npm/awesome-dsh-plugin-feed@latest/data/market-catalog-v4.json'
@@ -26,7 +45,8 @@ export function isOfficialCatalogBase(base: string): boolean {
 }
 
 const LEGACY_CN_MIRROR_FILES_PREFIX = 'https://registry.npmmirror.com/awesome-dsh-plugin-feed/latest/files/data/'
-const TARBALL_CATALOG_PATHS = ['package/data/market-catalog-v4.json', 'package/data/market-catalog.json'] as const
+export const TARBALL_SELECTION_META_PATH = 'package/data/plugin-selection-meta.json'
+const TARBALL_PRIMARY_CATALOG_PATHS = ['package/data/market-catalog-v4.json', 'package/data/market-catalog.json'] as const
 const NPMMIRROR_ETAG_PREFIX = 'npmmirror:'
 
 /** Start the next mirror concurrently if the leading source has not returned headers within this window. */
@@ -40,15 +60,6 @@ const REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1_000
 
 /** Back off automatic background revalidation briefly after a failure so offline reads stay quiet. */
 const BACKGROUND_RETRY_MS = 60 * 1_000
-
-/** One attempt against one base; a chain of three costs at most three times this. */
-const FETCH_TIMEOUT_MS = 20_000
-
-/** Bound both the response stream and decompression. The compact v4 feed is ~11.6 MiB. */
-const MAX_CATALOG_BYTES = 64 * 1024 * 1024
-
-/** unpkg and npmmirror answer every `@latest` path with a 302; a few more hops is already a loop. */
-const MAX_REDIRECTS = 5
 
 /** A description longer than this is a README pasted into the field, not a summary. */
 const DESCRIPTION_LIMIT = 300
@@ -71,8 +82,9 @@ const SCHEMA_VERSION = 2
  * 8 — the editorial pick cap grows from 100 to 1000.
  * 9 — `publishedAt`, the feed's own publish stamp used for cross-mirror freshness comparison.
  * 10 — DSH runtime compatibility target selection (`dshEngine`, `compatFallback`) hydrated across subscription and repository cards.
+ * 11 — `plugin-selection-meta.json` sidecar keywords and weak-description Chinese summary hydration.
  */
-export const CATALOG_FORMAT = 10
+export const CATALOG_FORMAT = 11
 
 /** The editorial list is capped. Published subscription packages are not. */
 const FEATURED_LIMIT = 1000
@@ -135,47 +147,27 @@ interface RawFeaturedEntry {
   packages?: unknown
 }
 
-/**
- * Where a parsed catalog survives a restart. The catalog source neither opens
- * nor closes this — the plugin body owns the domain's lifecycle and hands the
- * source a narrow port, so a deployment without durable storage can still run
- * the market from memory alone.
- */
+/** Where a parsed catalog survives a restart. */
 export interface CatalogCache {
-  /**
-   * The last parse, the ETag it was derived with, and the base that served
-   * it. A record written before the mirror existed has no serving base; the
-   * empty string reads as "the primary answered" (see `attempt` below).
-   */
   read: () => { catalog: MarketCatalog | null; marketEtag: string; activeBase: string }
-  /** Persist a fresh parse. Failures are the cache's own business. */
   write: (next: { catalog: MarketCatalog; marketEtag: string; activeBase: string }) => void
-  /** Resolves once the backing durable store has finished loading (or degraded to memory-only). */
   ready?: Promise<void>
 }
 
 /** Deployment-varying knobs the plugin config owns. */
 export interface CatalogOptions {
-  /** A complete schema-3 catalog or legacy schema-2 JSON feed URL. */
   readonly base: string
-  /** Legacy schema-2 size limit; schema 3 is never truncated. */
   readonly marketSize: number
-  /** Durable seat for the parse; absent means memory-only. */
   readonly cache?: CatalogCache
-  /** Aborted when the owning plugin tears down, cancelling in-flight background refreshes. */
   readonly disposeSignal?: AbortSignal
-  /** Delay before launching the next mirror concurrently when no response headers arrive. */
   readonly hedgeDelayMs?: number
-  /** Grace window before hedging a source whose headers already arrived but whose body download stalled. */
   readonly bodyHedgeDelayMs?: number
-  /** Running DSH Host semantic version used for compatibility selection during catalog derivation. */
   readonly dshVersion?: string
 }
 
 /**
  * Drop the redundant `subscription` payload when an editorial `featured` list
- * is already present. The client never renders `subscription` separately, so
- * omitting it trims ~6 MiB from disk persistence, startup validation, and RPC.
+ * is already present.
  */
 export function stripUnusedSubscription(catalog: MarketCatalog): MarketCatalog {
   if (catalog.featured === undefined || catalog.subscription === undefined) return catalog
@@ -186,55 +178,22 @@ export function stripUnusedSubscription(catalog: MarketCatalog): MarketCatalog {
   }
 }
 
-function text(value: unknown, limit: number): string {
-  if (typeof value !== 'string') return ''
-  const trimmed = value.replace(/\s+/g, ' ').trim()
-  // Cut by code point, not by UTF-16 unit, so a limit landing inside a
-  // surrogate pair cannot leave a lone half behind.
-  const points = [...trimmed]
-  return points.length > limit ? `${points.slice(0, limit - 1).join('')}…` : trimmed
-}
-
 function count(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0
 }
 
-/** `owner/name` with nothing else in it — the only shape a link is built from. */
-function repositorySlug(value: unknown): string | null {
-  if (typeof value !== 'string') return null
-  return REPOSITORY_SLUG_PATTERN.test(value) ? value : null
-}
-
-/**
- * The branch the prompt's tarball fallback names. Remote text from a public
- * snapshot: anything outside the safe pattern (which excludes whitespace and
- * every prompt-injection character) falls back to `main` rather than being
- * interpolated into the review prompt.
- */
 function branchName(value: unknown): string {
   if (typeof value !== 'string') return 'main'
-  const trimmed = text(value, 100)
+  const trimmed = clipCatalogText(value, 100)
   return trimmed !== '' && isSafeBranchName(trimmed) ? trimmed : 'main'
 }
 
-/**
- * Resolve the envelope's editorial picks against the parsed rows. A pick that
- * names a row borrows that row whole — looked up before the size cut, so a
- * pick deep in the file still resolves; a pick the shortlist lacks becomes a
- * card built from its own `packages` block; a pick that is neither is dropped.
- * Nothing here can fail the market: an absent or malformed section, or one
- * whose every pick was dropped, reads as "no picks".
- * @param value - the envelope's `featured` field, whatever it is.
- * @param declared - the envelope's `featured_count`; the resolved length stands in when it is not a count.
- * @param rows - every parsed row, keyed by lower-cased `owner/name`.
- * @returns the resolved picks, or undefined when there are none.
- */
 function deriveFeatured(value: unknown, declared: unknown, rows: ReadonlyMap<string, MarketPlugin>, copy = new Map<string, string>()): MarketFeatured | undefined {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
   const raw = value as RawFeatured
   if (!Array.isArray(raw.entries)) return undefined
-  const titleZh = text(raw.title_zh, 60) || '编辑精选'
-  const titleEn = text(raw.title_en, 60) || "Editor's Picks"
+  const titleZh = clipCatalogText(raw.title_zh, 60) || '编辑精选'
+  const titleEn = clipCatalogText(raw.title_en, 60) || "Editor's Picks"
   const entries: MarketFeaturedEntry[] = []
   const seen = new Set<string>()
   for (const candidate of raw.entries.slice(0, FEATURED_LIMIT) as unknown[]) {
@@ -244,7 +203,7 @@ function deriveFeatured(value: unknown, declared: unknown, rows: ReadonlyMap<str
     if (fullName === null) continue
     const key = fullName.toLowerCase()
     if (seen.has(key)) continue
-    const reason = text(pick.reason, REASON_LIMIT)
+    const reason = clipCatalogText(pick.reason, REASON_LIMIT)
     const known = rows.get(key)
     if (known !== undefined) {
       seen.add(key)
@@ -252,9 +211,6 @@ function deriveFeatured(value: unknown, declared: unknown, rows: ReadonlyMap<str
       entries.push({ item: description === '' ? known : { ...known, description }, reason })
       continue
     }
-    // A dangling reference with no install block of its own has nothing to
-    // show; one whose block does not parse has nothing to install. Older
-    // feeds without an inline description still fall back to the reason.
     const installInfo = pick.packages === undefined ? undefined : parseInstallInfo(pick.packages)
     if (installInfo === undefined) continue
     seen.add(key)
@@ -266,7 +222,7 @@ function deriveFeatured(value: unknown, declared: unknown, rows: ReadonlyMap<str
         owner: fullName.slice(0, slash),
         name: fullName.slice(slash + 1),
         url: `https://github.com/${fullName}`,
-        description: text(pick.description, DESCRIPTION_LIMIT) || reason,
+        description: clipCatalogText(pick.description, DESCRIPTION_LIMIT) || reason,
         stars: 0,
         language: '',
         license: '',
@@ -281,24 +237,38 @@ function deriveFeatured(value: unknown, declared: unknown, rows: ReadonlyMap<str
   }
   if (entries.length === 0) return undefined
   return {
-    titleZh, titleEn, updatedAt: text(raw.updated_at, 30), count: count(declared) || entries.length, entries,
+    titleZh, titleEn, updatedAt: clipCatalogText(raw.updated_at, 30), count: count(declared) || entries.length, entries,
     categories: categoriesOf(entries.map(entry => entry.item)),
   }
 }
 
-/**
- * Parse the published market into the catalog the browser renders. The
- * publisher's file order is preserved. Only legacy schema-2 feeds are
- * truncated to marketSize; schema 3 carries the complete reviewed catalog.
- * @param body - the parsed catalog JSON body.
- * @param marketSize - legacy schema-2 row limit.
- * @returns the parsed and validated catalog.
- * @throws when the body is not a market this plugin understands.
- */
-export function deriveMarket(body: unknown, marketSize: number, dshVersion?: string): MarketCatalog {
+function readFeedEnvelopeMeta(body: unknown): { readonly feedVersion: string; readonly publishedAt: string } {
+  const envelope = body !== null && typeof body === 'object'
+    ? body as { feed_version?: unknown; published_at?: unknown }
+    : {}
+  return {
+    feedVersion: clipCatalogText(envelope.feed_version, 40),
+    publishedAt: clipCatalogText(envelope.published_at, 40),
+  }
+}
+
+interface DerivedMarketResult {
+  readonly catalog: MarketCatalog
+  readonly protectedRepos: ReadonlySet<string>
+  readonly schemaVersion: number
+  readonly feedVersion: string
+  readonly publishedAt: string
+}
+
+function deriveMarketInternal(
+  body: unknown,
+  marketSize: number,
+  dshVersion?: string,
+  selectionMeta?: ParsedSelectionMeta,
+): DerivedMarketResult {
   const envelope = body as {
     schema_version?: unknown; entries?: unknown; category_table?: unknown; source_fetched_at?: unknown; source_repo_count?: unknown; featured?: unknown; featured_count?: unknown
-    subscription?: unknown; subscription_updated_at?: unknown; published_at?: unknown
+    subscription?: unknown; subscription_updated_at?: unknown; published_at?: unknown; feed_version?: unknown
   }
   const schema = envelope.schema_version
   if (schema !== SCHEMA_VERSION && schema !== 3 && schema !== 4) {
@@ -307,7 +277,7 @@ export function deriveMarket(body: unknown, marketSize: number, dshVersion?: str
   }
   const isCompact = schema === 4
   const isCompleteCatalog = schema === 3 || schema === 4
-  const categoryTable = isCompact ? readCategoryTable(envelope.category_table, text) : []
+  const categoryTable = isCompact ? readCategoryTable(envelope.category_table) : []
   const rows = Array.isArray(envelope.entries) ? envelope.entries as RawEntry[] : []
   if (rows.length === 0) throw new Error('the published market carried no entries')
 
@@ -316,30 +286,26 @@ export function deriveMarket(body: unknown, marketSize: number, dshVersion?: str
   for (const row of rows) {
     const rawFullName = isCompact ? (row.n ?? row.full_name) : row.full_name
     const fullName = repositorySlug(rawFullName)
-    // The publisher's validator makes either case impossible; the wire pass
-    // exists so a poisoned or broken file cannot steer the renderer.
     if (fullName === null || knownNames.has(fullName)) continue
     knownNames.add(fullName)
     const catTuple = isCompact && typeof row.c === 'number' && Number.isInteger(row.c)
       ? categoryTable[row.c]
       : undefined
-    const category = catTuple ? catTuple[0] : text(row.category, 60)
+    const category = catTuple ? catTuple[0] : clipCatalogText(row.category, 60)
     if (category === '') continue
-    const categoryZh = catTuple ? catTuple[1] : (text(row.category_zh, 60) || category)
-    const categoryEn = catTuple ? catTuple[2] : (text(row.category_en, 60) || category)
+    const categoryZh = catTuple ? catTuple[1] : (clipCatalogText(row.category_zh, 60) || category)
+    const categoryEn = catTuple ? catTuple[2] : (clipCatalogText(row.category_en, 60) || category)
     const slash = fullName.indexOf('/')
-    // Plugin-level copy the publisher added for a repository that publishes a
-    // subscription plugin: the card should name the plugin, not the repository.
-    const titleZh = text(isCompact ? (row.tz ?? row.title_zh) : row.title_zh, TITLE_LIMIT)
-    const titleEn = text(isCompact ? (row.te ?? row.title_en) : row.title_en, TITLE_LIMIT)
-    const descriptionEn = text(isCompact ? (row.de ?? row.description_en) : row.description_en, DESCRIPTION_LIMIT)
+    const titleZh = clipCatalogText(isCompact ? (row.tz ?? row.title_zh) : row.title_zh, TITLE_LIMIT)
+    const titleEn = clipCatalogText(isCompact ? (row.te ?? row.title_en) : row.title_en, TITLE_LIMIT)
+    const descriptionEn = clipCatalogText(isCompact ? (row.de ?? row.description_en) : row.description_en, DESCRIPTION_LIMIT)
     const rawPackages = isCompact ? (row.pkg ?? row.packages) : row.packages
     const rawStatus = isCompact ? (row.is ?? row.install_status ?? 'none') : row.install_status
     const archived = isCompact ? (row.ar === 1 || row.ar === true || row.archived === true) : row.archived === true
     const disabled = isCompact ? (row.di === 1 || row.di === true || row.disabled === true) : row.disabled === true
     items.push({
       ...(typeof row.icon === 'string' && isMarketIcon(row.icon) ? { icon: row.icon } : {}),
-      ...(Array.isArray(row.keywords) ? { keywords: row.keywords.filter((word): word is string => typeof word === 'string').slice(0, 200).map(word => text(word, 100)) } : {}),
+      ...(Array.isArray(row.keywords) ? { keywords: row.keywords.filter((word): word is string => typeof word === 'string').slice(0, 200).map(word => clipCatalogText(word, 100)) } : {}),
       ...(archived ? { archived: true } : {}),
       ...(disabled ? { disabled: true } : {}),
       ...(rawPackages === undefined ? {} : { installInfo: parseInstallInfo(rawPackages) }),
@@ -351,11 +317,11 @@ export function deriveMarket(body: unknown, marketSize: number, dshVersion?: str
       owner: fullName.slice(0, slash),
       name: fullName.slice(slash + 1),
       url: `https://github.com/${fullName}`,
-      description: text(isCompact ? (row.d ?? row.description) : row.description, DESCRIPTION_LIMIT),
+      description: clipCatalogText(isCompact ? (row.d ?? row.description) : row.description, DESCRIPTION_LIMIT),
       stars: count(isCompact ? (row.s ?? row.stargazers_count) : row.stargazers_count),
-      language: text(isCompact ? (row.l ?? row.language) : row.language, 40),
-      license: text(isCompact ? (row.lic ?? row.license) : row.license, 40),
-      pushedAt: text(isCompact ? (row.p ?? row.pushed_at) : row.pushed_at, 30),
+      language: clipCatalogText(isCompact ? (row.l ?? row.language) : row.language, 40),
+      license: clipCatalogText(isCompact ? (row.lic ?? row.license) : row.license, 40),
+      pushedAt: clipCatalogText(isCompact ? (row.p ?? row.pushed_at) : row.pushed_at, 30),
       defaultBranch: branchName(isCompact ? (row.b ?? row.default_branch) : row.default_branch),
       category,
       categoryZh,
@@ -365,28 +331,23 @@ export function deriveMarket(body: unknown, marketSize: number, dshVersion?: str
 
   if (items.length === 0) throw new Error('the published market carried no valid entries')
 
-  // Schema 3/4 is a complete repository catalog. Legacy marketSize reductions
-  // must not silently cut an upgraded installation back down to 1000 rows.
   const cut = isCompleteCatalog ? items : items.slice(0, marketSize)
   const categories: MarketCategory[] = categoriesOf(cut)
 
-  // The picks lead the list whatever their count; the ranked categories
-  // after them are exactly what a feed without picks produces.
   const byName = new Map<string, MarketPlugin>()
   for (const item of items) if (!byName.has(item.fullName.toLowerCase())) byName.set(item.fullName.toLowerCase(), item)
   let featured: MarketFeatured | undefined
   let subscription: MarketFeatured | undefined
+  let protectedRepos: ReadonlySet<string> = new Set()
   if (isCompleteCatalog) {
-    ;({ featured, subscription } = resolveCompleteCatalogLists({
+    ;({ featured, subscription, protectedRepos } = resolveCompleteCatalogLists({
       rawSubscription: envelope.subscription,
       rawEditorial: envelope.featured,
-      subscriptionUpdatedAt: text(envelope.subscription_updated_at, 40),
+      subscriptionUpdatedAt: clipCatalogText(envelope.subscription_updated_at, 40),
       items,
       byName,
       dshVersion,
       descriptionLimit: DESCRIPTION_LIMIT,
-      clipText: text,
-      repositorySlug,
       deriveFeatured,
     }))
   } else {
@@ -399,185 +360,49 @@ export function deriveMarket(body: unknown, marketSize: number, dshVersion?: str
     categories.unshift({ key: SUBSCRIPTION_CATEGORY, zh: subscription.titleZh, en: subscription.titleEn, count: subscription.count })
   }
 
-  return {
+  const { feedVersion, publishedAt } = readFeedEnvelopeMeta(body)
+  let catalog: MarketCatalog = {
     items: cut,
     categories,
     ...(featured === undefined ? {} : { featured }),
     ...(subscription === undefined ? {} : { subscription }),
-    fetchedAt: text(envelope.source_fetched_at, 40),
-    ...(text(envelope.published_at, 40) === '' ? {} : { publishedAt: text(envelope.published_at, 40) }),
+    fetchedAt: clipCatalogText(envelope.source_fetched_at, 40),
+    ...(publishedAt === '' ? {} : { publishedAt }),
     refreshedAt: new Date().toISOString(),
     scanned: count(envelope.source_repo_count) || rows.length,
   }
-}
-
-function errorText(error: unknown): string {
-  if (error instanceof Error) return error.message === '' ? 'unknown error' : error.message
-  const value = String(error)
-  return value === '' ? 'unknown error' : value
-}
-
-/**
- * Fetch one URL, following redirects by hand. The DSH host's sandboxed fetch
- * does not follow them itself, and unpkg answers every `@latest` path with a
- * 302 to the pinned version. The whole chain shares one timeout; a hop that
- * leaves the origin drops the ETag (it certifies the first server's content
- * only), and a hop down from https to http is refused.
- * @param url - the first URL.
- * @param etag - the ETag to revalidate with, or '' for a plain request.
- * @returns the first non-redirect response.
- */
-async function fetchFollowing(
-  url: string,
-  etag: string,
-  abortSignal?: AbortSignal,
-  acceptEncoding = 'gzip',
-): Promise<Response> {
-  const timeout = AbortSignal.timeout(FETCH_TIMEOUT_MS)
-  const signal = abortSignal === undefined ? timeout : AbortSignal.any([timeout, abortSignal])
-  const origin = new URL(url).origin
-  let current = url
-  for (let hop = 0; ; hop += 1) {
-    const sameOrigin = new URL(current).origin === origin
-    const response = await fetch(current, {
-      signal,
-      // The host's fetch wrapper asks for compression by default and then
-      // hands the compressed bytes through undecoded; asking for identity
-      // makes the CDN answer in plain text. `readJson` still copes if a
-      // server compresses anyway.
-      // A cold catalog read is ~19 MB of JSON; asking for gzip turns that into
-      // ~6 MB over the wire. gzip specifically (not br): its magic number lets
-      // readJson decode the body even when the host wrapper leaves the bytes
-      // compressed with an unexpected header shape.
-      headers: etag !== '' && sameOrigin
-        ? { 'accept-encoding': acceptEncoding, 'if-none-match': etag }
-        : { 'accept-encoding': acceptEncoding },
-    })
-    if (![301, 302, 303, 307, 308].includes(response.status)) return response
-    const location = response.headers.get('location')
-    if (location === null || location === '') throw new Error(`catalog HTTP ${String(response.status)} without a location`)
-    if (hop + 1 > MAX_REDIRECTS) throw new Error('catalog redirected too many times')
-    const next = new URL(location, current)
-    if (next.protocol !== 'https:' && !(next.protocol === 'http:' && new URL(current).protocol === 'http:')) {
-      throw new Error(`catalog redirected to an unsupported URL (${next.protocol})`)
-    }
-    // Drain the redirect body so the connection can be reused.
-    await response.body?.cancel().catch(() => undefined)
-    current = next.href
+  if (selectionMeta !== undefined) {
+    catalog = hydrateCatalogWithSelectionMeta(catalog, selectionMeta, protectedRepos)
+  }
+  return {
+    catalog,
+    protectedRepos,
+    schemaVersion: schema,
+    feedVersion,
+    publishedAt,
   }
 }
 
 /**
- * Parse a JSON body that may arrive still compressed. The feed is a JSON
- * object, so a body that starts (after whitespace) with `{` or `[` is already
- * plain text whatever `content-encoding` claims — a fetch that decoded it
- * leaves the header in place. Anything else is decoded by the gzip magic
- * number or the declared encoding before parsing.
- * @param response - a successful response.
- * @returns the parsed body.
+ * Parse the published market into the catalog the browser renders. The
+ * publisher's file order is preserved. Only legacy schema-2 feeds are
+ * truncated to marketSize; schema 3/4 carry the complete reviewed catalog.
  */
-async function readJson(response: Response): Promise<unknown> {
-  const tooLarge = 'catalog exceeds the 64 MiB size limit'
-  if (Number(response.headers.get('content-length')) > MAX_CATALOG_BYTES) {
-    void response.body?.cancel().catch(() => undefined)
-    throw new Error(tooLarge)
-  }
-  if (response.body === null) throw new Error('catalog response is empty')
-  const reader = response.body.getReader()
-  const chunks: Uint8Array[] = []
-  let length = 0
-  try {
-    for (;;) {
-      const { done, value } = await reader.read()
-      if (done) break
-      length += value.byteLength
-      if (length > MAX_CATALOG_BYTES) {
-        void reader.cancel().catch(() => undefined)
-        throw new Error(tooLarge)
-      }
-      chunks.push(value)
-    }
-  } finally {
-    reader.releaseLock()
-  }
-  let bytes = chunks.length === 1 ? chunks[0]! : Buffer.concat(chunks, length)
-  let start = 0
-  while (start < bytes.length && (bytes[start] === 0x20 || bytes[start] === 0x09 || bytes[start] === 0x0a || bytes[start] === 0x0d)) start += 1
-  const plain = bytes[start] === 0x7b || bytes[start] === 0x5b || (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf)
-  if (!plain) {
-    const encoding = (response.headers.get('content-encoding') ?? '').trim().toLowerCase()
-    const options = { maxOutputLength: MAX_CATALOG_BYTES }
-    try {
-      if (bytes[0] === 0x1f && bytes[1] === 0x8b) bytes = gunzipSync(bytes, options)
-      else if (encoding === 'br') bytes = brotliDecompressSync(bytes, options)
-      else if (encoding === 'deflate') bytes = inflateSync(bytes, options)
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ERR_BUFFER_TOO_LARGE') throw new Error(tooLarge)
-      throw error
-    }
-  }
-  return JSON.parse(new TextDecoder().decode(bytes))
+export function deriveMarket(
+  body: unknown,
+  marketSize: number,
+  dshVersion?: string,
+  selectionMeta?: ParsedSelectionMeta,
+): MarketCatalog {
+  return deriveMarketInternal(body, marketSize, dshVersion, selectionMeta).catalog
 }
 
 /** The catalog reader: memory first, then the network. */
 export interface CatalogSource {
-  /**
-   * Read the catalog.
-   * @param force - bypass the refresh interval (a user gesture, not a poll).
-   * @param signal - caller lifetime.
-   */
   read: (force: boolean, signal?: AbortSignal) => Promise<{ catalog: MarketCatalog | null; stale: boolean; error: string }>
-  /**
-   * Kick off a non-blocking background refresh when no fresh catalog is cached
-   * yet, so opening the market page hits memory immediately.
-   */
   warmup: () => void
 }
 
-function isAllowedTarballUrl(metadataUrl: string, tarballUrl: string): boolean {
-  try {
-    const meta = new URL(metadataUrl)
-    const target = new URL(tarballUrl)
-    if (target.protocol !== 'https:' && !(target.protocol === 'http:' && meta.protocol === 'http:')) return false
-    if (target.host === meta.host) return true
-    return meta.host === 'registry.npmmirror.com'
-      && target.port === ''
-      && (target.hostname === 'cdn.npmmirror.com' || target.hostname.endsWith('.npmmirror.com'))
-  } catch {
-    return false
-  }
-}
-
-function parseSnapshotTime(value: string): number {
-  if (value === '') return Number.NaN
-  const ms = Date.parse(value)
-  return Number.isFinite(ms) ? ms : Number.NaN
-}
-
-/**
- * Maximum backward drift treated as a lagging `@latest` mirror cache across
- * different hosts. Larger backward jumps (e.g. an upstream rollback or a prior
- * clock-skewed future timestamp) are accepted so the cache can never lock up.
- */
-const STALE_MIRROR_WINDOW_MS = 7 * 24 * 60 * 60 * 1_000
-
-/** Whether `candidateFetchedAt` is within the cross-mirror stale-cache window behind `currentFetchedAt`. */
-function isStaleMirrorSnapshot(candidateFetchedAt: string, currentFetchedAt: string): boolean {
-  const candidateMs = parseSnapshotTime(candidateFetchedAt)
-  const currentMs = parseSnapshotTime(currentFetchedAt)
-  if (!Number.isFinite(candidateMs) || !Number.isFinite(currentMs)) return false
-  const lagMs = currentMs - candidateMs
-  return lagMs > 0 && lagMs <= STALE_MIRROR_WINDOW_MS
-}
-
-/**
- * The stamp that orders two publishes for cross-mirror comparison. The feed's
- * own publish time (`publishedAt`) leads because it moves on every publish;
- * the crawl snapshot time (`fetchedAt`) is only the fallback for feeds that
- * predate the stamp — two publishes sharing one snapshot are indistinguishable
- * on it, which is exactly how a lagging mirror used to overwrite newer data
- * that carried the same snapshot untouched.
- */
 function freshnessStampOf(catalog: MarketCatalog): string {
   return catalog.publishedAt || catalog.fetchedAt
 }
@@ -588,9 +413,45 @@ interface PackageManifest {
   readonly dist?: { readonly tarball?: unknown; readonly integrity?: unknown }
 }
 
+function npmmirrorVersionTag(manifest: PackageManifest): string {
+  const version = typeof manifest.version === 'string' ? manifest.version : ''
+  const integrity = typeof manifest.dist?.integrity === 'string' ? manifest.dist.integrity : ''
+  if (integrity !== '') return `${NPMMIRROR_ETAG_PREFIX}${version}:${integrity}`
+  return version !== '' ? `${NPMMIRROR_ETAG_PREFIX}${version}` : ''
+}
+
+interface SidecarPayload {
+  readonly meta: ParsedSelectionMeta
+  readonly etag: string
+  readonly activeBase: string
+}
+
 type AttemptOutcome =
   | { readonly kind: 'not-modified'; readonly activeBase: string }
-  | { readonly kind: 'fresh'; readonly catalog: MarketCatalog; readonly marketEtag: string; readonly activeBase: string }
+  | {
+    readonly kind: 'fresh'
+    readonly catalog: MarketCatalog
+    readonly marketEtag: string
+    readonly activeBase: string
+    readonly needsSidecar: boolean
+    readonly feedVersion: string
+    readonly publishedAt: string
+    readonly protectedRepos: ReadonlySet<string>
+    readonly sidecar?: SidecarPayload
+  }
+
+type SidecarFetchResult =
+  | { readonly kind: 'loaded'; readonly payload: SidecarPayload }
+  | { readonly kind: 'not-found' }
+  | { readonly kind: 'unavailable' }
+
+class SidecarHttpError extends Error {
+  readonly status: number
+  constructor(status: number) {
+    super(`sidecar HTTP ${String(status)}`)
+    this.status = status
+  }
+}
 
 /**
  * Build the catalog reader.
@@ -598,7 +459,6 @@ type AttemptOutcome =
  * @returns the reader.
  */
 export function createCatalogSource(options: CatalogOptions): CatalogSource {
-  // Migrate previous built-in URLs (market-v2.json / market-catalog.json / legacy npmmirror /files) even when persisted by the host.
   const migrateBuiltIn = (base: string): string => {
     for (const current of [DEFAULT_CATALOG_BASE, MIRROR_CATALOG_BASE]) {
       if (
@@ -614,10 +474,6 @@ export function createCatalogSource(options: CatalogOptions): CatalogSource {
     return base
   }
   const primary = migrateBuiltIn(options.base)
-  // The mirrors (China-reachable npmmirror tarball, then unpkg) stand behind the
-  // default feed only. A deployment that pointed the market at its own mirror or
-  // curation gets exactly that one source — silently switching datasets is not
-  // what `catalogBase` was configured for.
   const chain = primary === DEFAULT_CATALOG_BASE
     ? [primary, CN_MIRROR_CATALOG_BASE, MIRROR_CATALOG_BASE]
     : [primary]
@@ -627,17 +483,18 @@ export function createCatalogSource(options: CatalogOptions): CatalogSource {
   const bodyHedgeDelayMs = options.bodyHedgeDelayMs !== undefined && Number.isFinite(options.bodyHedgeDelayMs) && options.bodyHedgeDelayMs >= 0
     ? options.bodyHedgeDelayMs
     : Math.max(hedgeDelayMs * 4, DEFAULT_BODY_HEDGE_DELAY_MS)
+
   type CatalogSnapshotSlot =
     | { readonly status: 'empty' }
     | { readonly status: 'loaded'; readonly catalog: MarketCatalog; readonly marketEtag: string; readonly activeBase: string }
 
+  type SidecarSnapshotSlot =
+    | { readonly status: 'empty' }
+    | { readonly status: 'loaded'; readonly meta: ParsedSelectionMeta; readonly etag: string; readonly activeBase: string }
+
   type RefreshFlightState =
     | { readonly status: 'idle'; readonly lastFailureAt: number }
     | { readonly status: 'refreshing'; readonly promise: Promise<{ catalog: MarketCatalog | null; stale: boolean; error: string }> }
-
-  type HedgedRaceState =
-    | { readonly status: 'racing'; readonly nextIndex: number; readonly active: number; readonly hedgeTimer?: ReturnType<typeof setTimeout> }
-    | { readonly status: 'settled' }
 
   // The durable seat is NOT seeded at construction time. The plugin body
   // hands the source a cache port whose backing domain opens asynchronously
@@ -648,6 +505,7 @@ export function createCatalogSource(options: CatalogOptions): CatalogSource {
   // adopted. Reading it again whenever the closure is still empty also
   // covers a read that raced the domain open.
   let snapshot: CatalogSnapshotSlot = { status: 'empty' }
+  let sidecarSnapshot: SidecarSnapshotSlot = { status: 'empty' }
   const seedFromCache = (): void => {
     if (snapshot.status === 'loaded') return
     const cached = options.cache?.read()
@@ -689,11 +547,6 @@ export function createCatalogSource(options: CatalogOptions): CatalogSource {
     return Number.isFinite(at) && Date.now() - at < REFRESH_INTERVAL_MS
   }
 
-  /**
-   * One fetch against one base, bound to the fetch timeout and optional race
-   * abort signal. Pure until committed by {@link commitOutcome}, so concurrent
-   * hedged attempts never overwrite each other's state.
-   */
   const attempt = async (
     base: string,
     abortSignal?: AbortSignal,
@@ -719,16 +572,15 @@ export function createCatalogSource(options: CatalogOptions): CatalogSource {
       onHeaders?.()
       return { kind: 'not-modified', activeBase: current.activeBase }
     }
-    if (!response.ok) throw new Error(`catalog HTTP ${String(response.status)}`)
+    if (!response.ok) {
+      void response.body?.cancel().catch(() => undefined)
+      throw new Error(`catalog HTTP ${String(response.status)}`)
+    }
     if (base !== CN_MIRROR_CATALOG_BASE) onHeaders?.()
     const body = await readJson(response)
     const manifest = body !== null && typeof body === 'object' ? body as PackageManifest : null
     if (manifest !== null && manifest.schema_version === undefined && typeof manifest.dist?.tarball === 'string') {
-      const version = typeof manifest.version === 'string' ? manifest.version : ''
-      const integrity = typeof manifest.dist.integrity === 'string' ? manifest.dist.integrity : ''
-      const versionTag = integrity !== ''
-        ? `${NPMMIRROR_ETAG_PREFIX}${version}:${integrity}`
-        : version !== '' ? `${NPMMIRROR_ETAG_PREFIX}${version}` : ''
+      const versionTag = npmmirrorVersionTag(manifest)
       if (conditional && versionTag !== '' && current.marketEtag === versionTag) {
         onHeaders?.()
         return { kind: 'not-modified', activeBase: base }
@@ -738,22 +590,58 @@ export function createCatalogSource(options: CatalogOptions): CatalogSource {
         throw new Error('catalog tarball URL is not on an allowed registry host')
       }
       const tarResponse = await fetchFollowing(tarballUrl, '', abortSignal, 'identity')
-      if (!tarResponse.ok) throw new Error(`catalog tarball HTTP ${String(tarResponse.status)}`)
+      if (!tarResponse.ok) {
+        void tarResponse.body?.cancel().catch(() => undefined)
+        throw new Error(`catalog tarball HTTP ${String(tarResponse.status)}`)
+      }
       onHeaders?.()
-      const extracted = await extractFileFromTgzResponse(tarResponse, TARBALL_CATALOG_PATHS, MAX_CATALOG_BYTES)
-      const parsed = JSON.parse(extracted.toString('utf8')) as unknown
+      const extracted = await extractFilesFromTgzResponse(
+        tarResponse,
+        TARBALL_PRIMARY_CATALOG_PATHS,
+        [TARBALL_SELECTION_META_PATH],
+        MAX_CATALOG_BYTES,
+        abortSignal,
+      )
+      const parsed = JSON.parse(extracted.primary.toString('utf8')) as unknown
+      const envelopeMeta = readFeedEnvelopeMeta(parsed)
+      let parsedSidecar: ParsedSelectionMeta | undefined
+      const sidecarBytes = extracted.optional.get(TARBALL_SELECTION_META_PATH)
+      if (sidecarBytes !== undefined) {
+        try {
+          const candidate = parseSelectionMeta(JSON.parse(sidecarBytes.toString('utf8')) as unknown)
+          if (candidate !== undefined && !isSidecarVersionSkewed(envelopeMeta, candidate)) {
+            parsedSidecar = candidate
+          }
+        } catch {
+          // Malformed or incompatible sidecar inside a tarball must never fail catalog loading.
+        }
+      }
+      const derived = deriveMarketInternal(parsed, options.marketSize, options.dshVersion, parsedSidecar)
+      // If optional sidecar scanning was interrupted mid-tarball (e.g. stream blip or
+      // 64 MiB limit), omit marketEtag so subsequent /latest checks can self-heal.
+      const effectiveTag = extracted.optionalInterrupted && parsedSidecar === undefined ? '' : versionTag
       return {
         kind: 'fresh',
-        catalog: deriveMarket(parsed, options.marketSize, options.dshVersion),
-        marketEtag: versionTag,
+        catalog: derived.catalog,
+        marketEtag: effectiveTag,
         activeBase: base,
+        needsSidecar: false,
+        feedVersion: derived.feedVersion,
+        publishedAt: derived.publishedAt,
+        protectedRepos: derived.protectedRepos,
+        ...(parsedSidecar !== undefined ? { sidecar: { meta: parsedSidecar, etag: versionTag, activeBase: base } } : {}),
       }
     }
+    const derived = deriveMarketInternal(body, options.marketSize, options.dshVersion)
     return {
       kind: 'fresh',
-      catalog: deriveMarket(body, options.marketSize, options.dshVersion),
+      catalog: derived.catalog,
       marketEtag: response.headers.get('etag') ?? '',
       activeBase: base,
+      needsSidecar: derived.schemaVersion === 4 && selectionMetaUrlOf(base) !== null,
+      feedVersion: derived.feedVersion,
+      publishedAt: derived.publishedAt,
+      protectedRepos: derived.protectedRepos,
     }
   }
 
@@ -770,6 +658,14 @@ export function createCatalogSource(options: CatalogOptions): CatalogSource {
       options.cache?.write({ catalog: snapshot.catalog, marketEtag: snapshot.marketEtag, activeBase: snapshot.activeBase })
       return snapshot.catalog
     }
+    if (outcome.sidecar !== undefined) {
+      sidecarSnapshot = {
+        status: 'loaded',
+        meta: outcome.sidecar.meta,
+        etag: outcome.sidecar.etag,
+        activeBase: outcome.sidecar.activeBase,
+      }
+    }
     snapshot = {
       status: 'loaded',
       catalog: outcome.catalog,
@@ -780,7 +676,6 @@ export function createCatalogSource(options: CatalogOptions): CatalogSource {
     return snapshot.catalog
   }
 
-  /** The chain in the order this read tries: the sticky base first. */
   const orderedBases = (): string[] => {
     const base = snapshot.status === 'loaded' ? snapshot.activeBase : ''
     return base === '' || !chain.includes(base)
@@ -788,146 +683,175 @@ export function createCatalogSource(options: CatalogOptions): CatalogSource {
       : [base, ...chain.filter(candidate => candidate !== base)]
   }
 
-  /** A short host label for an error that names two failed attempts. */
-  const baseLabel = (base: string): string => {
-    try { return new URL(base).host } catch { return base }
+  const attemptSidecar = async (
+    sidecarUrl: string,
+    catalogEnvelope: { readonly feedVersion: string; readonly publishedAt: string },
+    abortSignal?: AbortSignal,
+    onHeaders?: () => void,
+  ): Promise<SidecarPayload> => {
+    const current = sidecarSnapshot.status === 'loaded' ? sidecarSnapshot : null
+    const wireEtag = current !== null && current.etag !== '' && current.activeBase === sidecarUrl
+      ? current.etag
+      : ''
+    const response = await fetchFollowing(sidecarUrl, wireEtag, abortSignal)
+    if (response.status === 304) {
+      if (current === null) throw new Error('sidecar HTTP 304')
+      if (isSidecarVersionSkewed(catalogEnvelope, current.meta)) throw new Error('sidecar version skewed')
+      onHeaders?.()
+      return { meta: current.meta, etag: current.etag, activeBase: current.activeBase }
+    }
+    if (!response.ok) {
+      void response.body?.cancel().catch(() => undefined)
+      throw new SidecarHttpError(response.status)
+    }
+    onHeaders?.()
+    const body = await readJson(response)
+    const meta = parseSelectionMeta(body)
+    if (meta === undefined) throw new Error('sidecar payload is empty or invalid')
+    if (isSidecarVersionSkewed(catalogEnvelope, meta)) throw new Error('sidecar version skewed')
+    return { meta, etag: response.headers.get('etag') ?? '', activeBase: sidecarUrl }
+  }
+
+  const fetchSelectionMeta = async (
+    preferredCatalogBase: string,
+    catalogEnvelope: { readonly feedVersion: string; readonly publishedAt: string },
+  ): Promise<SidecarFetchResult> => {
+    // Direct JSON sidecar race only targets lightweight JSON mirrors (never
+    // falling back to downloading a 30+ MiB npmmirror tarball just for optional metadata).
+    const sidecarTargets: string[] = []
+    const pushTarget = (url: string | null): void => {
+      if (url !== null && !sidecarTargets.includes(url)) sidecarTargets.push(url)
+    }
+    pushTarget(selectionMetaUrlOf(preferredCatalogBase))
+    for (const candidate of chain) {
+      pushTarget(selectionMetaUrlOf(candidate))
+    }
+    if (sidecarTargets.length === 0) return { kind: 'not-found' }
+
+    const baselineStamp = sidecarSnapshot.status === 'loaded' ? sidecarFreshnessStampOf(sidecarSnapshot.meta) : ''
+    const baselineActiveBase = sidecarSnapshot.status === 'loaded' ? sidecarSnapshot.activeBase : ''
+    const failureKinds = new Map<string, '404' | 'other'>()
+
+    try {
+      const payload = await runMirrorRace<SidecarPayload>({
+        targets: sidecarTargets,
+        hedgeDelayMs,
+        bodyHedgeDelayMs,
+        disposeSignal: options.disposeSignal,
+        attempt: async (target, abortSignal, onHeaders) => {
+          try {
+            return await attemptSidecar(target, catalogEnvelope, abortSignal, onHeaders)
+          } catch (error) {
+            failureKinds.set(target, error instanceof SidecarHttpError && error.status === 404 ? '404' : 'other')
+            throw error
+          }
+        },
+        evaluate: (candidate) => {
+          if (
+            baselineStamp !== ''
+            && baselineActiveBase !== ''
+            && candidate.activeBase !== baselineActiveBase
+            && isStaleMirrorSnapshot(sidecarFreshnessStampOf(candidate.meta), baselineStamp)
+          ) {
+            failureKinds.set(candidate.activeBase, 'other')
+            return { accept: false }
+          }
+          return { accept: true, value: candidate }
+        },
+        onExhausted: (sawOlderSnapshot) => {
+          if (
+            sawOlderSnapshot
+            && sidecarSnapshot.status === 'loaded'
+            && !isSidecarVersionSkewed(catalogEnvelope, sidecarSnapshot.meta)
+          ) {
+            return {
+              meta: sidecarSnapshot.meta,
+              etag: sidecarSnapshot.etag,
+              activeBase: sidecarSnapshot.activeBase,
+            }
+          }
+          throw new Error('sidecar unavailable')
+        },
+      })
+      return { kind: 'loaded', payload }
+    } catch {
+      const all404 = sidecarTargets.every(target => failureKinds.get(target) === '404')
+      return all404 ? { kind: 'not-found' } : { kind: 'unavailable' }
+    }
   }
 
   const refresh = async (): Promise<MarketCatalog> => {
     const bases = orderedBases()
-    if (bases.length === 1) {
-      return commitOutcome(await attempt(bases[0]!, options.disposeSignal))
-    }
     const baselineStamp = snapshot.status === 'loaded' ? freshnessStampOf(snapshot.catalog) : ''
     const baselineActiveBase = snapshot.status === 'loaded' ? snapshot.activeBase : ''
     const baselineEffectiveBase = baselineActiveBase === '' ? primary : baselineActiveBase
-    return await new Promise<MarketCatalog>((resolve, reject) => {
-      const raceController = new AbortController()
-      const combinedSignal = options.disposeSignal === undefined
-        ? raceController.signal
-        : AbortSignal.any([raceController.signal, options.disposeSignal])
-      const failures: Array<string | undefined> = Array.from({ length: bases.length }, () => undefined)
-      let race: HedgedRaceState = { status: 'racing', nextIndex: 0, active: 0 }
-      let sawOlderSnapshot = false
-
-      const clearHedgeTimer = (): void => {
-        if (race.status === 'racing' && race.hedgeTimer !== undefined) {
-          clearTimeout(race.hedgeTimer)
-          race = { status: 'racing', nextIndex: race.nextIndex, active: race.active }
+    const outcome = await runMirrorRace<AttemptOutcome>({
+      targets: bases,
+      hedgeDelayMs,
+      bodyHedgeDelayMs,
+      disposeSignal: options.disposeSignal,
+      attempt,
+      evaluate: (candidate) => {
+        // Only guard against lagging `@latest` caches when switching across
+        // different mirrors within the drift window. Same-source responses
+        // (or jumps beyond the window) are always accepted so upstream
+        // rollbacks or prior future timestamps can never lock the cache.
+        if (
+          candidate.kind === 'fresh'
+          && baselineStamp !== ''
+          && candidate.activeBase !== baselineEffectiveBase
+          && isStaleMirrorSnapshot(freshnessStampOf(candidate.catalog), baselineStamp)
+        ) {
+          return { accept: false }
         }
-      }
-
-      const settle = (onSettled: () => void): void => {
-        if (race.status === 'settled') return
-        if (race.hedgeTimer !== undefined) clearTimeout(race.hedgeTimer)
-        race = { status: 'settled' }
-        raceController.abort()
-        onSettled()
-      }
-
-      const scheduleHedge = (delayMs: number): void => {
-        clearHedgeTimer()
-        if (race.status !== 'racing' || race.nextIndex >= bases.length) return
-        const hedgeTimer = setTimeout(() => {
-          if (race.status !== 'racing') return
-          race = { status: 'racing', nextIndex: race.nextIndex, active: race.active }
-          launchNext()
-        }, delayMs)
-        race = { ...race, hedgeTimer }
-      }
-
-      const finishExhausted = (): void => {
+        return { accept: true, value: candidate }
+      },
+      onExhausted: (sawOlderSnapshot, failures) => {
         if (sawOlderSnapshot && snapshot.status === 'loaded') {
           // Every reachable mirror served an older `@latest` snapshot than our
           // current cache; preserve the newer local catalog and refresh its timestamp.
-          settle(() => {
-            try {
-              resolve(commitOutcome({ kind: 'not-modified', activeBase: baselineActiveBase }))
-            } catch (error) {
-              reject(error)
-            }
-          })
-          return
+          return { kind: 'not-modified', activeBase: baselineActiveBase }
         }
         const summary = failures.filter((entry): entry is string => entry !== undefined).join('; ')
-        settle(() => reject(new Error(summary)))
-      }
-
-      const launchNext = (): void => {
-        if (race.status !== 'racing' || race.nextIndex >= bases.length) return
-        const idx = race.nextIndex
-        const base = bases[idx]!
-        let attemptExtended = false
-        race = { ...race, nextIndex: idx + 1, active: race.active + 1 }
-        scheduleHedge(hedgeDelayMs)
-        void attempt(base, combinedSignal, () => {
-          // Valid response headers arrived for the latest launched attempt:
-          // switch its tight TTFB hedge to the body-transfer grace period once
-          // so healthy downloads avoid redundant mirrors while stalled streams still fail over.
-          if (
-            race.status === 'racing'
-            && !attemptExtended
-            && idx === race.nextIndex - 1
-            && race.nextIndex < bases.length
-          ) {
-            attemptExtended = true
-            scheduleHedge(bodyHedgeDelayMs)
-          }
-        }).then(
-          (outcome) => {
-            if (race.status === 'settled') return
-            // Only guard against lagging `@latest` caches when switching across
-            // different mirrors within the drift window. Same-source responses
-            // (or jumps beyond the window) are always accepted so upstream
-            // rollbacks or prior future timestamps can never lock the cache.
-            if (
-              outcome.kind === 'fresh'
-              && baselineStamp !== ''
-              && outcome.activeBase !== baselineEffectiveBase
-              && isStaleMirrorSnapshot(freshnessStampOf(outcome.catalog), baselineStamp)
-            ) {
-              sawOlderSnapshot = true
-              race = { ...race, active: race.active - 1 }
-              if (race.nextIndex < bases.length && race.active === 0) {
-                clearHedgeTimer()
-                launchNext()
-                return
-              }
-              if (race.active === 0 && race.nextIndex >= bases.length) {
-                finishExhausted()
-              }
-              return
-            }
-            settle(() => {
-              try {
-                resolve(commitOutcome(outcome))
-              } catch (error) {
-                reject(error)
-              }
-            })
-          },
-          (error: unknown) => {
-            if (race.status === 'settled') return
-            race = { ...race, active: race.active - 1 }
-            if (options.disposeSignal?.aborted) {
-              settle(() => reject(error))
-              return
-            }
-            failures[idx] = `${baseLabel(base)}: ${errorText(error)}`
-            if (race.nextIndex < bases.length && race.active === 0) {
-              clearHedgeTimer()
-              launchNext()
-              return
-            }
-            if (race.active === 0 && race.nextIndex >= bases.length) {
-              finishExhausted()
-            }
-          },
-        )
-      }
-
-      launchNext()
+        throw new Error(summary)
+      },
     })
+    if (options.disposeSignal?.aborted) {
+      throw options.disposeSignal.reason ?? new Error('This operation was aborted')
+    }
+    if (outcome.kind === 'fresh' && outcome.needsSidecar) {
+      const sidecarResult = await fetchSelectionMeta(outcome.activeBase, {
+        feedVersion: outcome.feedVersion,
+        publishedAt: outcome.publishedAt,
+      })
+      if (options.disposeSignal?.aborted) {
+        throw options.disposeSignal.reason ?? new Error('This operation was aborted')
+      }
+      if (sidecarResult.kind === 'loaded') {
+        return commitOutcome({
+          ...outcome,
+          catalog: hydrateCatalogWithSelectionMeta(outcome.catalog, sidecarResult.payload.meta, outcome.protectedRepos),
+          sidecar: sidecarResult.payload,
+        })
+      }
+      if (sidecarResult.kind === 'unavailable') {
+        // Transient sidecar failure/skew: reuse compatible in-memory sidecar if
+        // available so keywords aren't wiped out, while omitting marketEtag so
+        // future refreshes can self-heal instead of sticking on 304.
+        const fallbackMeta = sidecarSnapshot.status === 'loaded'
+          && !isSidecarVersionSkewed({ feedVersion: outcome.feedVersion, publishedAt: outcome.publishedAt }, sidecarSnapshot.meta)
+          ? sidecarSnapshot.meta
+          : undefined
+        return commitOutcome({
+          ...outcome,
+          ...(fallbackMeta === undefined
+            ? {}
+            : { catalog: hydrateCatalogWithSelectionMeta(outcome.catalog, fallbackMeta, outcome.protectedRepos) }),
+          marketEtag: '',
+        })
+      }
+    }
+    return commitOutcome(outcome)
   }
 
   const startRefresh = (): Promise<{ catalog: MarketCatalog | null; stale: boolean; error: string }> => {
