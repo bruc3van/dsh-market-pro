@@ -4,6 +4,7 @@ import { IconCloseOutlineRegular, Modal } from '@deepseek-ai/dsh-client-ui-primi
 import { formatUpdateChoiceBlocked } from './compatCopy.ts'
 import type { MarketLocale } from './copy.ts'
 import { isBundleInUse, type PluginUpdater, type UpdateState } from './pluginUpdates.ts'
+import { normalizeIgnoredVersion } from './updateIgnore.ts'
 
 /** Checking is read-only; only the version confirmation invokes updateBundle. */
 export function PluginUpdatePanel({ open, state, updater, t, onClose }: {
@@ -16,6 +17,12 @@ export function PluginUpdatePanel({ open, state, updater, t, onClose }: {
   const recommended = state.choices.find(version => !version.blocked && !version.prerelease && version.deprecated === undefined)?.version
   const result = state.result
   const restore = result?.restore
+  const ignoredRule = state.packageName ? state.ignored[state.packageName] : undefined
+  const ignoreTarget = state.phase === 'ready' ? (state.selected || recommended || '') : ''
+  const targetVersionClean = normalizeIgnoredVersion(ignoreTarget)
+  const versionAlreadyIgnored = ignoredRule?.mode === 'all'
+    || (ignoredRule?.mode === 'version' && targetVersionClean !== '' && ignoredRule.version === targetVersionClean)
+  const showIgnoreActions = !updating && state.phase !== 'checking' && state.phase !== 'done' && state.packageName !== ''
   return <Modal open={open} headless title={`${t('update.title')} · ${state.packageName}`} className="dsh_market_modal" onClose={close}>
   <div className="dsh_market_directPanel dsh_market_updateDialog">
     <div className="dsh_market_directHead">
@@ -27,6 +34,18 @@ export function PluginUpdatePanel({ open, state, updater, t, onClose }: {
     <div className="dsh_market_updateBody">
       {result ? <p>{t('update.transition', { from: result.from, to: result.to })}</p>
         : state.installed && <p>{t('update.installed', { version: state.installed })}</p>}
+      {ignoredRule !== undefined && state.phase !== 'done' && (
+        <div className="dsh_market_updateIgnoreBanner" role="status">
+          <span>
+            {ignoredRule.mode === 'all'
+              ? t('update.ignoredAllNotice')
+              : t('update.ignoredVersionNotice', { version: ignoredRule.version })}
+          </span>
+          <MarketButton size="sm" intent="secondary" disabled={updating} onClick={() => updater.unignore(state.packageName)}>
+            {t('update.restorePrompt')}
+          </MarketButton>
+        </div>
+      )}
       {state.phase === 'checking' && <p role="status" aria-busy="true">{t('update.checking')}</p>}
       {state.phase === 'ready' && <>
         <p>{t(state.choices.length ? 'update.available' : state.kind === 'git' ? 'update.noGitUpdate' : 'update.latest')}</p>
@@ -71,9 +90,25 @@ export function PluginUpdatePanel({ open, state, updater, t, onClose }: {
       {state.warnings.length > 0 && <p role="alert">{t('update.partial')} {state.warnings.join('\n')}</p>}
     </div>
     <div className="dsh_market_updateActions">
-      <MarketButton size="md" intent="secondary" disabled={updating} onClick={close}>{t('direct.close')}</MarketButton>
-      {!updating && state.phase !== 'checking' && <MarketButton size="md" intent="secondary" onClick={() => { void updater.check(state.packageName) }}>{t('update.recheck')}</MarketButton>}
-      {state.phase === 'ready' && state.selected && <MarketButton size="md" intent="primary" onClick={() => { void updater.confirm() }}>{t('update.action')}</MarketButton>}
+      {showIgnoreActions && (
+        <div className="dsh_market_updateIgnoreActions">
+          {targetVersionClean !== '' && !versionAlreadyIgnored && (
+            <MarketButton size="md" intent="quiet" onClick={() => { updater.ignoreVersion(state.packageName, ignoreTarget); close() }}>
+              {t('update.ignoreVersionItem', { version: targetVersionClean })}
+            </MarketButton>
+          )}
+          {ignoredRule?.mode !== 'all' && (
+            <MarketButton size="md" intent="quiet" onClick={() => { updater.ignoreAllUpdates(state.packageName); close() }}>
+              {t('update.ignoreAll')}
+            </MarketButton>
+          )}
+        </div>
+      )}
+      <div className="dsh_market_updatePrimaryActions">
+        <MarketButton size="md" intent="secondary" disabled={updating} onClick={close}>{t('direct.close')}</MarketButton>
+        {!updating && state.phase !== 'checking' && <MarketButton size="md" intent="secondary" onClick={() => { void updater.check(state.packageName) }}>{t('update.recheck')}</MarketButton>}
+        {state.phase === 'ready' && state.selected && <MarketButton size="md" intent="primary" onClick={() => { void updater.confirm() }}>{t('update.action')}</MarketButton>}
+      </div>
     </div>
   </div>
   </Modal>

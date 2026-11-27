@@ -85,3 +85,5 @@ export declare function isSafeBranchName(value: string): boolean;
 export declare const FEATURED_CATEGORY = "featured";
 /** The published subscription, shown beside the editor's picks. */
 export declare const SUBSCRIPTION_CATEGORY = "dsh:subscription";
+/** Strict whitelist shape for sanitized `<stage>:<machineCode>` telemetry error details. */
+export declare const TELEMETRY_ERROR_DETAIL_PATTERN: RegExp;

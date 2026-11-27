@@ -15,7 +15,8 @@ import { isInstallSpec, MAX_REPO_DIRECTORY_LENGTH, normalizeRepoDirectory, type 
 import type { InvocationDescriptor } from '@deepseek-ai/dsh-typert-protocol'
 // The dependency-free shapes live in their own module so `./index.ts` and
 // `./catalog.ts` can reach them without evaluating every codec below.
-import { isMarketIcon, isSafeBranchName, PACKAGE_NAME_PATTERN, REPOSITORY_SLUG_PATTERN } from './shapes.ts'
+import { isMarketIcon, isSafeBranchName, PACKAGE_NAME_PATTERN, REPOSITORY_SLUG_PATTERN, TELEMETRY_ERROR_DETAIL_PATTERN } from './shapes.ts'
+export { TELEMETRY_ERROR_DETAIL_PATTERN }
 import { SERVER_NAME_PATTERN } from './mcpShapes.ts'
 
 /** One row of the market: a community plugin the catalog kept. */
@@ -261,7 +262,14 @@ export type TelemetryErrorCode =
   | 'already_installed'
   | 'not_found'
   | 'pnpm_missing'
+  | 'runtime_missing'
   | 'build_blocked'
+  | 'build_failed'
+  | 'git_failed'
+  | 'tls_error'
+  | 'auth_failed'
+  | 'rate_limited'
+  | 'fs_locked'
   | 'permission'
   | 'disk_full'
   | 'integrity'
@@ -286,6 +294,7 @@ export type TelemetryClientEvent =
     readonly mode: 'direct' | 'ai'
     readonly result: 'ok' | 'failed'
     readonly errorCode?: TelemetryErrorCode
+    readonly errorDetail?: string
   }
   | {
     readonly kind: 'mcp_install'
@@ -293,6 +302,7 @@ export type TelemetryClientEvent =
     readonly mode: 'featured' | 'custom'
     readonly result: 'ok' | 'failed'
     readonly errorCode?: TelemetryErrorCode
+    readonly errorDetail?: string
   }
   | {
     readonly kind: 'skill_install'
@@ -300,6 +310,7 @@ export type TelemetryClientEvent =
     readonly mode: 'featured' | 'ai'
     readonly result: 'ok' | 'failed'
     readonly errorCode?: TelemetryErrorCode
+    readonly errorDetail?: string
   }
 
 /** Live state of one loader entry an installed bundle introduces. */
@@ -559,7 +570,14 @@ const telemetryErrorCodeSchema = z.enum([
   'already_installed',
   'not_found',
   'pnpm_missing',
+  'runtime_missing',
   'build_blocked',
+  'build_failed',
+  'git_failed',
+  'tls_error',
+  'auth_failed',
+  'rate_limited',
+  'fs_locked',
   'permission',
   'disk_full',
   'integrity',
@@ -572,6 +590,8 @@ const telemetryErrorCodeSchema = z.enum([
   'operation_error',
   'unknown',
 ])
+
+const telemetryErrorDetailSchema = z.string().regex(TELEMETRY_ERROR_DETAIL_PATTERN)
 
 /** Strict wire codec for client-reported anonymous telemetry events. */
 export const telemetryClientEventSchema = z.discriminatedUnion('kind', [
@@ -586,6 +606,7 @@ export const telemetryClientEventSchema = z.discriminatedUnion('kind', [
     mode: z.enum(['direct', 'ai']),
     result: z.enum(['ok', 'failed']),
     errorCode: telemetryErrorCodeSchema.optional(),
+    errorDetail: telemetryErrorDetailSchema.optional(),
   }).readonly(),
   z.object({
     kind: z.literal('mcp_install'),
@@ -593,6 +614,7 @@ export const telemetryClientEventSchema = z.discriminatedUnion('kind', [
     mode: z.enum(['featured', 'custom']),
     result: z.enum(['ok', 'failed']),
     errorCode: telemetryErrorCodeSchema.optional(),
+    errorDetail: telemetryErrorDetailSchema.optional(),
   }).readonly(),
   z.object({
     kind: z.literal('skill_install'),
@@ -600,6 +622,7 @@ export const telemetryClientEventSchema = z.discriminatedUnion('kind', [
     mode: z.enum(['featured', 'ai']),
     result: z.enum(['ok', 'failed']),
     errorCode: telemetryErrorCodeSchema.optional(),
+    errorDetail: telemetryErrorDetailSchema.optional(),
   }).readonly(),
 ])
 

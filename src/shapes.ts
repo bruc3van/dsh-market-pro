@@ -108,3 +108,6 @@ export const FEATURED_CATEGORY = 'featured'
 
 /** The published subscription, shown beside the editor's picks. */
 export const SUBSCRIPTION_CATEGORY = 'dsh:subscription'
+
+/** Strict whitelist shape for sanitized `<stage>:<machineCode>` telemetry error details. */
+export const TELEMETRY_ERROR_DETAIL_PATTERN = /^(?:inspect|connect|install|enable|unknown):[A-Z0-9_-]{1,48}$/

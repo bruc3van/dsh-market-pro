@@ -208,6 +208,34 @@ export const cssText = `
   min-width: 0; display: flex; justify-content: flex-end; align-items: center; flex-wrap: wrap; gap: 8px;
   margin: 22px 0 0; padding: 0; border: 0;
 }
+.dsh_market_updateIgnoreActions {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-right: auto;
+}
+.dsh_market_updatePrimaryActions {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: auto;
+}
+.dsh_market_updateIgnoreBanner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin: 10px 0 4px;
+  padding: 8px 12px;
+  border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  line-height: 18px;
+}
 .dsh_market_installFooter .dsh_market_link { height: 36px; padding: 0 14px; border-radius: var(--dsw-radius-md); font-size: 14px; line-height: 22px; }
 
 /* Single & batch update dialogs: header and footer stay pinned while long version/queue lists scroll locally. */
@@ -321,12 +349,35 @@ export const cssText = `
 .dsh_market_batchState[data-tone="warn"] { color: var(--dsw-alias-state-warn-primary); }
 .dsh_market_batchState[data-tone="error"] { color: var(--dsw-alias-state-error-primary); }
 .dsh_market_batchState[data-tone="active"] { color: var(--dsw-alias-state-business-primary); }
-.dsh_market_batchUpdateButton {
+.dsh_market_batchUpdateButton,
+.dsh_market_batchUninstallButton {
   height: 36px;
   padding: 0 14px;
   border-radius: var(--dsw-radius-md);
   font-size: 13px;
   line-height: 20px;
+}
+.dsh_market_batchSelectBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 10px 0 6px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-secondary);
+}
+.dsh_market_batchWarn {
+  margin: 10px 0 0;
+  padding: 8px 12px;
+  border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-interactive-bg-hover-danger);
+  color: var(--dsw-alias-state-error-primary);
+  font-size: 12px;
+  line-height: 18px;
+}
+.dsh_market_batchProgressFillDanger {
+  background: var(--dsw-alias-state-error-primary);
 }
 
 .dsh_market_main {
@@ -1430,6 +1481,53 @@ export const cssText = `
   line-height: 18px;
   color: var(--dsw-alias-state-business-primary);
 }
+.dsh_market_ignoredUpdateTag {
+  gap: 4px;
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary);
+}
+.dsh_market_ignoredRestoreBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--dsw-radius-xs);
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+@media (hover: hover) {
+  .dsh_market_ignoredRestoreBtn:hover:not(:disabled) {
+    background: var(--dsw-alias-interactive-bg-active);
+    color: var(--dsw-alias-label-primary);
+  }
+}
+.dsh_market_ignoredRestoreBtn:focus-visible {
+  outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  outline-offset: 1px;
+}
+.dsh_market_ignoredRestoreBtn:disabled { opacity: 0.45; cursor: not-allowed; }
+.dsh_market_updateSplit {
+  display: inline-flex;
+  align-items: stretch;
+}
+.dsh_market_updateSplit > button:first-child {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.dsh_market_updateMoreTrigger {
+  min-width: 26px;
+  padding: 0 6px;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  border-left: 1px solid rgba(0, 0, 0, 0.14);
+}
 /* The desktop-seat hint: an inline info glyph; its explanation is the host Tooltip. */
 .dsh_market_hint {
   display: inline-flex;
@@ -2026,7 +2124,8 @@ button.dsh_market_dangerButton { color: var(--dsw-alias-state-error-primary); }
   .dsh_market_sort { flex: 1 1 0; min-width: 0; }
   .dsh_market_category .dsh_market_modeTrigger,
   .dsh_market_sort .dsh_market_modeTrigger { width: 100%; min-width: 0; max-width: none; padding: 0 12px; }
-  .dsh_market_batchUpdateButton { flex: 1 1 auto; }
+  .dsh_market_batchUpdateButton,
+  .dsh_market_batchUninstallButton { flex: 1 1 auto; }
   .dsh_market_scroll { scrollbar-gutter: auto; padding-right: 0; }
   .dsh_market_results { scrollbar-gutter: auto; padding-right: 0; padding-bottom: 48px; gap: 10px; }
   .dsh_market_pagination { margin-right: 0; gap: 6px 12px; }

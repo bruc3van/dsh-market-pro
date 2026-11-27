@@ -38,7 +38,9 @@ import type {
 } from '../contract.ts'
 import { FEATURED_MCP_SERVERS, mcpIdentityKey } from '../mcpFeatured.ts'
 import { isInstallSpec } from '../installInfo.ts'
-import { classifyInstallError } from '../telemetryError.ts'
+import { PACKAGE_NAME } from '../shapes.ts'
+import { classifyInstallError, extractInstallErrorDetail } from '../telemetryError.ts'
+import { createBatchUninstaller } from './batchUninstall.ts'
 import { createClientCatalogCache } from './catalogCache.ts'
 import { createDirectInstaller, type InstallHost } from './directInstall.ts'
 import { createOfficialBundlesController, type OfficialBundleHost } from './officialBundles.ts'
@@ -47,6 +49,7 @@ import {
   createMcpController, type McpCredentialsFace, type McpManagerFace, type McpPluginsFace, type McpSettingsFace,
 } from './mcpController.ts'
 import { createPluginUpdater, type UpdateHost, type UpdateMarketHost } from './pluginUpdates.ts'
+import { IGNORED_UPDATES_STORAGE_KEY } from './updateIgnore.ts'
 import { stageReviewPrompt } from './handoff.ts'
 import { SAFE_MARKET_REMOTE } from './remote.ts'
 import {
@@ -531,12 +534,15 @@ export function apply(ctx: ClientContext): void {
     () => ctx.reflect.get('remote.pluginManager') as InstallHost | undefined,
     (outcome) => {
       if (outcome.manual && !isInstallSpec(outcome.spec)) return
+      const errorCode = outcome.result === 'failed' ? classifyInstallError(outcome.message, outcome) : undefined
+      const errorDetail = outcome.result === 'failed' ? extractInstallErrorDetail(outcome.message, outcome) : undefined
       sendTelemetry({
         kind: 'plugin_install',
         target: outcome.spec.slice(0, 200),
         mode: 'direct',
         result: outcome.result,
-        ...(outcome.result === 'failed' ? { errorCode: classifyInstallError(outcome.message, outcome) } : {}),
+        ...(errorCode !== undefined ? { errorCode } : {}),
+        ...(errorDetail !== undefined ? { errorDetail } : {}),
       })
     },
   )
@@ -559,6 +565,20 @@ export function apply(ctx: ClientContext): void {
     () => scope.getSnapshot().dshVersion,
   )
   ctx.effect(() => ctx.remote.$on('plugin-manager/update-state', progress => pluginUpdater.progress(progress)), 'dsh-market-pro: update progress')
+  ctx.effect(() => {
+    if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return () => {}
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === IGNORED_UPDATES_STORAGE_KEY || event.key === null) {
+        pluginUpdater.syncIgnoredFromStorage()
+      }
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, 'dsh-market-pro: sync ignored updates')
+  const batchUninstaller = createBatchUninstaller(uninstallInstalled, {
+    selfName: PACKAGE_NAME,
+    onItemRemoved: (packageName) => { pluginUpdater.clearPackageState(packageName) },
+  })
 
   // The Host's own path opener (the session namespace the conversation UI
   // uses for opening files). It re-verifies the path on the Host and reports
@@ -598,6 +618,20 @@ export function apply(ctx: ClientContext): void {
     const result = await remote.installFeaturedSkill(request, signal)
     if (!result.ok) {
       const cancelled = signal?.aborted === true
+      const message = cancelled ? 'installation cancelled' : `${result.error.code}: ${result.error.message}`
+      if (!cancelled) {
+        const hints = { stage: 'connect' } as const
+        const errorCode = classifyInstallError(message, hints)
+        const errorDetail = extractInstallErrorDetail(message, hints)
+        sendTelemetry({
+          kind: 'skill_install',
+          target: request.id,
+          mode: 'featured',
+          result: 'failed',
+          errorCode,
+          ...(errorDetail !== undefined ? { errorDetail } : {}),
+        })
+      }
       return {
         ok: false,
         id: request.id,
@@ -607,7 +641,7 @@ export function apply(ctx: ClientContext): void {
         fileCount: 0,
         hasScripts: false,
         code: cancelled ? 'cancelled' : 'write-failed',
-        error: cancelled ? 'installation cancelled' : `${result.error.code}: ${result.error.message}`,
+        error: message,
       }
     }
     if (result.value.ok) refreshSkills()
@@ -667,7 +701,7 @@ export function apply(ctx: ClientContext): void {
       if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`)
       return result.value
     },
-    onSaveOutcome: ({ draft, ok, message }) => {
+    onInstallOutcome: ({ draft, ok, stage, message, reason, timedOut }) => {
       const identity = mcpIdentityKey({
         transport: draft.transport,
         url: draft.url,
@@ -676,12 +710,20 @@ export function apply(ctx: ClientContext): void {
       })
       const featuredId = identity !== '' ? FEATURED_MCP_BY_IDENTITY.get(identity) : undefined
       if (featuredId === undefined) return
+      const hints = {
+        stage,
+        ...(reason !== undefined ? { mcpReason: reason } : {}),
+        ...(timedOut !== undefined ? { timedOut } : {}),
+      }
+      const errorCode = !ok ? classifyInstallError(message, hints) : undefined
+      const errorDetail = !ok ? extractInstallErrorDetail(message, hints) : undefined
       sendTelemetry({
         kind: 'mcp_install',
         target: featuredId,
         mode: 'featured',
         result: ok ? 'ok' : 'failed',
-        ...(!ok ? { errorCode: classifyInstallError(message) } : {}),
+        ...(errorCode !== undefined ? { errorCode } : {}),
+        ...(errorDetail !== undefined ? { errorDetail } : {}),
       })
     },
   })
@@ -703,6 +745,7 @@ export function apply(ctx: ClientContext): void {
     directInstaller,
     officialBundles,
     pluginUpdater,
+    batchUninstaller,
     loadCatalog,
     peekCatalog,
     ...globalSkills,

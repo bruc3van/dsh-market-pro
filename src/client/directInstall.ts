@@ -1,6 +1,7 @@
 import { evaluateTargetsCompatibility, type IncompatibleRequirementItem } from '../compatibility.ts'
 import { isInstallSpec, type InstallInfo } from '../installInfo.ts'
 import type { MarketIncompatiblePlugin, MarketInstalledPackage } from '../contract.ts'
+import { excerptForTelemetry } from '../telemetryError.ts'
 import { ownedByTarget } from './owned.ts'
 
 // Structural boundary for the optional host service. Do not rely on ambient
@@ -9,10 +10,19 @@ type Reply<T> = { ok: true; value: T } | { ok: false; error: { message: string }
 type RequestId = string | undefined
 interface InstallResult {
   application: 'applied' | 'restart-required' | 'overridden' | 'failed' | 'cancelled'
+  stage?: string
+  failedAt?: 'registry' | 'spec-host'
   pendingBuilds?: string[]
   warnings?: string[]
   error?: { code: string; diagnostic?: string; incompatible?: readonly IncompatibleRequirementItem[] }
-  packageResult?: { output?: string; kind?: string; timedOut?: boolean; incompatible?: readonly IncompatibleRequirementItem[] }
+  packageResult?: {
+    output?: string
+    kind?: string
+    timedOut?: boolean
+    exitCode?: number
+    unmet?: string
+    incompatible?: readonly IncompatibleRequirementItem[]
+  }
 }
 export interface PluginRegistriesSnapshot {
   readonly registry: string | null
@@ -89,6 +99,11 @@ export interface DirectInstallOutcome {
   readonly errorCode?: string
   readonly packageKind?: string
   readonly timedOut?: boolean
+  readonly stage?: string
+  readonly failedAt?: string
+  readonly specKind?: string
+  readonly unmet?: string
+  readonly exitCode?: number
 }
 
 export interface ManualInstallOptions {
@@ -191,14 +206,22 @@ export function createDirectInstaller(
   const manager = () => { const value = host(); if (!value) throw new Error('Plugin installation is unavailable in this host.'); return value }
   const cancelling = () => state.phase === 'cancelling'
   const busy = () => ['checking', 'installing', 'cancelling', 'unknown'].includes(state.phase)
-  const settle = async (result: Awaited<ReturnType<InstallHost['installBundle']>>) => {
+  const settle = async (result: Awaited<ReturnType<InstallHost['installBundle']>>, specKind?: string) => {
     if (!result.ok) { set({ phase: 'unknown', recovering: false, message: result.error.message }); return }
     const value = result.value
     const incompatible = value.error?.incompatible ?? value.packageResult?.incompatible
-    const summary = [value.error?.code, value.error?.diagnostic, ...(value.warnings ?? []),
+    const headerLines = [
+      value.error?.code,
+      value.error?.diagnostic,
+      ...(value.warnings ?? []),
       ...(incompatible ?? []).map(p => `${p.name}@${p.version}: ${JSON.stringify(p.requirements ?? p.peers ?? {})}`),
+    ]
+    const summary = [...headerLines,
       value.application === 'failed' ? value.packageResult?.output : undefined,
     ].filter(Boolean).join('\n').slice(-8000)
+    const telemetryMessage = [...headerLines,
+      value.application === 'failed' && value.packageResult?.output ? excerptForTelemetry(value.packageResult.output) : undefined,
+    ].filter(Boolean).join('\n')
     const spec = state.spec
     const manual = runOptions.origin === 'manual'
     set({ phase: value.application === 'failed' ? 'failed' : 'done', application: value.application,
@@ -213,11 +236,16 @@ export function createDirectInstaller(
       onOutcome?.({
         spec,
         result: 'failed',
-        message: summary,
+        message: telemetryMessage,
+        stage: value.stage ?? 'install',
         ...(manual ? { manual: true } : {}),
         ...(value.error?.code !== undefined ? { errorCode: value.error.code } : {}),
+        ...(value.failedAt !== undefined ? { failedAt: value.failedAt } : {}),
+        ...(specKind !== undefined ? { specKind } : {}),
         ...(value.packageResult?.kind !== undefined ? { packageKind: value.packageResult.kind } : {}),
         ...(value.packageResult?.timedOut !== undefined ? { timedOut: value.packageResult.timedOut } : {}),
+        ...(value.packageResult?.unmet !== undefined ? { unmet: value.packageResult.unmet } : {}),
+        ...(value.packageResult?.exitCode !== undefined ? { exitCode: value.packageResult.exitCode } : {}),
       })
     }
     if (!stopped && (value.application === 'applied' || value.application === 'restart-required')) {
@@ -286,6 +314,7 @@ export function createDirectInstaller(
         }
         throw new Error(`${inspection.value.problem}: ${inspection.value.reason}`)
       }
+      const specKind = inspection.value.kind
       requestId = globalThis.crypto.randomUUID() as RequestId
       set({ phase: 'installing', inspectError: undefined })
       try {
@@ -295,7 +324,7 @@ export function createDirectInstaller(
           enabled: options.enabled,
           ...(options.saveExact ? { saveExact: true } : {}),
           ...(builds.length ? { approvedBuilds: builds } : {}),
-        }))
+        }), specKind)
       } catch (error) { set({ phase: 'unknown', recovering: false, message: String(error) }) }
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : String(error)
@@ -305,8 +334,9 @@ export function createDirectInstaller(
         spec,
         result: 'failed',
         message: errMsg,
+        stage: 'inspect',
         ...(manual ? { manual: true } : {}),
-        ...(inspectError !== undefined && inspectError.problem !== 'unknown' ? { inspectProblem: inspectError.problem } : {}),
+        ...(inspectError !== undefined ? { inspectProblem: inspectError.problem } : {}),
       })
     }
   }

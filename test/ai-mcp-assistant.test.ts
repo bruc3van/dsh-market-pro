@@ -27,11 +27,14 @@ import {
 } from '../src/aiMcpTools.ts'
 import {
   buildManagedMcpInstallPlan,
+  createAiMcpInstallObserver,
   findExistingFeaturedMcp,
   inspectManagedMcp,
   installManagedMcp,
   setManagedMcpEnabled,
+  type AiMcpTelemetryEvent,
   type McpLoaderEntry,
+  type RuntimeMcpStatus,
 } from '../src/mcp.ts'
 import type { SafeMarketSettings } from '../src/contract.ts'
 
@@ -785,7 +788,17 @@ test('dsh_mcp_pro reports onInstallOutcome only for actual install_featured exec
   const { ctx, entries, state, approver } = makeFakeHost()
   let settings: SafeMarketSettings = { enabled: true, aiAssistantEnabled: true }
   const fakeExec = { agent: { id: 'mcp-agent' }, callId: 'call-mcp-outcome' }
-  const outcomes: Array<{ featuredId: string; ok: boolean; error?: string }> = []
+  const outcomes: Array<{
+    featuredId: string
+    serverName?: string
+    enabled?: boolean
+    missingCredentials?: boolean
+    startupTimeoutMs?: number
+    ok: boolean
+    stage?: 'install' | 'connect'
+    reason?: string
+    error?: string
+  }> = []
   let failNextInstall = false
 
   const tool = createMarketAiMcpToolDefinition({
@@ -804,10 +817,16 @@ test('dsh_mcp_pro reports onInstallOutcome only for actual install_featured exec
     execute: (args: unknown, exec?: { agent?: unknown; callId?: string }) => Promise<string>
   }
 
-  // Successful featured install records featuredId + ok:true.
+  // Successful featured install records featuredId, server metadata, and ok:true.
   const okRes = JSON.parse(await tool.execute({ action: 'install_featured', featuredId: 'exa' }, fakeExec)) as { installed: boolean }
   assert.equal(okRes.installed, true)
-  assert.deepEqual(outcomes, [{ featuredId: 'exa', ok: true }])
+  assert.deepEqual(outcomes, [{
+    featuredId: 'exa',
+    serverName: 'exa',
+    enabled: true,
+    missingCredentials: false,
+    ok: true,
+  }])
 
   // Already configured match does not double-report.
   const repeatRes = JSON.parse(await tool.execute({ action: 'install_featured', featuredId: 'exa' }, fakeExec)) as { alreadyConfigured: boolean }
@@ -830,11 +849,106 @@ test('dsh_mcp_pro reports onInstallOutcome only for actual install_featured exec
   }, fakeExec)
   assert.equal(outcomes.length, 1)
 
-  // Actual installMcp failure after approval emits ok:false + error message.
+  // Immediate runtime failure reported in installMcp snapshot emits ok:false at stage:'connect'.
+  state.runtimeStatuses.github = { state: 'failed', reason: 'load' }
+  const failedConnRes = JSON.parse(await tool.execute({ action: 'install_featured', featuredId: 'github' }, fakeExec)) as { installed: boolean }
+  assert.equal(failedConnRes.installed, true)
+  assert.deepEqual(outcomes.at(-1), {
+    featuredId: 'github',
+    serverName: 'github',
+    ok: false,
+    stage: 'connect',
+    reason: 'load',
+    error: 'load',
+  })
+
+  // Actual installMcp failure after approval emits ok:false, stage:'install' + error message.
   failNextInstall = true
   await assert.rejects(() => tool.execute({ action: 'install_featured', featuredId: 'deepwiki' }, fakeExec), /settings conflict/)
-  assert.deepEqual(outcomes, [
-    { featuredId: 'exa', ok: true },
-    { featuredId: 'deepwiki', ok: false, error: 'settings conflict: retry needed' },
-  ])
+  assert.deepEqual(outcomes.at(-1), {
+    featuredId: 'deepwiki',
+    serverName: 'deepwiki',
+    ok: false,
+    stage: 'install',
+    error: 'settings conflict: retry needed',
+  })
+})
+
+test('createAiMcpInstallObserver enriches immediate failures, polls runtime connection transitions, deduplicates reinstalls, and cleans up on dispose', async () => {
+  const events: AiMcpTelemetryEvent[] = []
+  const statuses: Record<string, RuntimeMcpStatus | undefined> = {}
+  const disposeController = new AbortController()
+
+  const observer = createAiMcpInstallObserver({
+    getMcpManager: () => ({
+      list: () => Object.entries(statuses).map(([name, status]) => ({ name, ...(status ? { status } : {}) })),
+    }),
+    report: event => { events.push(event) },
+    disposeSignal: disposeController.signal,
+    pollIntervalMs: 10,
+    defaultTimeoutMs: 40,
+    minBudgetMs: 40,
+    timeoutPadMs: 0,
+  })
+
+  // 1. Immediate connect-stage failure enriches lastError from mcpManager.list().
+  statuses.github = { state: 'failed', reason: 'load', lastError: 'spawn uvx ENOENT' }
+  observer.observe({
+    featuredId: 'github',
+    serverName: 'github',
+    ok: false,
+    stage: 'connect',
+    reason: 'load',
+    error: 'load',
+  })
+  assert.deepEqual(events.at(-1), {
+    target: 'github',
+    mode: 'ai',
+    result: 'failed',
+    errorCode: 'runtime_missing',
+    errorDetail: 'connect:SPAWN_UVX_ENOENT',
+  })
+
+  // 2. Polling transitions: connecting -> connected reports ok.
+  statuses.exa = { state: 'connecting' }
+  observer.observe({ featuredId: 'exa', serverName: 'exa', enabled: true, missingCredentials: false, ok: true })
+  await new Promise(r => setTimeout(r, 15))
+  statuses.exa = { state: 'connected' }
+  await new Promise(r => setTimeout(r, 25))
+  assert.deepEqual(events.at(-1), { target: 'exa', mode: 'ai', result: 'ok' })
+
+  // 3. Reconnecting timeout preserves lastError (auth_failed / HTTP_401).
+  statuses.deepwiki = { state: 'reconnecting', lastError: 'HTTP 401 Unauthorized' }
+  observer.observe({ featuredId: 'deepwiki', serverName: 'deepwiki', enabled: true, missingCredentials: false, ok: true })
+  await new Promise(r => setTimeout(r, 60))
+  assert.deepEqual(events.at(-1), {
+    target: 'deepwiki',
+    mode: 'ai',
+    result: 'failed',
+    errorCode: 'auth_failed',
+    errorDetail: 'connect:HTTP_401',
+  })
+
+  // 4. Turning server disabled cancels observation silently without reporting failure.
+  const countBeforeDisabled = events.length
+  statuses.context7 = { state: 'connecting' }
+  observer.observe({ featuredId: 'context7', serverName: 'context7', enabled: true, missingCredentials: false, ok: true })
+  statuses.context7 = { state: 'disabled' }
+  await new Promise(r => setTimeout(r, 60))
+  assert.equal(events.length, countBeforeDisabled)
+
+  // 5. Same-name reinstall cancels prior observer so it does not double-report.
+  statuses.memory = { state: 'connecting' }
+  observer.observe({ featuredId: 'memory', serverName: 'memory', enabled: true, missingCredentials: false, ok: true })
+  observer.observe({ featuredId: 'memory', serverName: 'memory', enabled: false, missingCredentials: false, ok: true })
+  await new Promise(r => setTimeout(r, 60))
+  assert.deepEqual(events.slice(countBeforeDisabled), [{ target: 'memory', mode: 'ai', result: 'ok' }])
+
+  // 6. Dispose aborts active pollers without emitting timeout failures.
+  const countBeforeDispose = events.length
+  statuses.playwright = { state: 'connecting' }
+  observer.observe({ featuredId: 'playwright', serverName: 'playwright', enabled: true, missingCredentials: false, ok: true })
+  disposeController.abort()
+  await new Promise(r => setTimeout(r, 60))
+  assert.equal(events.length, countBeforeDispose)
 })

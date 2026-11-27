@@ -1,5 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis';
-import type { McpAdoptBlocker, McpAdoptResult, McpHostContext, McpProbeResult, McpToolGroup, McpUnmanagedServer } from './contract.ts';
+import type { McpAdoptBlocker, McpAdoptResult, McpHostContext, McpProbeResult, McpToolGroup, McpUnmanagedServer, TelemetryErrorCode } from './contract.ts';
 /** The Loader entry fields this scan reads, structurally. */
 export interface McpLoaderEntry {
     readonly id: string;
@@ -183,4 +183,53 @@ export declare function setManagedMcpEnabled(ctx: Context, entries: Iterable<Mcp
     readonly name: string;
     readonly enabled: boolean;
 }>;
+export interface RuntimeMcpStatus {
+    readonly state?: string;
+    readonly reason?: string;
+    readonly lastError?: string;
+    readonly result?: {
+        readonly cleanupError?: string;
+    };
+}
+export interface RuntimeMcpManagerFace {
+    list?: () => readonly {
+        readonly name: string;
+        readonly status?: RuntimeMcpStatus;
+    }[];
+}
+export interface AiMcpInstallOutcomeInput {
+    readonly featuredId: string;
+    readonly serverName?: string;
+    readonly enabled?: boolean;
+    readonly missingCredentials?: boolean;
+    readonly startupTimeoutMs?: number;
+    readonly ok: boolean;
+    readonly stage?: 'install' | 'connect';
+    readonly reason?: string;
+    readonly error?: string;
+}
+export interface AiMcpTelemetryEvent {
+    readonly target: string;
+    readonly mode: 'ai';
+    readonly result: 'ok' | 'failed';
+    readonly errorCode?: TelemetryErrorCode;
+    readonly errorDetail?: string;
+}
+export interface CreateAiMcpInstallObserverOptions {
+    readonly getMcpManager: () => RuntimeMcpManagerFace | undefined;
+    readonly report: (event: AiMcpTelemetryEvent) => void;
+    readonly disposeSignal?: AbortSignal;
+    readonly pollIntervalMs?: number;
+    readonly defaultTimeoutMs?: number;
+    readonly minBudgetMs?: number;
+    readonly timeoutPadMs?: number;
+}
+/**
+ * Observe AI-installed curated MCP servers through their initial Host startup
+ * and handshake so telemetry reflects real runtime failures as well as config save errors.
+ */
+export declare function createAiMcpInstallObserver(options: CreateAiMcpInstallObserverOptions): {
+    observe(outcome: AiMcpInstallOutcomeInput): void;
+    dispose(): void;
+};
 export {};

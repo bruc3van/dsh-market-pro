@@ -34,6 +34,8 @@ export interface SubscriptionVersionSelection<T extends SubscriptionVersionCandi
 }
 /** Whether `value` is a canonical semantic version string. */
 export declare function isValidSemver(value: string): boolean;
+/** Compare two version strings (leading `v` optional), or return `null` if either is not semver. */
+export declare function compareSemverStrings(left: string, right: string): number | null;
 /** Whether `runtimeVersion` satisfies a SemVer range under `includePrerelease: true`. */
 export declare function satisfiesDshRange(runtimeVersion: string, range: string): boolean;
 /**

@@ -45,11 +45,12 @@ Only four event shapes can ever leave your machine:
   "target": "omdsh-dev/DSH-better-sidebar",
   "mode": "direct",
   "result": "failed",
-  "errorCode": "compat"
+  "errorCode": "compat",
+  "errorDetail": "install:HOST_INCOMPATIBLE_VERSION"
 }
 ```
 
-3. **Curated MCP install outcome (`mcp_install`)** — sent only for the 100 built-in curated MCP servers (and never for local form-validation errors). Custom or private MCP servers are dropped without sending any request:
+3. **Curated MCP install outcome (`mcp_install`)** — sent only for the 100 built-in curated MCP servers, covering both config save and initial startup/connection outcomes (and never for local form-validation errors). Custom or private MCP servers are dropped without sending any request:
 
 ```json
 {
@@ -86,7 +87,8 @@ Only four event shapes can ever leave your machine:
 ```
 
 - `mode` identifies the install source only: `"direct"` / `"featured"` (Market UI) vs `"ai"` (`/market-pro` Agent assistant). No prompt text or conversation history is ever included.
-- `errorCode` (present only when `result === "failed"`) is mapped client-side to a closed, privacy-safe enum: `"compat" | "unsupported_platform" | "not_bundle" | "already_installed" | "not_found" | "pnpm_missing" | "build_blocked" | "permission" | "disk_full" | "integrity" | "invalid_spec" | "network" | "timeout" | "refused" | "cancelled" | "write_failed" | "operation_error" | "unknown"`. Raw error messages, local paths, and stack traces are never sent.
+- `errorCode` (present only when `result === "failed"`) is mapped client-side to a closed, privacy-safe enum: `"compat" | "unsupported_platform" | "not_bundle" | "already_installed" | "not_found" | "pnpm_missing" | "runtime_missing" | "build_blocked" | "build_failed" | "git_failed" | "tls_error" | "auth_failed" | "rate_limited" | "fs_locked" | "permission" | "disk_full" | "integrity" | "invalid_spec" | "network" | "timeout" | "refused" | "cancelled" | "write_failed" | "operation_error" | "unknown"`.
+- `errorDetail` (optional, present only when `result === "failed"`) carries a strictly whitelisted `<stage>:<machineCode>` fingerprint (`^(?:inspect|connect|install|enable|unknown):[A-Z0-9_-]{1,48}$`), extracted solely from standard machine codes (e.g., `ERR_PNPM_*`, `ERR_TLS_*`, POSIX errno, HTTP status code, or Host refusal/exit code). Raw error messages, local paths, package names, URLs, and stack traces are never sent.
 - `id` is a random per-install UUIDv4 generated locally for daily deduplication. It is never derived from hardware IDs, MAC addresses, usernames, or accounts, and is cleared locally as soon as telemetry is turned off in Settings.
 
 ### 2. What Is Never Collected
@@ -101,7 +103,7 @@ Only four event shapes can ever leave your machine:
 
 - **No IP or header collection**: Although HTTPS connections carry a source IP at the transport layer, the `/api/telemetry` Cloudflare Pages Function never reads or stores `CF-Connecting-IP`, `X-Forwarded-For`, `User-Agent`, or geolocation headers, and never logs request bodies.
 - **No plaintext `id` stored (day-level granularity only)**: The incoming `id` is hashed server-side via HMAC-SHA256 (`id_hash`) before storage. Presence tables store only `first_day` / `last_day` and daily active deduplication (`YYYY-MM-DD`, UTC+8) — no sub-day timestamps are kept.
-- **Decoupled install feedback**: Plugin, curated skill, and curated MCP install outcomes (`plugin_feedback_daily`) are written solely as daily aggregate counters `(day, kind, target, mode, error_code, ok_count, fail_count)` with **no `id_hash` column**, so individual per-user install histories cannot be reconstructed.
+- **Decoupled install feedback**: Plugin, curated skill, and curated MCP install outcomes (`plugin_feedback_daily`) are written solely as daily aggregate counters `(day, kind, target, mode, error_code, error_detail, ok_count, fail_count)` with **no `id_hash` column**, so individual per-user install histories cannot be reconstructed.
 - **Non-blocking**: Requests have a 3-second timeout, swallow failures silently, and back off for the rest of the UTC+8 day if unreachable.
 
 ### 4. How to Disable Telemetry
@@ -140,7 +142,7 @@ DSH Market Pro 内置极简、可关闭的遥测，仅用于统计公共安装�
 
 2. **公开插件安装结果（`plugin_install`）**：仅当目标属于**官方公开目录**时发送（并尽量归一化为官方目录中的 `owner/repo` 标识）；私有包名、本地路径或自定义 `catalogBase` 目录中的条目会直接丢弃，不发任何请求。
 
-3. **精选 MCP 安装结果（`mcp_install`）**：仅针对内置 100 个精选 MCP 服务器发送（且跳过纯本地表单校验拦截）；用户自定义或私有 MCP 会直接丢弃，不发任何请求。
+3. **精选 MCP 安装结果（`mcp_install`）**：仅针对内置 100 个精选 MCP 服务器发送，覆盖配置保存与首次启动连接结果（跳过纯本地表单校验拦截）；用户自定义或私有 MCP 会直接丢弃，不发任何请求。
 
 4. **精选技能安装结果（`skill_install`）**：仅针对内置 100 个精选 Agent Skills（`owner/repo/skillId`）发送，跳过本地目录已存在提示（`already-exists`）与本地路径校验错误；自定义或私有技能绝不上报。
 
@@ -161,7 +163,8 @@ DSH Market Pro 内置极简、可关闭的遥测，仅用于统计公共安装�
 ```
 
 - `mode` 仅用于区分安装入口：`"direct"` / `"featured"`（市场图形界面）与 `"ai"`（`/market-pro` 对话助手），绝不包含对话文本或提示词内容。
-- `errorCode` 仅在失败时出现，且固定映射为封闭、脱敏枚举：`compat | unsupported_platform | not_bundle | already_installed | not_found | pnpm_missing | build_blocked | permission | disk_full | integrity | invalid_spec | network | timeout | refused | cancelled | write_failed | operation_error | unknown`，绝不上报原始报错文本、本地路径或堆栈。
+- `errorCode` 仅在失败时出现，且固定映射为封闭、脱敏枚举：`compat | unsupported_platform | not_bundle | already_installed | not_found | pnpm_missing | runtime_missing | build_blocked | build_failed | git_failed | tls_error | auth_failed | rate_limited | fs_locked | permission | disk_full | integrity | invalid_spec | network | timeout | refused | cancelled | write_failed | operation_error | unknown`。
+- `errorDetail`（可选，仅在失败时出现）仅通过严格白名单正则（`^(?:inspect|connect|install|enable|unknown):[A-Z0-9_-]{1,48}$`）提取 `<stage>:<machineCode>` 机器码指纹（如 `ERR_PNPM_*`、`ERR_TLS_*`、标准 POSIX errno、HTTP 状态码或宿主拒绝/退出码），绝不上报原始报错文本、本地路径、包名、URL 或堆栈。
 - `id` 为本地生成的随机 UUIDv4，仅用于去重，不绑定任何硬件指纹、用户名或账号；在设置中关闭统计后立即清除。
 
 ### 2. 绝不采集的内容
@@ -176,7 +179,7 @@ DSH Market Pro 内置极简、可关闭的遥测，仅用于统计公共安装�
 
 - **不读取、不存储 IP 与请求头**：虽然 HTTPS 连接在传输层必然携带源 IP，但 `/api/telemetry` Cloudflare Pages Function 不读取也不存储 `CF-Connecting-IP`、`X-Forwarded-For`、`User-Agent` 或地理位置头，且不记录请求体日志。
 - **不存储明文 `id`（时间粒度仅到自然日）**：服务端在入库前会先对 `id` 做 HMAC-SHA256 哈希（`id_hash`），活跃记录仅保存按 UTC+8 自然日统计的 `first_day` / `last_day` 与日活去重记录，不保存精确到时分秒的时间戳。
-- **安装反馈彻底脱钩**：插件、精选技能与精选 MCP 安装结果表（`plugin_feedback_daily`）**不含 `id_hash` 字段**，仅按 `(day, kind, target, mode, error_code)` 累加每日成功与失败次数，服务端无法还原单个用户的安装画像。
+- **安装反馈彻底脱钩**：插件、精选技能与精选 MCP 安装结果表（`plugin_feedback_daily`）**不含 `id_hash` 字段**，仅按 `(day, kind, target, mode, error_code, error_detail)` 累加每日成功与失败次数，服务端无法还原单个用户的安装画像。
 - **静默退避**：所有请求 3 秒超时并静默吞掉错误；若域名不可达或被拦截，当日不再重试刷屏。
 
 ### 4. 如何关闭

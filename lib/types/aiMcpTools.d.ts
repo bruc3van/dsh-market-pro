@@ -40,7 +40,13 @@ export interface McpToolExecContext {
 }
 export interface McpAiInstallOutcome {
     readonly featuredId: string;
+    readonly serverName?: string;
+    readonly enabled?: boolean;
+    readonly missingCredentials?: boolean;
+    readonly startupTimeoutMs?: number;
     readonly ok: boolean;
+    readonly stage?: 'install' | 'connect';
+    readonly reason?: string;
     readonly error?: string;
 }
 export interface MarketAiMcpToolDeps {

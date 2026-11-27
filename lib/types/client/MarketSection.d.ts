@@ -2,6 +2,7 @@ import type { DirectInstaller } from './directInstall.ts';
 import { type OfficialBundlesController } from './officialBundles.ts';
 import type { DirectoryBrowserController } from './directoryBrowser.ts';
 import type { PluginUpdater } from './pluginUpdates.ts';
+import type { BatchUninstaller } from './batchUninstall.ts';
 import type { SkillsSessionSource } from './skillsSubscription.ts';
 /**
  * The shared Marketplace surface, with Plugins and Skills pages.
@@ -80,6 +81,7 @@ export interface MarketSectionInjected {
     directInstaller?: DirectInstaller;
     officialBundles?: OfficialBundlesController;
     pluginUpdater?: PluginUpdater;
+    batchUninstaller?: BatchUninstaller;
     hooks: {
         scope: SafeMarketSource;
     };
@@ -149,4 +151,4 @@ export interface HeaderRefreshAction {
     readonly onClick: () => void;
 }
 /** The Marketplace section. */
-export declare function MarketSection({ useScope, updateSettings, loadCatalog, peekCatalog, listSkills, skillsSession, installFeaturedSkill, deleteInstalledSkill, canOpenFolder, openFolder, install, installIntoNewWorkspace, chooseWorkspace, directoryBrowser, workspaceReadiness, listInstalled, subscribeInstalledChanges, setInstalledEnabled, uninstallInstalled, directInstaller, officialBundles, pluginUpdater, mcp, close, t, }: MarketSectionProps): ReactElement;
+export declare function MarketSection({ useScope, updateSettings, loadCatalog, peekCatalog, listSkills, skillsSession, installFeaturedSkill, deleteInstalledSkill, canOpenFolder, openFolder, install, installIntoNewWorkspace, chooseWorkspace, directoryBrowser, workspaceReadiness, listInstalled, subscribeInstalledChanges, setInstalledEnabled, uninstallInstalled, directInstaller, officialBundles, pluginUpdater, batchUninstaller, mcp, close, t, }: MarketSectionProps): ReactElement;

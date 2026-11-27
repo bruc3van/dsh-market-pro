@@ -10,11 +10,14 @@ import {
   classifyInstallError,
   createTelemetryReporter,
   detectHostKind,
+  extractInstallErrorDetail,
   isTelemetryEnvSuppressed,
   sanitizeMcpTarget,
   sanitizePluginTarget,
   sanitizeSkillTarget,
 } from '../src/telemetry.ts'
+import { TELEMETRY_ERROR_DETAIL_PATTERN } from '../src/contract.ts'
+import { excerptForTelemetry } from '../src/telemetryError.ts'
 
 test('isTelemetryEnvSuppressed honors DSH_TELEMETRY_DISABLED, DO_NOT_TRACK, DSH_MARKET_TELEMETRY and CI', () => {
   assert.equal(isTelemetryEnvSuppressed({}), false)
@@ -105,6 +108,145 @@ test('classifyInstallError maps arbitrary error strings and structured hints to 
   assert.equal(classifyInstallError('network down', { skillErrorCode: 'download-failed' }), 'network')
   assert.equal(classifyInstallError('EACCES: permission denied', { skillErrorCode: 'write-failed' }), 'permission')
   assert.equal(classifyInstallError('rename failed', { skillErrorCode: 'write-failed' }), 'write_failed')
+
+  // Expanded high-frequency error categories and structured hints.
+  assert.equal(classifyInstallError('request failed: SELF_SIGNED_CERT_IN_CHAIN'), 'tls_error')
+  assert.equal(classifyInstallError('write EPROTO 14023:SSL routines:wrong version number'), 'tls_error')
+  assert.equal(classifyInstallError('ERR_PNPM_FETCH_403 Forbidden'), 'auth_failed')
+  assert.equal(classifyInstallError('fatal: Authentication failed for https://github.com/a/b'), 'auth_failed')
+  assert.equal(classifyInstallError('Permission denied (publickey).'), 'auth_failed')
+  assert.equal(classifyInstallError('HTTP 429 Too Many Requests'), 'rate_limited')
+  assert.equal(classifyInstallError('ERR_PNPM_FETCH_502 Bad Gateway'), 'network')
+  assert.equal(classifyInstallError('spawn git ENOENT'), 'git_failed')
+  assert.equal(classifyInstallError('ERR_PNPM_GIT_FETCH_FAILED'), 'git_failed')
+  assert.equal(classifyInstallError('EBUSY: resource busy or locked'), 'fs_locked')
+  assert.equal(classifyInstallError('gyp ERR! build error\nnode-gyp rebuild failed'), 'build_failed')
+  assert.equal(classifyInstallError('ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL postinstall failed'), 'build_failed')
+  assert.equal(classifyInstallError('Repository not found'), 'not_found')
+  assert.equal(classifyInstallError('pnpm view answered no package'), 'not_found')
+  assert.equal(classifyInstallError('something odd', { unmet: 'not-bundle' }), 'not_bundle')
+  assert.equal(classifyInstallError('something odd', { unmet: 'unexpected-package' }), 'invalid_spec')
+  assert.equal(classifyInstallError('something odd', { failedAt: 'spec-host' }), 'network')
+
+  // Long logs keep both head and tail so leading ERR_PNPM_* codes survive truncation.
+  const longLog = `ERR_PNPM_GIT_FETCH_FAILED\n${'x'.repeat(12_000)}\nCommand failed`
+  assert.equal(classifyInstallError(excerptForTelemetry(longLog)), 'git_failed')
+
+  // Skill download-failed & write-failed granular root causes.
+  assert.equal(classifyInstallError('fetch failed (UND_ERR_CONNECT_TIMEOUT)', { skillErrorCode: 'download-failed', stage: 'connect' }), 'timeout')
+  assert.equal(classifyInstallError('fetch failed (SELF_SIGNED_CERT_IN_CHAIN)', { skillErrorCode: 'download-failed', stage: 'connect' }), 'tls_error')
+  assert.equal(classifyInstallError('HTTP 429 from api.github.com; jsDelivr fallback: HTTP 429 from fastly.jsdelivr.net', { skillErrorCode: 'download-failed', stage: 'connect' }), 'rate_limited')
+  assert.equal(classifyInstallError('HTTP 403 from api.github.com', { skillErrorCode: 'download-failed', stage: 'connect' }), 'auth_failed')
+  assert.equal(classifyInstallError('jsDelivr mirror (abc) did not contain SKILL.md under "skills/foo"', { skillErrorCode: 'download-failed', stage: 'connect' }), 'invalid_spec')
+  assert.equal(classifyInstallError('skill archive exceeded compressed bytes limit', { skillErrorCode: 'download-failed', stage: 'connect' }), 'invalid_spec')
+  assert.equal(classifyInstallError('incorrect header check (Z_DATA_ERROR)', { skillErrorCode: 'download-failed', stage: 'connect' }), 'integrity')
+  assert.equal(classifyInstallError('rename failed (EXDEV)', { skillErrorCode: 'write-failed', stage: 'install' }), 'fs_locked')
+  assert.equal(classifyInstallError('mkdir failed (EROFS)', { skillErrorCode: 'write-failed', stage: 'install' }), 'permission')
+
+  // MCP runtime, launcher, settings, and connection failure classification.
+  assert.equal(classifyInstallError('spawn uvx ENOENT', { stage: 'connect', mcpReason: 'gave-up' }), 'runtime_missing')
+  assert.equal(classifyInstallError('spawn npx ENOENT', { stage: 'connect', mcpReason: 'load' }), 'runtime_missing')
+  assert.equal(classifyInstallError('MCP error -32000: Connection closed', { stage: 'connect', mcpReason: 'gave-up' }), 'operation_error')
+  assert.equal(classifyInstallError('HTTP 401 Unauthorized', { stage: 'connect', mcpReason: 'reconnecting-timeout' }), 'auth_failed')
+  assert.equal(classifyInstallError('settings-readonly: read-only profile', { stage: 'install' }), 'permission')
+  assert.equal(classifyInstallError('settings-conflict: stale revision', { stage: 'install' }), 'refused')
+  assert.equal(classifyInstallError('name-taken: MCP server "exa" already exists', { stage: 'install' }), 'already_installed')
+  assert.equal(classifyInstallError('opaque startup failure', { stage: 'connect', mcpReason: 'startup-timeout', timedOut: true }), 'timeout')
+  assert.equal(classifyInstallError('opaque startup failure', { stage: 'connect', mcpReason: 'gave-up' }), 'operation_error')
+  assert.equal(classifyInstallError('disabled', { stage: 'connect', mcpReason: 'disabled' }), 'cancelled')
+
+  // Precedence and false-positive guards (peer reset vs peer dep, 403/429 under fetch failed, secondary rate limit, SHA with 429).
+  assert.equal(classifyInstallError('fatal: unable to access https://github.com/a/b: Recv failure: Connection reset by peer'), 'network')
+  assert.equal(classifyInstallError('ERR_PNPM_META_FETCH_FAIL GET https://registry.npmjs.org/foo: 403 Forbidden'), 'auth_failed')
+  assert.equal(classifyInstallError('fetch failed: HTTP 429 Too Many Requests'), 'rate_limited')
+  assert.equal(
+    classifyInstallError('HTTP 403: You have exceeded a secondary rate limit', { skillErrorCode: 'download-failed', stage: 'connect' }),
+    'rate_limited',
+  )
+  assert.equal(
+    classifyInstallError('fetch failed for commit a429bc1', { skillErrorCode: 'download-failed', stage: 'connect' }),
+    'network',
+  )
+})
+
+test('extractInstallErrorDetail returns strictly whitelisted <stage>:<machineCode> without leaking sensitive text', () => {
+  assert.equal(
+    extractInstallErrorDetail('ERR_PNPM_GIT_FETCH_FAILED while cloning /Users/alice/secret', { stage: 'install' }),
+    'install:ERR_PNPM_GIT_FETCH_FAILED',
+  )
+  assert.equal(
+    extractInstallErrorDetail('unreadable pnpm view output: Unexpected token', { stage: 'inspect', inspectProblem: 'unknown' }),
+    'inspect:UNREADABLE_JSON',
+  )
+  assert.equal(
+    extractInstallErrorDetail('connect ECONNREFUSED 10.0.0.1:443', { failedAt: 'spec-host' }),
+    'connect:ECONNREFUSED',
+  )
+  assert.equal(
+    extractInstallErrorDetail('The requested URL returned error: 403', { stage: 'install' }),
+    'install:HTTP_403',
+  )
+  assert.equal(
+    extractInstallErrorDetail('opaque failure', { stage: 'enable', errorCode: 'operation-error', exitCode: 1 }),
+    'enable:EXIT_1',
+  )
+  assert.equal(
+    extractInstallErrorDetail('opaque failure', { stage: 'install', specKind: 'git', exitCode: 128 }),
+    'install:GIT_EXIT_128',
+  )
+  assert.equal(
+    extractInstallErrorDetail('completely unknown prose without stage'),
+    undefined,
+  )
+
+  // Privacy invariant: arbitrary paths, tokens, private URLs, and package names must never leak.
+  const sensitiveInputs = [
+    '/Users/alice/workspace/secret-token-ghp_1234567890',
+    'https://internal.corp.local/private-org/secret-repo.git',
+    '@corp/private-internal-pkg@1.2.3 failed with custom message',
+  ]
+  for (const input of sensitiveInputs) {
+    const detail = extractInstallErrorDetail(input, { stage: 'install' })
+    assert.equal(detail, 'install:UNCLASSIFIED')
+    assert.match(detail!, TELEMETRY_ERROR_DETAIL_PATTERN)
+    assert.equal(detail!.includes('alice'), false)
+    assert.equal(detail!.includes('ghp_'), false)
+    assert.equal(detail!.includes('corp'), false)
+    assert.equal(detail!.includes('secret'), false)
+  }
+
+  // Skill & MCP specific machine codes and privacy guard for custom binary paths.
+  assert.equal(
+    extractInstallErrorDetail('fetch failed (UND_ERR_CONNECT_TIMEOUT)', { skillErrorCode: 'download-failed', stage: 'connect' }),
+    'connect:UND_ERR_CONNECT_TIMEOUT',
+  )
+  assert.equal(
+    extractInstallErrorDetail('incorrect header check (Z_DATA_ERROR)', { skillErrorCode: 'download-failed', stage: 'connect' }),
+    'connect:Z_DATA_ERROR',
+  )
+  assert.equal(
+    extractInstallErrorDetail('jsDelivr mirror (abc) did not contain SKILL.md under "skills/foo"', { skillErrorCode: 'download-failed', stage: 'connect' }),
+    'connect:SKILL_NO_SKILL_MD',
+  )
+  assert.equal(
+    extractInstallErrorDetail('spawn uvx ENOENT', { stage: 'connect', mcpReason: 'gave-up' }),
+    'connect:SPAWN_UVX_ENOENT',
+  )
+  assert.equal(
+    extractInstallErrorDetail('MCP error -32000: Connection closed', { stage: 'connect', mcpReason: 'gave-up' }),
+    'connect:MCP_ERR_32000',
+  )
+  assert.equal(
+    extractInstallErrorDetail('spawn /Users/alice/secret-bin ENOENT', { stage: 'connect', mcpReason: 'gave-up' }),
+    'connect:ENOENT',
+  )
+  assert.equal(
+    extractInstallErrorDetail('HTTP 403: You have exceeded a secondary rate limit', { stage: 'connect' }),
+    'connect:HTTP_403',
+  )
+  const longPnpmDetail = extractInstallErrorDetail('ERR_PNPM_THIS_CODE_NAME_IS_EXTREMELY_LONG_AND_EXCEEDS_LIMIT', { stage: 'install' })
+  assert.ok(longPnpmDetail)
+  assert.match(longPnpmDetail, TELEMETRY_ERROR_DETAIL_PATTERN)
 })
 
 test('createTelemetryReporter sends at most one daily ping, respects toggle, and reports sanitized feedback', async () => {
@@ -171,12 +313,13 @@ test('createTelemetryReporter sends at most one daily ping, respects toggle, and
   // AI-mode helpers report mode='ai' for all three categories while still dropping custom/private targets.
   enabled = true
   reporter.reportPluginInstall({ target: 'dsh-better-sidebar@0.32.1', mode: 'ai', result: 'ok' })
-  reporter.reportMcpInstall({ target: 'context7', mode: 'ai', result: 'failed', errorCode: 'network' })
-  reporter.reportSkillInstall({ target: 'vercel-labs/skills/find-skills', mode: 'ai', result: 'ok' })
+  reporter.reportMcpInstall({ target: 'context7', mode: 'ai', result: 'failed', errorCode: 'network', errorDetail: 'install:ECONNRESET' })
+  reporter.reportSkillInstall({ target: 'vercel-labs/skills/find-skills', mode: 'ai', result: 'ok', errorDetail: 'install:IGNORED_ON_OK' })
+  reporter.reportPluginInstall({ target: 'dsh-better-sidebar@0.32.1', mode: 'direct', result: 'failed', errorCode: 'unknown', errorDetail: 'bad/detail with spaces' })
   reporter.reportPluginInstall({ target: '@acme/private-tool', mode: 'ai', result: 'ok' })
   reporter.reportMcpInstall({ target: 'my-private-mcp', mode: 'ai', result: 'ok' })
   await new Promise(resolve => setTimeout(resolve, 20))
-  assert.equal(sent.length, 7)
+  assert.equal(sent.length, 8)
   assert.equal(sent[4]?.event, 'plugin_install')
   assert.equal(sent[4]?.mode, 'ai')
   assert.equal(sent[4]?.target, 'dsh-better-sidebar')
@@ -184,9 +327,14 @@ test('createTelemetryReporter sends at most one daily ping, respects toggle, and
   assert.equal(sent[5]?.mode, 'ai')
   assert.equal(sent[5]?.target, 'context7')
   assert.equal(sent[5]?.errorCode, 'network')
+  assert.equal(sent[5]?.errorDetail, 'install:ECONNRESET')
   assert.equal(sent[6]?.event, 'skill_install')
   assert.equal(sent[6]?.mode, 'ai')
   assert.equal(sent[6]?.target, 'vercel-labs/skills/find-skills')
+  assert.equal('errorDetail' in (sent[6] ?? {}), false)
+  assert.equal(sent[7]?.event, 'plugin_install')
+  assert.equal(sent[7]?.errorCode, 'unknown')
+  assert.equal('errorDetail' in (sent[7] ?? {}), false)
 
   reporter.dispose()
 })

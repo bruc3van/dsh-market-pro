@@ -18,7 +18,7 @@
 import type { McpAdoptResult, McpHostContext, McpProbeResult } from '../contract.ts'
 import {
   buildRows, canProbe, entryRefs, newDraftPlaintext, pendingToStore, saveOps, serversOf,
-  type McpCredentialInfo, type McpDraft, type McpRow, type McpServerView, type McpSettingsOp, type McpSettingsView,
+  type McpCredentialInfo, type McpDraft, type McpRow, type McpServerView, type McpSettingsOp, type McpSettingsView, type McpStatus,
 } from './mcpModel.ts'
 
 type Reply<T> = { ok: true; value: T } | { ok: false; error: { code: string; message: string } }
@@ -71,6 +71,16 @@ export interface McpPluginsFace {
   setPluginEnabled(id: string, enabled: boolean): Promise<Reply<McpPluginChange>>
 }
 
+/** End-to-end outcome for a newly added MCP server (config save + initial startup/handshake). */
+export interface McpInstallOutcome {
+  readonly draft: McpDraft
+  readonly ok: boolean
+  readonly stage: 'install' | 'connect'
+  readonly message: string
+  readonly reason?: string
+  readonly timedOut?: boolean
+}
+
 /** Where the controller finds each Remote; every getter may answer undefined. */
 export interface McpHosts {
   manager(): McpManagerFace | undefined
@@ -81,8 +91,10 @@ export interface McpHosts {
   probe(name: string): Promise<Reply<McpProbeResult>>
   /** This market's Host adoption verb (`dshMarketPro.adoptMcp`); throws on refusal. */
   adopt?(loaderId: string): Promise<McpAdoptResult>
-  /** Optional anonymous install feedback observer for newly added MCP servers. */
+  /** Optional anonymous install feedback observer for newly added MCP servers (save-only). */
   onSaveOutcome?(outcome: { readonly draft: McpDraft; readonly original: string | undefined; readonly ok: boolean; readonly message: string }): void
+  /** Optional end-to-end outcome observer covering both config save and initial startup/connection. */
+  onInstallOutcome?(outcome: McpInstallOutcome): void
 }
 
 /** Whether, and why not, one static row can be switched through the plugin manager. */
@@ -207,10 +219,26 @@ const CREDENTIAL_BATCH = 64
 const message = (error: unknown): string => error instanceof Error ? error.message : String(error)
 const failure = (reply: { error: { code: string; message: string } }): string => `${reply.error.code}: ${reply.error.message}`
 
+const statusErrorOf = (status: McpStatus): string => {
+  switch (status.state) {
+    case 'failed':
+      return status.reason === 'cleanup' ? (status.result.cleanupError ?? '') : (status.lastError ?? '')
+    case 'reconnecting':
+    case 'waiting-credentials':
+    case 'waiting-authorization':
+      return status.lastError
+    case 'closed':
+      return status.result.cleanupError ?? ''
+    default:
+      return ''
+  }
+}
+
 /** Optional timer seams, for tests. */
 export interface McpControllerOptions {
   readonly wait?: (ms: number) => Promise<void>
   readonly debounceMs?: number
+  readonly installTimeoutMs?: number
 }
 
 type WatchStreamState =
@@ -234,6 +262,80 @@ export function createMcpController(hosts: McpHosts, options: McpControllerOptio
   // started after it, so a slow describe cannot roll back a fresh revision.
   let settingsSeq = 0
   let hostSeq = 0
+
+  interface PendingMcpInstall {
+    readonly draft: McpDraft
+    lastReconnectingError: string
+    readonly timer: ReturnType<typeof setTimeout>
+  }
+  const pendingInstalls = new Map<string, PendingMcpInstall>()
+
+  const maybeStopWatchIfIdle = (): void => {
+    if (attached === 0 && pendingInstalls.size === 0) {
+      stopWatch()
+    }
+  }
+
+  const cancelPendingInstall = (name: string): void => {
+    const pending = pendingInstalls.get(name)
+    if (pending === undefined) return
+    clearTimeout(pending.timer)
+    pendingInstalls.delete(name)
+    maybeStopWatchIfIdle()
+  }
+
+  const cancelAllPendingInstalls = (): void => {
+    for (const pending of pendingInstalls.values()) {
+      clearTimeout(pending.timer)
+    }
+    pendingInstalls.clear()
+    maybeStopWatchIfIdle()
+  }
+
+  const settlePendingInstall = (name: string, outcome: Omit<McpInstallOutcome, 'draft'>): void => {
+    const pending = pendingInstalls.get(name)
+    if (pending === undefined) return
+    clearTimeout(pending.timer)
+    pendingInstalls.delete(name)
+    hosts.onInstallOutcome?.({ draft: pending.draft, ...outcome })
+    maybeStopWatchIfIdle()
+  }
+
+  const checkPendingInstallStatus = (name: string, status: McpStatus | undefined): void => {
+    const pending = pendingInstalls.get(name)
+    if (pending === undefined || status === undefined) return
+    if (
+      status.state === 'connected'
+      || status.state === 'waiting-credentials'
+      || status.state === 'waiting-authorization'
+    ) {
+      settlePendingInstall(name, { ok: true, stage: 'connect', message: '' })
+      return
+    }
+    if (status.state === 'reconnecting') {
+      if (status.lastError !== '') pending.lastReconnectingError = status.lastError
+      return
+    }
+    if (status.state === 'failed') {
+      settlePendingInstall(name, {
+        ok: false,
+        stage: 'connect',
+        message: statusErrorOf(status) || status.reason,
+        reason: status.reason,
+      })
+      return
+    }
+    if (status.state === 'closed') {
+      const err = statusErrorOf(status)
+      if (err !== '') {
+        settlePendingInstall(name, { ok: false, stage: 'connect', message: err, reason: 'closed' })
+      }
+      return
+    }
+    if (status.state === 'disabled') {
+      cancelPendingInstall(name)
+    }
+  }
 
   const set = (patch: Partial<McpSnapshot>): void => {
     const next = { ...state, ...patch }
@@ -365,7 +467,7 @@ export function createMcpController(hosts: McpHosts, options: McpControllerOptio
     set({ views, watchError: '' })
     const shape = views.map(view => `${view.name}:${String(view.configured)}:${view.status.state === 'disabled' ? 'off' : 'on'}`).join('|')
     if (shape !== lastShape) {
-      if (lastShape !== '') schedule('settings')
+      if (attached > 0 && lastShape !== '') schedule('settings')
       lastShape = shape
     }
     const tools = JSON.stringify(views.flatMap(({ name, status }) =>
@@ -373,8 +475,11 @@ export function createMcpController(hosts: McpHosts, options: McpControllerOptio
     if (tools !== lastTools) {
       // A first frame with connected servers re-inspects: a server may have
       // connected between attach's inspect and the stream opening.
-      if (lastTools !== '' || tools !== '[]') schedule('inspect')
+      if (attached > 0 && (lastTools !== '' || tools !== '[]')) schedule('inspect')
       lastTools = tools
+    }
+    for (const view of views) {
+      checkPendingInstallStatus(view.name, view.status)
     }
   }
 
@@ -390,7 +495,7 @@ export function createMcpController(hosts: McpHosts, options: McpControllerOptio
 
   const watchLoop = async (generation: number): Promise<void> => {
     let backoff = 1_000
-    while (attached > 0 && watch.status === 'running' && watch.generation === generation) {
+    while ((attached > 0 || pendingInstalls.size > 0) && watch.status === 'running' && watch.generation === generation) {
       const manager = hosts.manager()
       if (manager === undefined) {
         set({ watchError: 'manager-unavailable' })
@@ -495,22 +600,26 @@ export function createMcpController(hosts: McpHosts, options: McpControllerOptio
         live = false
         attached -= 1
         if (attached === 0) {
-          stopWatch()
           clearTimeout(settingsTimer)
           clearTimeout(inspectTimer)
+          maybeStopWatchIfIdle()
         }
       }
     },
     refresh,
     reset() {
-      if (attached === 0) return
+      if (attached === 0 && pendingInstalls.size === 0) return
       // The carrier was lost: the old stream is gone with it.
       stopWatch()
-      void refresh()
+      cancelAllPendingInstalls()
+      if (attached > 0) void refresh()
     },
-    setEnabled: (name, enabled) => verb(name, enabled ? 'enable' : 'disable',
-      async () => outcomeError(await mutate([{ op: 'set', path: ['servers', name, 'enabled'], value: enabled }]))),
+    setEnabled: (name, enabled) => verb(name, enabled ? 'enable' : 'disable', async () => {
+      if (!enabled) cancelPendingInstall(name)
+      return outcomeError(await mutate([{ op: 'set', path: ['servers', name, 'enabled'], value: enabled }]))
+    }),
     remove: name => verb(name, 'remove', async () => {
+      cancelPendingInstall(name)
       const outcome = await mutate([{ op: 'unset', path: ['servers', name] }])
       if (outcome.ok && Object.hasOwn(state.adopted, name)) patchAdopted(name, undefined)
       return outcomeError(outcome)
@@ -529,6 +638,9 @@ export function createMcpController(hosts: McpHosts, options: McpControllerOptio
       try {
         const reply = await hosts.probe(name)
         patchRecord('probes', name, reply.ok ? { status: 'done', result: reply.value } : { status: 'error', message: failure(reply) })
+        if (reply.ok && reply.value.ok) {
+          settlePendingInstall(name, { ok: true, stage: 'connect', message: '' })
+        }
       } catch (error) {
         patchRecord('probes', name, { status: 'error', message: message(error) })
       }
@@ -538,6 +650,33 @@ export function createMcpController(hosts: McpHosts, options: McpControllerOptio
       const report = (outcome: McpSaveOutcome): McpSaveOutcome => {
         if (original === undefined) {
           hosts.onSaveOutcome?.({ draft, original, ok: outcome.ok, message: outcome.ok ? '' : outcome.message })
+          if (!outcome.ok) {
+            hosts.onInstallOutcome?.({ draft, ok: false, stage: 'install', message: outcome.message })
+          } else if (!draft.enabled || hosts.manager() === undefined) {
+            hosts.onInstallOutcome?.({ draft, ok: true, stage: 'install', message: '' })
+          } else if (hosts.onInstallOutcome !== undefined) {
+            const targetName = draft.name.trim()
+            cancelPendingInstall(targetName)
+            const rawTimeout = Number(draft.startupTimeoutMs)
+            const budgetMs = options.installTimeoutMs
+              ?? Math.max(45_000, (Number.isFinite(rawTimeout) && rawTimeout > 0 ? rawTimeout : 30_000) + 15_000)
+            const timer = setTimeout(() => {
+              const current = pendingInstalls.get(targetName)
+              if (current === undefined) return
+              const msg = current.lastReconnectingError || 'MCP startup timed out'
+              const timedOut = current.lastReconnectingError === ''
+              settlePendingInstall(targetName, {
+                ok: false,
+                stage: 'connect',
+                message: msg,
+                reason: current.lastReconnectingError !== '' ? 'reconnecting-timeout' : 'startup-timeout',
+                ...(timedOut ? { timedOut: true } : {}),
+              })
+            }, budgetMs)
+            timer.unref?.()
+            pendingInstalls.set(targetName, { draft, lastReconnectingError: '', timer })
+            checkPendingInstallStatus(targetName, state.views?.find(view => view.name === targetName)?.status)
+          }
         }
         return outcome
       }

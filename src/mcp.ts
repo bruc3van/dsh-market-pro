@@ -24,13 +24,14 @@
 import { isDeepStrictEqual } from 'node:util'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-settings'
-import type { McpAdoptBlocker, McpAdoptResult, McpHostContext, McpProbeResult, McpToolGroup, McpUnmanagedServer } from './contract.ts'
+import type { McpAdoptBlocker, McpAdoptResult, McpHostContext, McpProbeResult, McpToolGroup, McpUnmanagedServer, TelemetryErrorCode } from './contract.ts'
 import { findFeaturedMcpById, mcpIdentityKey, pickAvailableServerName } from './mcpFeatured.ts'
 import {
   CREDENTIAL_REF_PATTERN, MCP_CLIENT_PACKAGE, MCP_MANAGER_PACKAGE, SERVER_NAME_PATTERN, credentialRefsIn,
   credentialTemplate, isExactCredentialTemplate, isMcpStarting, isSecretField, isSecretUrl, looksSecretValue, malformedTemplate,
   maskArg, maskUrl, secretArgIndexes, suggestRef,
 } from './mcpShapes.ts'
+import { classifyInstallError, extractInstallErrorDetail, type InstallErrorHints } from './telemetryError.ts'
 
 const FIBER_PHASE = ['pending', 'loading', 'active', 'failed', 'disposed', 'unloading'] as const
 
@@ -1101,4 +1102,226 @@ export async function setManagedMcpEnabled(
     approved.revision,
   )
   return { name: target, enabled }
+}
+
+export interface RuntimeMcpStatus {
+  readonly state?: string
+  readonly reason?: string
+  readonly lastError?: string
+  readonly result?: { readonly cleanupError?: string }
+}
+
+export interface RuntimeMcpManagerFace {
+  list?: () => readonly {
+    readonly name: string
+    readonly status?: RuntimeMcpStatus
+  }[]
+}
+
+export interface AiMcpInstallOutcomeInput {
+  readonly featuredId: string
+  readonly serverName?: string
+  readonly enabled?: boolean
+  readonly missingCredentials?: boolean
+  readonly startupTimeoutMs?: number
+  readonly ok: boolean
+  readonly stage?: 'install' | 'connect'
+  readonly reason?: string
+  readonly error?: string
+}
+
+export interface AiMcpTelemetryEvent {
+  readonly target: string
+  readonly mode: 'ai'
+  readonly result: 'ok' | 'failed'
+  readonly errorCode?: TelemetryErrorCode
+  readonly errorDetail?: string
+}
+
+export interface CreateAiMcpInstallObserverOptions {
+  readonly getMcpManager: () => RuntimeMcpManagerFace | undefined
+  readonly report: (event: AiMcpTelemetryEvent) => void
+  readonly disposeSignal?: AbortSignal
+  readonly pollIntervalMs?: number
+  readonly defaultTimeoutMs?: number
+  readonly minBudgetMs?: number
+  readonly timeoutPadMs?: number
+}
+
+/**
+ * Observe AI-installed curated MCP servers through their initial Host startup
+ * and handshake so telemetry reflects real runtime failures as well as config save errors.
+ */
+export function createAiMcpInstallObserver(options: CreateAiMcpInstallObserverOptions): {
+  observe(outcome: AiMcpInstallOutcomeInput): void
+  dispose(): void
+} {
+  const pollIntervalMs = options.pollIntervalMs ?? 1_000
+  const defaultTimeoutMs = options.defaultTimeoutMs ?? 30_000
+  const minBudgetMs = options.minBudgetMs ?? 45_000
+  const timeoutPadMs = options.timeoutPadMs ?? 15_000
+  const activeByServer = new Map<string, () => void>()
+  let disposed = false
+
+  const readStatus = (serverName: string): RuntimeMcpStatus | undefined => {
+    try {
+      return options.getMcpManager()?.list?.()?.find(view => view.name === serverName)?.status
+    } catch {
+      return undefined
+    }
+  }
+
+  const cancelServer = (serverName: string | undefined): void => {
+    if (!serverName) return
+    const stop = activeByServer.get(serverName)
+    if (stop !== undefined) {
+      activeByServer.delete(serverName)
+      stop()
+    }
+  }
+
+  const dispose = (): void => {
+    if (disposed) return
+    disposed = true
+    for (const stop of [...activeByServer.values()]) {
+      stop()
+    }
+    activeByServer.clear()
+    options.disposeSignal?.removeEventListener('abort', dispose)
+  }
+
+  if (options.disposeSignal?.aborted) {
+    disposed = true
+  } else {
+    options.disposeSignal?.addEventListener('abort', dispose, { once: true })
+  }
+
+  const reportFailed = (featuredId: string, raw: string, hints: InstallErrorHints): void => {
+    if (disposed || options.disposeSignal?.aborted) return
+    const errorCode = classifyInstallError(raw, hints)
+    const errorDetail = extractInstallErrorDetail(raw, hints)
+    options.report({
+      target: featuredId,
+      mode: 'ai',
+      result: 'failed',
+      errorCode,
+      ...(errorDetail !== undefined ? { errorDetail } : {}),
+    })
+  }
+
+  const observe = (outcome: AiMcpInstallOutcomeInput): void => {
+    if (disposed || options.disposeSignal?.aborted) return
+    cancelServer(outcome.serverName)
+
+    if (!outcome.ok) {
+      let raw = outcome.error ?? ''
+      if (outcome.stage === 'connect' && outcome.serverName) {
+        const live = readStatus(outcome.serverName)
+        raw = live?.lastError || live?.result?.cleanupError || raw
+      }
+      reportFailed(outcome.featuredId, raw, {
+        stage: outcome.stage ?? 'install',
+        ...(outcome.reason !== undefined ? { mcpReason: outcome.reason } : {}),
+      })
+      return
+    }
+
+    if (!outcome.enabled || outcome.missingCredentials || !outcome.serverName) {
+      options.report({ target: outcome.featuredId, mode: 'ai', result: 'ok' })
+      return
+    }
+
+    const mcpManager = options.getMcpManager()
+    if (typeof mcpManager?.list !== 'function') {
+      options.report({ target: outcome.featuredId, mode: 'ai', result: 'ok' })
+      return
+    }
+
+    const serverName = outcome.serverName
+    let settled = false
+    let lastReconnectingError = ''
+    let pollTimer: ReturnType<typeof setInterval> | undefined
+    let timeoutTimer: ReturnType<typeof setTimeout> | undefined
+
+    const cleanup = (): void => {
+      settled = true
+      if (pollTimer !== undefined) {
+        clearInterval(pollTimer)
+        pollTimer = undefined
+      }
+      if (timeoutTimer !== undefined) {
+        clearTimeout(timeoutTimer)
+        timeoutTimer = undefined
+      }
+      if (activeByServer.get(serverName) === cleanup) {
+        activeByServer.delete(serverName)
+      }
+    }
+
+    const checkOnce = (): boolean => {
+      if (settled || disposed || options.disposeSignal?.aborted) {
+        cleanup()
+        return true
+      }
+      const status = readStatus(serverName)
+      if (status === undefined) return false
+      if (
+        status.state === 'connected'
+        || status.state === 'waiting-credentials'
+        || status.state === 'waiting-authorization'
+      ) {
+        cleanup()
+        options.report({ target: outcome.featuredId, mode: 'ai', result: 'ok' })
+        return true
+      }
+      if (status.state === 'reconnecting') {
+        if (typeof status.lastError === 'string' && status.lastError !== '') {
+          lastReconnectingError = status.lastError
+        }
+        return false
+      }
+      if (status.state === 'failed') {
+        cleanup()
+        const raw = status.lastError || status.reason || 'failed'
+        reportFailed(outcome.featuredId, raw, {
+          stage: 'connect',
+          ...(status.reason !== undefined ? { mcpReason: status.reason } : {}),
+        })
+        return true
+      }
+      if (status.state === 'closed' && status.result?.cleanupError) {
+        cleanup()
+        reportFailed(outcome.featuredId, status.result.cleanupError, { stage: 'connect', mcpReason: 'closed' })
+        return true
+      }
+      if (status.state === 'disabled') {
+        cleanup()
+        return true
+      }
+      return false
+    }
+
+    activeByServer.set(serverName, cleanup)
+    if (checkOnce()) return
+
+    const budgetMs = Math.max(minBudgetMs, (outcome.startupTimeoutMs ?? defaultTimeoutMs) + timeoutPadMs)
+    pollTimer = setInterval(() => { checkOnce() }, pollIntervalMs)
+    pollTimer.unref?.()
+    timeoutTimer = setTimeout(() => {
+      if (settled || disposed || options.disposeSignal?.aborted) {
+        cleanup()
+        return
+      }
+      cleanup()
+      const timedOut = lastReconnectingError === ''
+      reportFailed(outcome.featuredId, lastReconnectingError || 'MCP startup timed out', {
+        stage: 'connect',
+        mcpReason: lastReconnectingError !== '' ? 'reconnecting-timeout' : 'startup-timeout',
+        ...(timedOut ? { timedOut: true } : {}),
+      })
+    }, budgetMs)
+    timeoutTimer.unref?.()
+  }
+
+  return { observe, dispose }
 }

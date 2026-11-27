@@ -1351,6 +1351,7 @@ test('dsh_market_pro install_plugin gates on approval, handles pendingBuilds/ref
     result: 'ok' | 'failed'
     message: string
     inspectProblem?: string
+    stage?: string
     errorCode?: string
     packageKind?: string
     timedOut?: boolean
@@ -1461,6 +1462,7 @@ test('dsh_market_pro install_plugin gates on approval, handles pendingBuilds/ref
     result: 'failed',
     message: 'not-a-bundle: missing dsh entry in package.json',
     inspectProblem: 'not-a-bundle',
+    stage: 'inspect',
   })
   inspectMode = 'accept'
 

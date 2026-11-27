@@ -1,4 +1,4 @@
-import { IconInfoOutlineRegular, Switch, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconInfoOutlineRegular, Menu, Switch, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import { MarketButton } from './MarketButton.tsx'
 import { MarketDescription } from './MarketDescription.tsx'
 import type { DirectInstaller } from './directInstall.ts'
@@ -12,6 +12,9 @@ import { DirectoryBrowserPanel } from './DirectoryBrowserPanel.tsx'
 import type { PluginUpdater } from './pluginUpdates.ts'
 import { PluginUpdatePanel } from './PluginUpdatePanel.tsx'
 import { BatchUpdatePanel } from './BatchUpdatePanel.tsx'
+import type { BatchUninstaller } from './batchUninstall.ts'
+import { BatchUninstallPanel } from './BatchUninstallPanel.tsx'
+import type { IgnoredUpdateRule, IgnoredUpdatesMap } from './updateIgnore.ts'
 import type { SkillsSessionSource } from './skillsSubscription.ts'
 /**
  * The shared Marketplace surface, with Plugins and Skills pages.
@@ -122,6 +125,7 @@ export interface MarketSectionInjected {
   directInstaller?: DirectInstaller
   officialBundles?: OfficialBundlesController
   pluginUpdater?: PluginUpdater
+  batchUninstaller?: BatchUninstaller
   hooks: { scope: SafeMarketSource }
   /** Persist one marketplace setting field and return the updated snapshot. */
   updateSettings?: (update: SafeMarketSettingsUpdate) => Promise<SafeMarketSettings>
@@ -230,6 +234,7 @@ type MarketOverlay =
   | { readonly kind: 'manual-install' }
   | { readonly kind: 'update' }
   | { readonly kind: 'batch-update' }
+  | { readonly kind: 'batch-uninstall' }
 
 /**
  * The installed set's own state and verbs: the plugins installed into this
@@ -241,7 +246,7 @@ type MarketOverlay =
  * the rows belong to the same card grid the catalog uses: one list of cards,
  * one of whose filters happens to be "the ones I already have".
  */
-function useInstalled({ t, active, listInstalled, subscribeInstalledChanges, setInstalledEnabled, uninstallInstalled }: {
+function useInstalled({ t, active, listInstalled, subscribeInstalledChanges, setInstalledEnabled, uninstallInstalled, onPackageUninstalled }: {
   t: MarketLocale
   /**
    * Whether the panel is on screen at all. The read is local and cheap, but
@@ -254,6 +259,7 @@ function useInstalled({ t, active, listInstalled, subscribeInstalledChanges, set
   subscribeInstalledChanges?: MarketSectionInjected['subscribeInstalledChanges']
   setInstalledEnabled: MarketSectionInjected['setInstalledEnabled']
   uninstallInstalled: MarketSectionInjected['uninstallInstalled']
+  onPackageUninstalled?: (packageName: string) => void
 }): {
   state: InstalledState
   action: InstalledActionState
@@ -350,6 +356,7 @@ function useInstalled({ t, active, listInstalled, subscribeInstalledChanges, set
             )
       setFeedback({ status: 'notice', message })
       setState({ status: 'ready', result })
+      onPackageUninstalled?.(item.packageName)
     }, (error: unknown) => {
       if (!mounted.current) return
       setAction({ status: 'idle' })
@@ -422,7 +429,7 @@ function UninstallProgressFooter({ t, name, onRefresh }: {
  * stays one grid and the eye does not have to re-learn the layout when the
  * filter changes.
  */
-function InstalledCard({ t, english, item, matched, installed, snapshot, card, installBusy, readiness, onReview, onCheckUpdate, availableVersion }: {
+function InstalledCard({ t, english, item, matched, installed, snapshot, card, installBusy, readiness, onReview, onCheckUpdate, availableVersion, ignoredRule, onIgnoreUpdateVersion, onIgnoreAllUpdates, onUnignoreUpdates }: {
   t: MarketLocale
   english: boolean
   item: MarketInstalledPackage
@@ -435,8 +442,13 @@ function InstalledCard({ t, english, item, matched, installed, snapshot, card, i
   onReview: (item: MarketInstalledPackage, viaNewWorkspace: boolean) => void
   onCheckUpdate?: (packageName: string) => void
   availableVersion?: string
+  ignoredRule?: IgnoredUpdateRule
+  onIgnoreUpdateVersion?: (packageName: string, version: string) => void
+  onIgnoreAllUpdates?: (packageName: string) => void
+  onUnignoreUpdates?: (packageName: string) => void
 }): ReactElement {
   const { action, refresh, requestUninstall, cancelUninstall, toggle, uninstall } = installed
+  const [updateMenuOpen, setUpdateMenuOpen] = useState(false)
   const anyBusy = action.status === 'toggling' || action.status === 'uninstalling'
   const toggling = action.status === 'toggling' && action.packageName === item.packageName
   const uninstalling = action.status === 'uninstalling' && action.packageName === item.packageName
@@ -497,6 +509,28 @@ function InstalledCard({ t, english, item, matched, installed, snapshot, card, i
             </Tooltip>
           </span>
         )}
+        {ignoredRule !== undefined && (
+          <span className="dsh_market_categoryTag dsh_market_ignoredUpdateTag">
+            <span>
+              {ignoredRule.mode === 'all'
+                ? t('update.ignoredAllTag')
+                : t('update.ignoredVersionTag', { version: ignoredRule.version })}
+            </span>
+            {onUnignoreUpdates && (
+              <Tooltip label={t('update.restorePrompt')} side="top" portal>
+                <button
+                  type="button"
+                  className="dsh_market_ignoredRestoreBtn"
+                  aria-label={t('update.restorePrompt')}
+                  disabled={anyBusy || installBusy}
+                  onClick={() => onUnignoreUpdates(item.packageName)}
+                >
+                  ×
+                </button>
+              </Tooltip>
+            )}
+          </span>
+        )}
         {/* The repository identity has already been reduced to owner/name by
             the Host. Keep the link at the right end of the badge row instead
             of spending a full action-button seat on it. */}
@@ -541,8 +575,8 @@ function InstalledCard({ t, english, item, matched, installed, snapshot, card, i
                 </span>
                 <MarketButton
                   intent="danger"
-                  disabled={busyRow}
-                  onClick={() => { uninstall(item) }}
+                  disabled={busyRow || installBusy}
+                  onClick={() => { if (!installBusy) uninstall(item) }}
                 >
                   {t('installed.confirm')}
                 </MarketButton>
@@ -557,11 +591,56 @@ function InstalledCard({ t, english, item, matched, installed, snapshot, card, i
               )
           : (
             <>
-              {onCheckUpdate && <MarketButton intent={availableVersion ? 'primary' : 'secondary'}
-                disabled={anyBusy || installBusy || item.error !== ''}
-                onClick={() => onCheckUpdate(item.packageName)}>
-                {availableVersion ? t('update.to', { version: availableVersion }) : t('update.check')}
-              </MarketButton>}
+              {onCheckUpdate && (availableVersion && (onIgnoreUpdateVersion || onIgnoreAllUpdates)
+                ? (
+                  <div className="dsh_market_updateSplit">
+                    <MarketButton intent="primary"
+                      disabled={anyBusy || installBusy || item.error !== ''}
+                      onClick={() => { setUpdateMenuOpen(false); onCheckUpdate(item.packageName) }}>
+                      {t('update.to', { version: availableVersion })}
+                    </MarketButton>
+                    <Menu
+                      open={updateMenuOpen && !anyBusy && !installBusy && item.error === ''}
+                      onClose={() => setUpdateMenuOpen(false)}
+                      portal
+                      compact
+                      align="end"
+                      items={[
+                        ...(onIgnoreUpdateVersion ? [{ id: 'ignore-version', label: t('update.ignoreVersionItem', { version: availableVersion }) }] : []),
+                        ...(onIgnoreAllUpdates ? [{ id: 'ignore-all', label: t('update.ignoreAll') }] : []),
+                      ]}
+                      onSelect={(id) => {
+                        setUpdateMenuOpen(false)
+                        if (id === 'ignore-version') onIgnoreUpdateVersion?.(item.packageName, availableVersion)
+                        else if (id === 'ignore-all') onIgnoreAllUpdates?.(item.packageName)
+                      }}
+                      anchor={
+                        <Tooltip label={t('update.moreActions')} side="top" portal disabled={updateMenuOpen}>
+                          <MarketButton
+                            intent="primary"
+                            className="dsh_market_updateMoreTrigger"
+                            aria-label={t('update.moreActions')}
+                            aria-haspopup="menu"
+                            aria-expanded={updateMenuOpen}
+                            disabled={anyBusy || installBusy || item.error !== ''}
+                            onClick={() => setUpdateMenuOpen(open => !open)}
+                          >
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                              <path d="m6 9 6 6 6-6" />
+                            </svg>
+                          </MarketButton>
+                        </Tooltip>
+                      }
+                    />
+                  </div>
+                  )
+                : (
+                  <MarketButton intent={availableVersion ? 'primary' : 'secondary'}
+                    disabled={anyBusy || installBusy || item.error !== ''}
+                    onClick={() => onCheckUpdate(item.packageName)}>
+                    {availableVersion ? t('update.to', { version: availableVersion }) : t('update.check')}
+                  </MarketButton>
+                  ))}
               <MarketButton
                 intent="secondary"
                 disabled={reviewDisabled}
@@ -735,12 +814,13 @@ function MarketLoadingState({ t, mode, installedCount = 0, onViewInstalled }: {
 }
 
 /** The installed set as a card grid, with its own status lines above it. */
-function InstalledCards({ t, installed, needle, installedFilter, updatableCount, catalog, catalogEnabled = true, english, snapshot, cards, installBusy, readiness, onReview, onCheckUpdate, availableUpdates, onSwitchToAll, onSwitchToFeatured, onOpenSettings, onShowAllInstalled, onClearFilters }: {
+function InstalledCards({ t, installed, needle, installedFilter, updatableCount, ignoredCount, catalog, catalogEnabled = true, english, snapshot, cards, installBusy, readiness, onReview, onCheckUpdate, availableUpdates, ignoredUpdates, onIgnoreUpdateVersion, onIgnoreAllUpdates, onUnignoreUpdates, onSwitchToAll, onSwitchToFeatured, onOpenSettings, onShowAllInstalled, onClearFilters }: {
   t: MarketLocale
   installed: ReturnType<typeof useInstalled>
   needle: string
-  installedFilter: 'all' | 'updatable'
+  installedFilter: 'all' | 'updatable' | 'ignored'
   updatableCount: number
+  ignoredCount: number
   catalog: MarketCatalog | null
   catalogEnabled?: boolean
   english: boolean
@@ -751,6 +831,10 @@ function InstalledCards({ t, installed, needle, installedFilter, updatableCount,
   onReview: (item: MarketInstalledPackage, viaNewWorkspace: boolean) => void
   onCheckUpdate?: (packageName: string) => void
   availableUpdates?: Readonly<Record<string, string>>
+  ignoredUpdates?: IgnoredUpdatesMap
+  onIgnoreUpdateVersion?: (packageName: string, version: string) => void
+  onIgnoreAllUpdates?: (packageName: string) => void
+  onUnignoreUpdates?: (packageName: string) => void
   onSwitchToAll: (focusSearch?: boolean, clearQuery?: boolean) => void
   onSwitchToFeatured?: () => void
   onOpenSettings?: () => void
@@ -770,7 +854,9 @@ function InstalledCards({ t, installed, needle, installedFilter, updatableCount,
   }, [installedPackages, catalog])
   const scoped = installedFilter === 'updatable'
     ? installedPackages.filter(item => Boolean(availableUpdates?.[item.packageName]))
-    : installedPackages
+    : installedFilter === 'ignored'
+      ? installedPackages.filter(item => ignoredUpdates?.[item.packageName] !== undefined)
+      : installedPackages
   const shown = needle === ''
     ? scoped
     : scoped.filter(item => {
@@ -852,6 +938,25 @@ function InstalledCards({ t, installed, needle, installedFilter, updatableCount,
                 secondaryAction={{ label: t('filter.clear'), onClick: onClearFilters }}
               />
               )
+            : installedFilter === 'ignored' && ignoredCount === 0
+              ? (
+                <MarketEmptyState
+                  icon="installed"
+                  title={t('empty.ignoredTitle')}
+                  description={t('empty.ignoredHint')}
+                  primaryAction={{ label: t('empty.showAllInstalled'), count: state.result.packages.length, onClick: onShowAllInstalled }}
+                />
+                )
+              : installedFilter === 'ignored'
+                ? (
+                  <MarketEmptyState
+                    icon="search"
+                    title={t('empty.ignoredSearchTitle')}
+                    description={t('empty.ignoredSearchHint')}
+                    primaryAction={{ label: t('empty.showAllInstalled'), count: state.result.packages.length, onClick: onShowAllInstalled }}
+                    secondaryAction={{ label: t('filter.clear'), onClick: onClearFilters }}
+                  />
+                  )
             : (
               <MarketEmptyState
                 icon="scope"
@@ -889,6 +994,10 @@ function InstalledCards({ t, installed, needle, installedFilter, updatableCount,
               onReview={onReview}
               onCheckUpdate={onCheckUpdate}
               availableVersion={availableUpdates?.[item.packageName]}
+              ignoredRule={ignoredUpdates?.[item.packageName]}
+              onIgnoreUpdateVersion={onIgnoreUpdateVersion}
+              onIgnoreAllUpdates={onIgnoreAllUpdates}
+              onUnignoreUpdates={onUnignoreUpdates}
             />
           ))}
         </ul>
@@ -1121,13 +1230,20 @@ function OfficialExperimentalCards({
 }
 
 /** The Plugins page. */
-function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInstalled, subscribeInstalledChanges, setInstalledEnabled, uninstallInstalled, officialBundles, onInstallOfficialBundle, chooseWorkspace, workspaceReadiness, cards, installBusy, onReviewDraft, onOpenSettings, directInstaller, setDirectItem, installedRevision, appliedUpdateRevision, onCheckUpdate, onOpenBatchUpdate, availableUpdates, onProbeUpdates, onRegisterRefresh, onOwnedIndexChange }: {
+function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInstalled, subscribeInstalledChanges, setInstalledEnabled, uninstallInstalled, officialBundles, onInstallOfficialBundle, chooseWorkspace, workspaceReadiness, cards, installBusy, onReviewDraft, onOpenSettings, directInstaller, setDirectItem, installedRevision, appliedUpdateRevision, onCheckUpdate, onOpenBatchUpdate, onOpenBatchUninstall, availableUpdates, ignoredUpdates, onIgnoreUpdateVersion, onIgnoreAllUpdates, onUnignoreUpdates, onPackageUninstalled, onInstalledPackagesChange, onProbeUpdates, onRegisterRefresh, onOwnedIndexChange }: {
   setDirectItem: (item: MarketPlugin) => void
   installedRevision: number
   appliedUpdateRevision: number
   onCheckUpdate?: (packageName: string) => void
   onOpenBatchUpdate?: () => void
+  onOpenBatchUninstall?: () => void
   availableUpdates?: Readonly<Record<string, string>>
+  ignoredUpdates?: IgnoredUpdatesMap
+  onIgnoreUpdateVersion?: (packageName: string, version: string) => void
+  onIgnoreAllUpdates?: (packageName: string) => void
+  onUnignoreUpdates?: (packageName: string) => void
+  onPackageUninstalled?: (packageName: string) => void
+  onInstalledPackagesChange?: (packages: readonly MarketInstalledPackage[]) => void
   onProbeUpdates?: (packageNames: readonly string[]) => void
   onRegisterRefresh?: (action: HeaderRefreshAction | null) => void
   onOwnedIndexChange?: (index: ReadonlyMap<string, MarketInstalledPackage>) => void
@@ -1165,7 +1281,7 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
   // when the community catalog is disabled, land directly on installed plugins
   // so local management stays immediately accessible.
   const [category, setCategory] = useState(() => (snapshot.settingsReady && !enabled ? INSTALLED_FILTER : FEATURED_CATEGORY))
-  const [installedFilter, setInstalledFilter] = useState<'all' | 'updatable'>('all')
+  const [installedFilter, setInstalledFilter] = useState<'all' | 'updatable' | 'ignored'>('all')
   const [officialFilter, setOfficialFilter] = useState<'all' | 'enabled' | 'disabled'>('all')
   const [filterCategory, setFilterCategory] = useState('')
   const [sort, setSort] = useState<MarketSort>('active')
@@ -1175,7 +1291,15 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
   const scrollResultsToTop = (behavior?: ScrollBehavior) => {
     scrollResultsContainerToTop(resultsRef.current, behavior)
   }
-  const installed = useInstalled({ t, active: snapshot.settingsReady, listInstalled, subscribeInstalledChanges, setInstalledEnabled, uninstallInstalled })
+  const installed = useInstalled({
+    t,
+    active: snapshot.settingsReady,
+    listInstalled,
+    subscribeInstalledChanges,
+    setInstalledEnabled,
+    uninstallInstalled,
+    onPackageUninstalled,
+  })
   const officialState = useSyncExternalStore(
     officialBundles?.subscribe ?? (() => () => {}),
     officialBundles?.getSnapshot ?? (() => null),
@@ -1216,7 +1340,13 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
   const installedUpdatableCount = installed.state.status === 'ready' && installed.state.result.error === ''
     ? installed.state.result.packages.filter(item => Boolean(availableUpdates?.[item.packageName])).length
     : 0
+  const installedIgnoredCount = installed.state.status === 'ready' && installed.state.result.error === ''
+    ? installed.state.result.packages.filter(item => ignoredUpdates?.[item.packageName] !== undefined).length
+    : 0
   const batchUpdatableCount = Math.max(installedUpdatableCount, Object.keys(availableUpdates ?? {}).length)
+  useEffect(() => {
+    onInstalledPackagesChange?.(installed.state.status === 'ready' && installed.state.result.error === '' ? installed.state.result.packages : [])
+  }, [installed.state, onInstalledPackagesChange])
   // Rebuilt only when the installed set itself changes — every enable,
   // disable and uninstall answers with the whole list, so the catalog's
   // "already installed" marks follow those verbs without a second read.
@@ -1505,6 +1635,9 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
                 options={[
                   { value: 'all', label: t('installed.filter.all'), count: installed.count },
                   { value: 'updatable', label: t('installed.filter.updatable'), count: installedUpdatableCount },
+                  ...((installedIgnoredCount > 0 || installedFilter === 'ignored')
+                    ? [{ value: 'ignored' as const, label: t('installed.filter.ignored'), count: installedIgnoredCount }]
+                    : []),
                 ]}
               />
             )}
@@ -1532,6 +1665,16 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
                 </svg>}
               >
                 {`${t('installed.updateAll')} (${String(batchUpdatableCount)})`}
+              </MarketButton>
+            )}
+            {installedSelected && onOpenBatchUninstall && installed.count > 0 && (
+              <MarketButton
+                intent="danger"
+                className="dsh_market_batchUninstallButton"
+                disabled={installBusy || installed.action.status === 'toggling' || installed.action.status === 'uninstalling'}
+                onClick={onOpenBatchUninstall}
+              >
+                {t('installed.batchUninstall')}
               </MarketButton>
             )}
             {!installedSelected && !officialSelected && filterCategories.length > 0 && <MarketSelector
@@ -1575,6 +1718,7 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
             needle={needle}
             installedFilter={installedFilter}
             updatableCount={installedUpdatableCount}
+            ignoredCount={installedIgnoredCount}
             catalog={catalog}
             catalogEnabled={enabled}
             english={english}
@@ -1585,6 +1729,10 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
             onReview={reviewInstalledPackage}
             onCheckUpdate={onCheckUpdate}
             availableUpdates={availableUpdates}
+            ignoredUpdates={ignoredUpdates}
+            onIgnoreUpdateVersion={onIgnoreUpdateVersion}
+            onIgnoreAllUpdates={onIgnoreAllUpdates}
+            onUnignoreUpdates={onUnignoreUpdates}
             onSwitchToAll={switchToAll}
             onSwitchToFeatured={catalog?.featured !== undefined ? switchToFeatured : undefined}
             onOpenSettings={onOpenSettings}
@@ -1804,7 +1952,7 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
 /** The Marketplace section. */
 export function MarketSection({
   useScope, updateSettings, loadCatalog, peekCatalog, listSkills, skillsSession, installFeaturedSkill, deleteInstalledSkill, canOpenFolder, openFolder, install, installIntoNewWorkspace, chooseWorkspace, directoryBrowser, workspaceReadiness,
-  listInstalled, subscribeInstalledChanges, setInstalledEnabled, uninstallInstalled, directInstaller, officialBundles, pluginUpdater, mcp, close, t,
+  listInstalled, subscribeInstalledChanges, setInstalledEnabled, uninstallInstalled, directInstaller, officialBundles, pluginUpdater, batchUninstaller, mcp, close, t,
 }: MarketSectionProps): ReactElement {
   const snapshot = useScope(value => value)
   // The slot props carry a translate function, not a locale tag; the
@@ -1816,6 +1964,7 @@ export function MarketSection({
   const directItem = overlay.kind === 'direct-install' ? overlay.item : null
   const updateOpen = overlay.kind === 'update'
   const batchUpdateOpen = overlay.kind === 'batch-update'
+  const batchUninstallOpen = overlay.kind === 'batch-uninstall'
   const openDirectItem = useCallback((item: MarketPlugin) => {
     setOverlay({ kind: 'direct-install', item })
   }, [])
@@ -1831,7 +1980,9 @@ export function MarketSection({
     })
   }, [directInstaller, english])
   const updateState = useSyncExternalStore(pluginUpdater?.subscribe ?? (() => () => {}), pluginUpdater?.getSnapshot ?? (() => null))
+  const batchUninstallState = useSyncExternalStore(batchUninstaller?.subscribe ?? (() => () => {}), batchUninstaller?.getSnapshot ?? (() => null))
   const [installedRevision, setInstalledRevision] = useState(0)
+  const [installedPackages, setInstalledPackages] = useState<readonly MarketInstalledPackage[]>([])
   const [ownedIndex, setOwnedIndex] = useState<ReadonlyMap<string, MarketInstalledPackage>>(() => new Map())
   const refreshInstalled = useCallback(() => setInstalledRevision(value => value + 1), [])
   const handleManualInstalled = useCallback(() => {
@@ -1842,18 +1993,23 @@ export function MarketSection({
     setOverlay(current => (current.kind === 'manual-install' ? { kind: 'none' } : current))
   }, [])
   useEffect(() => { if (updateState?.revision) refreshInstalled() }, [updateState?.revision, refreshInstalled])
+  useEffect(() => { if (batchUninstallState?.revision) refreshInstalled() }, [batchUninstallState?.revision, refreshInstalled])
   const application = updateState?.result?.result.application
   const appliedUpdateRevision = updateState?.phase === 'done' && (application === 'applied' || application === 'restart-required')
     ? updateState.revision : 0
   const checkUpdate = pluginUpdater ? (packageName: string) => {
     const snap = pluginUpdater.getSnapshot()
-    if (snap.phase === 'updating' || snap.batch.phase === 'running') return
+    if (snap.phase === 'updating' || snap.batch.phase === 'running' || batchUninstallState?.phase === 'running') return
     void pluginUpdater.check(packageName)
     setOverlay({ kind: 'update' })
   } : undefined
   const openBatchUpdate = pluginUpdater ? () => {
-    if (pluginUpdater.getSnapshot().phase === 'updating') return
+    if (pluginUpdater.getSnapshot().phase === 'updating' || batchUninstallState?.phase === 'running') return
     setOverlay({ kind: 'batch-update' })
+  } : undefined
+  const openBatchUninstall = batchUninstaller ? () => {
+    if (updateState?.phase === 'updating' || updateState?.batch.phase === 'running' || batchUninstaller.getSnapshot().phase === 'running') return
+    setOverlay({ kind: 'batch-uninstall' })
   } : undefined
   const probeUpdates = useCallback((packageNames: readonly string[]) => {
     void pluginUpdater?.probe(packageNames)
@@ -1974,6 +2130,7 @@ export function MarketSection({
   const aiDraftBusy = Object.values(cards).some(card => card.status === 'busy' || card.status === 'picking')
   const installBusy = updateState?.phase === 'updating'
     || updateState?.batch.phase === 'running'
+    || batchUninstallState?.phase === 'running'
     || aiDraftBusy
 
   const report = (fullName: string, next: CardState): void => {
@@ -2165,6 +2322,11 @@ export function MarketSection({
           {t('batchUpdate.resume')}
         </button>
       )}
+      {batchUninstallState && batchUninstallState.phase !== 'idle' && !batchUninstallOpen && (
+        <button type="button" className="dsh_market_headerAction" onClick={() => setOverlay({ kind: 'batch-uninstall' })}>
+          {t('batchUninstall.resume')}
+        </button>
+      )}
       {directInstaller && <DirectInstallPanel item={directItem} installer={directInstaller} ownedIndex={ownedIndex} dshVersion={snapshot.dshVersion} t={t}
         onClose={closeInstallPanel} onInstalled={refreshInstalled}
         onReview={reviewInstalled} onAgentInstall={directItem ? () => agentInstall(directItem) : undefined}
@@ -2177,8 +2339,19 @@ export function MarketSection({
         reviewMessage={reviewResult?.status === 'error' || reviewResult?.status === 'needs-workspace' ? reviewResult.message : ''} />}
       {pluginUpdater && updateState && <PluginUpdatePanel open={updateOpen} state={updateState} updater={pluginUpdater} t={t}
         onClose={() => setOverlay(current => (current.kind === 'update' ? { kind: 'none' } : current))} />}
-      {pluginUpdater && updateState && <BatchUpdatePanel open={batchUpdateOpen} state={updateState} updater={pluginUpdater} t={t}
+      {pluginUpdater && updateState && <BatchUpdatePanel open={batchUpdateOpen} state={updateState} updater={pluginUpdater} busy={installBusy} t={t}
         onClose={() => setOverlay(current => (current.kind === 'batch-update' ? { kind: 'none' } : current))} />}
+      {batchUninstaller && batchUninstallState && (
+        <BatchUninstallPanel
+          open={batchUninstallOpen}
+          state={batchUninstallState}
+          uninstaller={batchUninstaller}
+          packages={installedPackages}
+          busy={installBusy}
+          t={t}
+          onClose={() => setOverlay(current => (current.kind === 'batch-uninstall' ? { kind: 'none' } : current))}
+        />
+      )}
       <div className="dsh_market_tabToolbar">
       <div className="dsh_market_tabs" role="tablist" aria-label={t('tabs.aria')}>
         {pages.map((entry, index) => (
@@ -2275,7 +2448,14 @@ export function MarketSection({
           appliedUpdateRevision={appliedUpdateRevision}
           onCheckUpdate={checkUpdate}
           onOpenBatchUpdate={showBatchUpdateEntry ? undefined : openBatchUpdate}
+          onOpenBatchUninstall={openBatchUninstall}
           availableUpdates={updateState?.available}
+          ignoredUpdates={updateState?.ignored}
+          onIgnoreUpdateVersion={pluginUpdater ? (pkg, ver) => pluginUpdater.ignoreVersion(pkg, ver) : undefined}
+          onIgnoreAllUpdates={pluginUpdater ? pkg => pluginUpdater.ignoreAllUpdates(pkg) : undefined}
+          onUnignoreUpdates={pluginUpdater ? pkg => pluginUpdater.unignore(pkg) : undefined}
+          onPackageUninstalled={pluginUpdater ? pkg => pluginUpdater.clearPackageState(pkg) : undefined}
+          onInstalledPackagesChange={setInstalledPackages}
           onProbeUpdates={probeUpdates}
           onRegisterRefresh={onRegisterPluginsRefresh}
           onOwnedIndexChange={setOwnedIndex}

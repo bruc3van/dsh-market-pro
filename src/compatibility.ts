@@ -76,6 +76,15 @@ export function isValidSemver(value: string): boolean {
   return parseSemver(value) !== null
 }
 
+/** Compare two version strings (leading `v` optional), or return `null` if either is not semver. */
+export function compareSemverStrings(left: string, right: string): number | null {
+  const clean = (raw: string): ParsedSemver | null => parseSemver(raw.trim().replace(/^v/i, ''))
+  const parsedLeft = clean(left)
+  const parsedRight = clean(right)
+  if (parsedLeft === null || parsedRight === null) return null
+  return compareSemver(parsedLeft, parsedRight)
+}
+
 function compareSemver(left: ParsedSemver, right: ParsedSemver): number {
   if (left.major !== right.major) return left.major - right.major
   if (left.minor !== right.minor) return left.minor - right.minor

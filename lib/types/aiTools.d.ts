@@ -108,6 +108,7 @@ export interface HostPluginManagerUpdateFace {
         readonly application: 'applied' | 'restart-required' | 'overridden' | 'failed' | 'cancelled';
         readonly restartReason?: string;
         readonly stage?: string;
+        readonly failedAt?: 'registry' | 'spec-host';
         readonly target?: string;
         readonly enabled?: boolean;
         readonly error?: {
@@ -120,6 +121,8 @@ export interface HostPluginManagerUpdateFace {
             readonly output?: string;
             readonly kind?: string;
             readonly timedOut?: boolean;
+            readonly exitCode?: number;
+            readonly unmet?: string;
         };
         readonly bundle?: string;
         readonly version?: string;
@@ -171,6 +174,11 @@ export interface PluginAiInstallOutcome {
     readonly errorCode?: string;
     readonly packageKind?: string;
     readonly timedOut?: boolean;
+    readonly stage?: string;
+    readonly failedAt?: string;
+    readonly specKind?: string;
+    readonly unmet?: string;
+    readonly exitCode?: number;
 }
 export interface MarketAiToolDeps {
     readonly profile: string;

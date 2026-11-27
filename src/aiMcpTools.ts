@@ -144,7 +144,13 @@ export interface McpToolExecContext {
 
 export interface McpAiInstallOutcome {
   readonly featuredId: string
+  readonly serverName?: string
+  readonly enabled?: boolean
+  readonly missingCredentials?: boolean
+  readonly startupTimeoutMs?: number
   readonly ok: boolean
+  readonly stage?: 'install' | 'connect'
+  readonly reason?: string
   readonly error?: string
 }
 
@@ -737,12 +743,32 @@ export function createMarketAiMcpToolDefinition(deps: MarketAiMcpToolDeps): Reco
           } catch (error) {
             deps.onInstallOutcome?.({
               featuredId,
+              serverName: plan.name,
               ok: false,
+              stage: 'install',
               error: error instanceof Error ? error.message : String(error),
             })
             throw error
           }
-          deps.onInstallOutcome?.({ featuredId, ok: true })
+          if (result.connection.state === 'failed') {
+            deps.onInstallOutcome?.({
+              featuredId,
+              serverName: result.name,
+              ok: false,
+              stage: 'connect',
+              ...(result.connection.reason !== undefined ? { reason: result.connection.reason } : {}),
+              error: result.connection.reason ?? 'failed',
+            })
+          } else {
+            deps.onInstallOutcome?.({
+              featuredId,
+              serverName: result.name,
+              enabled: result.enabled,
+              missingCredentials: result.missingCredentials.length > 0,
+              ...(typeof plan.entry.startupTimeoutMs === 'number' ? { startupTimeoutMs: plan.entry.startupTimeoutMs } : {}),
+              ok: true,
+            })
+          }
           const meta = installOutcomeMeta(result)
           return JSON.stringify({
             outcome: meta.outcome,

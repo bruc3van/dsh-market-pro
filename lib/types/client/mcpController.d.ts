@@ -80,6 +80,15 @@ export interface McpPluginsFace {
     listPlugins(): Promise<Reply<readonly McpPluginRow[]>>;
     setPluginEnabled(id: string, enabled: boolean): Promise<Reply<McpPluginChange>>;
 }
+/** End-to-end outcome for a newly added MCP server (config save + initial startup/handshake). */
+export interface McpInstallOutcome {
+    readonly draft: McpDraft;
+    readonly ok: boolean;
+    readonly stage: 'install' | 'connect';
+    readonly message: string;
+    readonly reason?: string;
+    readonly timedOut?: boolean;
+}
 /** Where the controller finds each Remote; every getter may answer undefined. */
 export interface McpHosts {
     manager(): McpManagerFace | undefined;
@@ -90,13 +99,15 @@ export interface McpHosts {
     probe(name: string): Promise<Reply<McpProbeResult>>;
     /** This market's Host adoption verb (`dshMarketPro.adoptMcp`); throws on refusal. */
     adopt?(loaderId: string): Promise<McpAdoptResult>;
-    /** Optional anonymous install feedback observer for newly added MCP servers. */
+    /** Optional anonymous install feedback observer for newly added MCP servers (save-only). */
     onSaveOutcome?(outcome: {
         readonly draft: McpDraft;
         readonly original: string | undefined;
         readonly ok: boolean;
         readonly message: string;
     }): void;
+    /** Optional end-to-end outcome observer covering both config save and initial startup/connection. */
+    onInstallOutcome?(outcome: McpInstallOutcome): void;
 }
 /** Whether, and why not, one static row can be switched through the plugin manager. */
 export type McpStaticToggle = {
@@ -220,6 +231,7 @@ export declare const staticKey: (loaderId: string) => string;
 export interface McpControllerOptions {
     readonly wait?: (ms: number) => Promise<void>;
     readonly debounceMs?: number;
+    readonly installTimeoutMs?: number;
 }
 /** Create the controller over the given Remotes. */
 export declare function createMcpController(hosts: McpHosts, options?: McpControllerOptions): McpController;

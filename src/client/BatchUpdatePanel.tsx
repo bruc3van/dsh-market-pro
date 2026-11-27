@@ -43,10 +43,11 @@ function restoreText(t: MarketLocale, restore: BatchUpdateItem['restoreApplicati
 }
 
 /** Three-stage sequential batch updater: confirm list -> run with skip-on-failure -> summary. */
-export function BatchUpdatePanel({ open, state, updater, t, onClose }: {
+export function BatchUpdatePanel({ open, state, updater, busy = false, t, onClose }: {
   open: boolean
   state: UpdateState
   updater: PluginUpdater
+  busy?: boolean
   t: MarketLocale
   onClose: () => void
 }): ReactElement {
@@ -91,6 +92,7 @@ export function BatchUpdatePanel({ open, state, updater, t, onClose }: {
   }
 
   const start = () => {
+    if (busy) return
     const targets = candidates.filter(item => selectedSet.has(item.packageName))
     if (targets.length > 0) void updater.startBatch(targets, PACKAGE_NAME)
   }
@@ -259,7 +261,7 @@ export function BatchUpdatePanel({ open, state, updater, t, onClose }: {
           {batch.phase === 'idle' && (
             <>
               <MarketButton size="md" intent="secondary" onClick={close}>{t('direct.dismiss')}</MarketButton>
-              <MarketButton size="md" intent="primary" disabled={chosenCount === 0} onClick={start}>
+              <MarketButton size="md" intent="primary" disabled={chosenCount === 0 || busy} onClick={start}>
                 {t('batchUpdate.start', { count: String(chosenCount) })}
               </MarketButton>
             </>
@@ -277,7 +279,7 @@ export function BatchUpdatePanel({ open, state, updater, t, onClose }: {
           {batch.phase === 'done' && (
             <>
               {retryableTargets.length > 0 && (
-                <MarketButton size="md" intent="secondary" onClick={() => { void updater.startBatch(retryableTargets, PACKAGE_NAME) }}>
+                <MarketButton size="md" intent="secondary" disabled={busy} onClick={() => { if (!busy) void updater.startBatch(retryableTargets, PACKAGE_NAME) }}>
                   {t('batchUpdate.retryFailed', { count: String(retryableTargets.length) })}
                 </MarketButton>
               )}

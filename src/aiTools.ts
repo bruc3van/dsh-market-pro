@@ -15,6 +15,7 @@ import { registerDynamicAiTool } from './aiRegistry.ts'
 import { classifyIncompatibleItems, type CompatibilityDirection, type IncompatibleRequirementItem } from './compatibility.ts'
 import { isInstallSpec } from './installInfo.ts'
 import { PACKAGE_NAME } from './shapes.ts'
+import { excerptForTelemetry } from './telemetryError.ts'
 import { blocksHotUpdates, selectionWasRestored, updateKeepingSelection, type SelectionRestore } from './pluginUpdateRecovery.ts'
 import type {
   MarketCatalogResult,
@@ -244,6 +245,7 @@ export interface HostPluginManagerUpdateFace {
     readonly application: 'applied' | 'restart-required' | 'overridden' | 'failed' | 'cancelled'
     readonly restartReason?: string
     readonly stage?: string
+    readonly failedAt?: 'registry' | 'spec-host'
     readonly target?: string
     readonly enabled?: boolean
     readonly error?: {
@@ -252,7 +254,13 @@ export interface HostPluginManagerUpdateFace {
       readonly incompatible?: readonly IncompatibleRequirementItem[]
     }
     readonly warnings?: readonly string[]
-    readonly packageResult?: { readonly output?: string; readonly kind?: string; readonly timedOut?: boolean }
+    readonly packageResult?: {
+      readonly output?: string
+      readonly kind?: string
+      readonly timedOut?: boolean
+      readonly exitCode?: number
+      readonly unmet?: string
+    }
     readonly bundle?: string
     readonly version?: string
     readonly pendingBuilds?: readonly string[]
@@ -300,6 +308,11 @@ export interface PluginAiInstallOutcome {
   readonly errorCode?: string
   readonly packageKind?: string
   readonly timedOut?: boolean
+  readonly stage?: string
+  readonly failedAt?: string
+  readonly specKind?: string
+  readonly unmet?: string
+  readonly exitCode?: number
 }
 
 export interface MarketAiToolDeps {
@@ -804,7 +817,7 @@ function formatInstallDiagnostics(value: {
   ].filter(Boolean).join('\n')
   const rawOutput = value.application === 'failed' ? (value.packageResult?.output ?? '').trim() : ''
 
-  const telemetryParts = [headerText.slice(0, 4000), rawOutput.slice(-4000)].filter(Boolean)
+  const telemetryParts = [headerText.slice(0, 4000), excerptForTelemetry(rawOutput)].filter(Boolean)
   const telemetryMessage = telemetryParts.join('\n')
 
   const cleanHeader = sanitizeUntrustedText(headerText, 320)
@@ -1236,7 +1249,7 @@ export function createMarketAiToolDefinition(deps: MarketAiToolDeps): Record<str
         } catch (error) {
           if (exec?.signal?.aborted) throw error
           const message = error instanceof Error ? error.message : String(error)
-          deps.onInstallOutcome?.({ spec, result: 'failed', message })
+          deps.onInstallOutcome?.({ spec, result: 'failed', message, stage: 'inspect' })
           return JSON.stringify({
             outcome: 'failed' as const,
             installed: false,
@@ -1256,7 +1269,8 @@ export function createMarketAiToolDefinition(deps: MarketAiToolDeps): Record<str
               spec,
               result: 'failed',
               message: `${inspection.problem}: ${inspection.reason}`,
-              ...(inspection.problem !== 'unknown' ? { inspectProblem: inspection.problem } : {}),
+              stage: 'inspect',
+              ...(inspection.problem !== undefined ? { inspectProblem: inspection.problem } : {}),
             })
           }
           return JSON.stringify({
@@ -1305,7 +1319,13 @@ export function createMarketAiToolDefinition(deps: MarketAiToolDeps): Record<str
         } catch (error) {
           if (exec?.signal?.aborted) throw error
           const message = error instanceof Error ? error.message : String(error)
-          deps.onInstallOutcome?.({ spec, result: 'failed', message })
+          deps.onInstallOutcome?.({
+            spec,
+            result: 'failed',
+            message,
+            stage: 'install',
+            ...(inspection.kind !== undefined ? { specKind: inspection.kind } : {}),
+          })
           return JSON.stringify({
             outcome: 'failed' as const,
             installed: false,
@@ -1353,9 +1373,14 @@ export function createMarketAiToolDefinition(deps: MarketAiToolDeps): Record<str
             spec,
             result: 'failed',
             message: diagnostics.telemetryMessage,
+            stage: installResult.stage ?? 'install',
             ...(installResult.error?.code !== undefined ? { errorCode: installResult.error.code } : {}),
+            ...(installResult.failedAt !== undefined ? { failedAt: installResult.failedAt } : {}),
+            ...(inspection.kind !== undefined ? { specKind: inspection.kind } : {}),
             ...(installResult.packageResult?.kind !== undefined ? { packageKind: installResult.packageResult.kind } : {}),
             ...(installResult.packageResult?.timedOut !== undefined ? { timedOut: installResult.packageResult.timedOut } : {}),
+            ...(installResult.packageResult?.unmet !== undefined ? { unmet: installResult.packageResult.unmet } : {}),
+            ...(installResult.packageResult?.exitCode !== undefined ? { exitCode: installResult.packageResult.exitCode } : {}),
           })
           const isIncompat = installResult.error?.code === 'incompatible-version'
           const compatDirection: CompatibilityDirection | undefined = isIncompat

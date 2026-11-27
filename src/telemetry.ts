@@ -27,10 +27,10 @@ import type {
   TelemetryLocale,
   TelemetryOs,
 } from './contract.ts'
-import { PACKAGE_NAME_PATTERN } from './shapes.ts'
-import { classifyInstallError } from './telemetryError.ts'
+import { PACKAGE_NAME_PATTERN, TELEMETRY_ERROR_DETAIL_PATTERN } from './shapes.ts'
+import { classifyInstallError, extractInstallErrorDetail, type InstallErrorHints } from './telemetryError.ts'
 
-export { classifyInstallError, detectDshVersion }
+export { classifyInstallError, detectDshVersion, extractInstallErrorDetail, type InstallErrorHints }
 
 export const DEFAULT_TELEMETRY_ENDPOINT = 'https://dsh-market-pro.com/api/telemetry'
 const REQUEST_TIMEOUT_MS = 3_000
@@ -78,18 +78,21 @@ export interface TelemetryReporter {
     readonly mode: 'direct' | 'ai'
     readonly result: 'ok' | 'failed'
     readonly errorCode?: TelemetryErrorCode
+    readonly errorDetail?: string
   }): void
   reportMcpInstall(input: {
     readonly target: string
     readonly mode: 'featured' | 'ai' | 'custom'
     readonly result: 'ok' | 'failed'
     readonly errorCode?: TelemetryErrorCode
+    readonly errorDetail?: string
   }): void
   reportSkillInstall(input: {
     readonly target: string
     readonly mode: 'featured' | 'ai'
     readonly result: 'ok' | 'failed'
     readonly errorCode?: TelemetryErrorCode
+    readonly errorDetail?: string
   }): void
   dispose(): void
 }
@@ -297,6 +300,7 @@ export function createTelemetryReporter(options: TelemetryOptions): TelemetryRep
     mode: 'direct' | 'ai' | 'featured' | 'custom',
     result: 'ok' | 'failed',
     errorCode?: TelemetryErrorCode,
+    errorDetail?: string,
   ): Promise<void> => {
     if (options.storage.ready !== undefined) {
       await options.storage.ready.catch(() => undefined)
@@ -309,6 +313,11 @@ export function createTelemetryReporter(options: TelemetryOptions): TelemetryRep
     }
     if (feedbackFailuresToday >= MAX_DAILY_FEEDBACK_FAILURES) return
     const id = ensureInstallId()
+    const safeErrorDetail = result === 'failed'
+      && typeof errorDetail === 'string'
+      && TELEMETRY_ERROR_DETAIL_PATTERN.test(errorDetail)
+      ? errorDetail
+      : undefined
     const ok = await post({
       v: 1,
       event,
@@ -322,6 +331,7 @@ export function createTelemetryReporter(options: TelemetryOptions): TelemetryRep
       mode,
       result,
       ...(result === 'failed' ? { errorCode: errorCode ?? 'unknown' } : {}),
+      ...(safeErrorDetail !== undefined ? { errorDetail: safeErrorDetail } : {}),
     })
     if (ok) feedbackFailuresToday = 0
     else feedbackFailuresToday += 1
@@ -353,38 +363,38 @@ export function createTelemetryReporter(options: TelemetryOptions): TelemetryRep
       if (event.kind === 'plugin_install') {
         const cleanTarget = sanitizePluginTarget(event.target, pluginTargetResolver)
         if (cleanTarget === 'custom') return
-        void sendFeedback('plugin_install', cleanTarget, event.mode, event.result, event.errorCode)
+        void sendFeedback('plugin_install', cleanTarget, event.mode, event.result, event.errorCode, event.errorDetail)
         return
       }
       if (event.kind === 'mcp_install') {
         const cleanTarget = sanitizeMcpTarget(event.target)
         if (cleanTarget === 'custom') return
-        void sendFeedback('mcp_install', cleanTarget, event.mode, event.result, event.errorCode)
+        void sendFeedback('mcp_install', cleanTarget, event.mode, event.result, event.errorCode, event.errorDetail)
         return
       }
       if (event.kind === 'skill_install') {
         const cleanTarget = sanitizeSkillTarget(event.target)
         if (cleanTarget === 'custom') return
-        void sendFeedback('skill_install', cleanTarget, event.mode, event.result, event.errorCode)
+        void sendFeedback('skill_install', cleanTarget, event.mode, event.result, event.errorCode, event.errorDetail)
       }
     },
 
     reportPluginInstall(input) {
       const cleanTarget = sanitizePluginTarget(input.target, pluginTargetResolver)
       if (cleanTarget === 'custom') return
-      void sendFeedback('plugin_install', cleanTarget, input.mode, input.result, input.errorCode)
+      void sendFeedback('plugin_install', cleanTarget, input.mode, input.result, input.errorCode, input.errorDetail)
     },
 
     reportMcpInstall(input) {
       const cleanTarget = sanitizeMcpTarget(input.target)
       if (cleanTarget === 'custom') return
-      void sendFeedback('mcp_install', cleanTarget, input.mode, input.result, input.errorCode)
+      void sendFeedback('mcp_install', cleanTarget, input.mode, input.result, input.errorCode, input.errorDetail)
     },
 
     reportSkillInstall(input) {
       const cleanTarget = sanitizeSkillTarget(input.target)
       if (cleanTarget === 'custom') return
-      void sendFeedback('skill_install', cleanTarget, input.mode, input.result, input.errorCode)
+      void sendFeedback('skill_install', cleanTarget, input.mode, input.result, input.errorCode, input.errorDetail)
     },
 
     dispose() {

@@ -12,6 +12,8 @@ type Reply<T> = {
 };
 interface InstallResult {
     application: 'applied' | 'restart-required' | 'overridden' | 'failed' | 'cancelled';
+    stage?: string;
+    failedAt?: 'registry' | 'spec-host';
     pendingBuilds?: string[];
     warnings?: string[];
     error?: {
@@ -23,6 +25,8 @@ interface InstallResult {
         output?: string;
         kind?: string;
         timedOut?: boolean;
+        exitCode?: number;
+        unmet?: string;
         incompatible?: readonly IncompatibleRequirementItem[];
     };
 }
@@ -97,6 +101,11 @@ export interface DirectInstallOutcome {
     readonly errorCode?: string;
     readonly packageKind?: string;
     readonly timedOut?: boolean;
+    readonly stage?: string;
+    readonly failedAt?: string;
+    readonly specKind?: string;
+    readonly unmet?: string;
+    readonly exitCode?: number;
 }
 export interface ManualInstallOptions {
     readonly registry?: string | null;

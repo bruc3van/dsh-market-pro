@@ -10,6 +10,16 @@ import type {
   PluginUpdateProgress, PluginUpdateResult, PluginVersionList, Registry,
 } from '@deepseek-ai/dsh-api-remotes/client'
 import { blocksHotUpdates, selectionWasRestored, updateKeepingSelection, type SelectionRestore } from '../pluginUpdateRecovery.ts'
+import {
+  isUpdateIgnored,
+  readIgnoredUpdates,
+  shouldClearIgnoredVersion,
+  withIgnoredAllUpdates,
+  withIgnoredVersion,
+  withoutIgnoredUpdate,
+  writeIgnoredUpdates,
+  type IgnoredUpdatesMap,
+} from './updateIgnore.ts'
 export { blocksHotUpdates, isBundleInUse } from '../pluginUpdateRecovery.ts'
 
 type Reply<T> = { ok: true; value: T } | { ok: false; error: { message: string } }
@@ -111,10 +121,12 @@ export interface UpdateState {
   selectionRestore?: SelectionRestore
   /** Every settled update invalidates installed facts, including a failed update with restoration. */
   revision: number
-  /** Newest compatible stable version detected per installed package name. */
+  /** Newest compatible stable version detected per installed package name (filtered by ignore rules). */
   available: Readonly<Record<string, string>>
-  /** Resolved update targets for one-click batch updates without a second lookup. */
+  /** Resolved update targets for one-click batch updates without a second lookup (filtered by ignore rules). */
   availableDetails: Readonly<Record<string, AvailableUpdate>>
+  /** Per-package update ignore rules ("ignore version" or "mute all"). */
+  ignored: IgnoredUpdatesMap
   /** Sequential batch update queue (skips failures, orders self last). */
   batch: BatchUpdateState
 }
@@ -242,18 +254,52 @@ function withAvailableDetail(
   return rest
 }
 
+function deriveVisible(
+  detectedAvailable: Readonly<Record<string, string>>,
+  detectedDetails: Readonly<Record<string, AvailableUpdate>>,
+  ignored: IgnoredUpdatesMap,
+): { available: Readonly<Record<string, string>>; availableDetails: Readonly<Record<string, AvailableUpdate>> } {
+  const available: Record<string, string> = {}
+  for (const [name, version] of Object.entries(detectedAvailable)) {
+    if (!isUpdateIgnored(ignored[name], version)) available[name] = version
+  }
+  const availableDetails: Record<string, AvailableUpdate> = {}
+  for (const [name, detail] of Object.entries(detectedDetails)) {
+    if (!isUpdateIgnored(ignored[name], detail.version)) availableDetails[name] = detail
+  }
+  return { available, availableDetails }
+}
+
+function sameIgnoredMap(a: IgnoredUpdatesMap, b: IgnoredUpdatesMap): boolean {
+  const keysA = Object.keys(a)
+  const keysB = Object.keys(b)
+  if (keysA.length !== keysB.length) return false
+  for (const key of keysA) {
+    const ruleA = a[key]
+    const ruleB = b[key]
+    if (!ruleA || !ruleB || ruleA.mode !== ruleB.mode) return false
+    if (ruleA.mode === 'version' && ruleB.mode === 'version' && ruleA.version !== ruleB.version) return false
+  }
+  return true
+}
+
 /** One shared operation survives switching between the market's three entry points. */
 export function createPluginUpdater(
   host: () => UpdateHost | undefined,
   market: () => UpdateMarketHost | undefined,
   getDshVersion?: () => string,
+  storage?: Storage | null,
 ) {
+  const initialIgnored = readIgnoredUpdates(storage)
+  let detectedAvailable: Readonly<Record<string, string>> = {}
+  let detectedDetails: Readonly<Record<string, AvailableUpdate>> = {}
   let state: UpdateState = {
     ...IDLE_SINGLE_UPDATE,
-    revision: 0, available: {}, availableDetails: {}, batch: IDLE_BATCH,
+    revision: 0, available: {}, availableDetails: {}, ignored: initialIgnored, batch: IDLE_BATCH,
   }
   let generation = 0
-  let probeSeq = 0
+  let fullProbeSeq = 0
+  const packageProbeSeq = new Map<string, number>()
   let activeRequest: ActiveUpdateRequest = { kind: 'none' }
   const listeners = new Set<() => void>()
   const set = (patch: Partial<UpdateState>) => {
@@ -264,52 +310,61 @@ export function createPluginUpdater(
     const items = state.batch.items.map((entry, i) => (i === index ? { ...entry, ...patch } : entry))
     set({ batch: { ...state.batch, items } })
   }
-  return {
+  const updater = {
     getSnapshot: () => state,
     subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener) } },
     async probe(packageNames?: readonly string[]) {
       const api = host()
       if (!api?.listVersions || !api.updateBundle) return
-      const currentProbe = ++probeSeq
+      const isFull = packageNames === undefined
+      const currentFull = isFull ? ++fullProbeSeq : undefined
+      const isFullAlive = (): boolean => currentFull === undefined || currentFull === fullProbeSeq
       try {
         const inventory = await api.listBundles()
-        if (currentProbe !== probeSeq || !inventory.ok) return
+        if (!isFullAlive() || !inventory.ok) return
         const eligible = new Set(
           inventory.value.filter(item => item.installed && bundleUpdateKind(item) !== undefined).map(item => item.name),
         )
-        let nextAvailable = state.available
-        let nextDetails = state.availableDetails
-        let pruned = false
-        for (const name of Object.keys(nextAvailable)) {
-          if (!eligible.has(name)) {
-            nextAvailable = withAvailable(nextAvailable, name, '')
-            pruned = true
-          }
-        }
-        for (const name of Object.keys(nextDetails)) {
-          if (!eligible.has(name)) {
-            nextDetails = withAvailableDetail(nextDetails, name, null)
-            pruned = true
-          }
-        }
-        if (pruned) set({ available: nextAvailable, availableDetails: nextDetails })
         const wanted = packageNames === undefined ? undefined : new Set(packageNames)
+        let pruned = false
+        for (const name of Object.keys(detectedAvailable)) {
+          if (!eligible.has(name)) {
+            detectedAvailable = withAvailable(detectedAvailable, name, '')
+            pruned = true
+          }
+        }
+        for (const name of Object.keys(detectedDetails)) {
+          if (!eligible.has(name)) {
+            detectedDetails = withAvailableDetail(detectedDetails, name, null)
+            pruned = true
+          }
+        }
+        if (pruned) set(deriveVisible(detectedAvailable, detectedDetails, state.ignored))
         const targets = inventory.value.filter(item => item.installed && bundleUpdateKind(item) !== undefined && (wanted === undefined || wanted.has(item.name)))
+        const targetSeqs = new Map<string, number>()
+        for (const bundle of targets) {
+          const seq = (packageProbeSeq.get(bundle.name) ?? 0) + 1
+          packageProbeSeq.set(bundle.name, seq)
+          targetSeqs.set(bundle.name, seq)
+        }
         const indexes = market()
         let gitSources: readonly MarketIndexSummary[] | undefined
         for (const bundle of targets) {
-          if (currentProbe !== probeSeq) return
+          if (!isFullAlive()) return
+          const isBundleAlive = (): boolean => isFullAlive() && packageProbeSeq.get(bundle.name) === targetSeqs.get(bundle.name)
+          if (!isBundleAlive()) continue
+          if (state.ignored[bundle.name]?.mode === 'all') continue
           const kind = bundleUpdateKind(bundle)
           if (kind === 'registry') {
             const answer = await api.listVersions(bundle.name, {})
-            if (currentProbe !== probeSeq) return
+            if (!isFullAlive()) return
+            if (!isBundleAlive()) continue
             if (!answer.ok) continue
             if (answer.value.status === 'refused') {
               if (answer.value.problem === 'not-updatable' || answer.value.problem === 'not-found') {
-                set({
-                  available: withAvailable(state.available, bundle.name, ''),
-                  availableDetails: withAvailableDetail(state.availableDetails, bundle.name, null),
-                })
+                detectedAvailable = withAvailable(detectedAvailable, bundle.name, '')
+                detectedDetails = withAvailableDetail(detectedDetails, bundle.name, null)
+                set(deriveVisible(detectedAvailable, detectedDetails, state.ignored))
               }
               continue
             }
@@ -323,24 +378,24 @@ export function createPluginUpdater(
               kind: 'registry',
               source: { registry: answer.value.registry },
             } : null
-            set({
-              available: withAvailable(state.available, bundle.name, nextVersion),
-              availableDetails: withAvailableDetail(state.availableDetails, bundle.name, detail),
-            })
+            detectedAvailable = withAvailable(detectedAvailable, bundle.name, nextVersion)
+            detectedDetails = withAvailableDetail(detectedDetails, bundle.name, detail)
+            set(deriveVisible(detectedAvailable, detectedDetails, state.ignored))
           } else if (kind === 'git' && indexes) {
             if (gitSources === undefined) {
               const listed = await indexes.listIndexes()
-              if (currentProbe !== probeSeq) return
+              if (!isFullAlive()) return
               gitSources = listed.ok ? listed.value : []
             }
             const { choices } = await gitUpdateChoices(
               indexes,
               gitSources,
               bundle.name,
-              () => currentProbe === probeSeq,
+              isBundleAlive,
               getDshVersion?.(),
             )
-            if (currentProbe !== probeSeq) return
+            if (!isFullAlive()) return
+            if (!isBundleAlive()) continue
             const nextVersion = defaultCandidate(choices)
             const chosen = nextVersion !== '' ? choices.find(choice => choice.version === nextVersion) : undefined
             const detail: AvailableUpdate | null = chosen ? {
@@ -350,10 +405,9 @@ export function createPluginUpdater(
               kind: 'git',
               source: chosen.source,
             } : null
-            set({
-              available: withAvailable(state.available, bundle.name, nextVersion),
-              availableDetails: withAvailableDetail(state.availableDetails, bundle.name, detail),
-            })
+            detectedAvailable = withAvailable(detectedAvailable, bundle.name, nextVersion)
+            detectedDetails = withAvailableDetail(detectedDetails, bundle.name, detail)
+            set(deriveVisible(detectedAvailable, detectedDetails, state.ignored))
           }
         }
       } catch {
@@ -431,14 +485,15 @@ export function createPluginUpdater(
           kind,
           source: chosen.source,
         } : null
+        detectedAvailable = withAvailable(detectedAvailable, packageName, selected)
+        detectedDetails = withAvailableDetail(detectedDetails, packageName, detail)
         set({
           phase: 'ready',
           choices,
           selected,
           warnings,
           omitted,
-          available: withAvailable(state.available, packageName, selected),
-          availableDetails: withAvailableDetail(state.availableDetails, packageName, detail),
+          ...deriveVisible(detectedAvailable, detectedDetails, state.ignored),
         })
       } catch (error) {
         if (current === generation) set({ phase: 'error', message: error instanceof Error ? error.message : String(error) })
@@ -461,6 +516,15 @@ export function createPluginUpdater(
         const { answer, selectionRestore } = await updateHostBundle(api, state.packageName, choice.version,
           { ...('registry' in source ? { registry: source.registry } : { spec: source.spec }), requestId })
         const applied = answer.ok && (answer.value.result.application === 'applied' || answer.value.result.application === 'restart-required')
+        let nextIgnored = state.ignored
+        if (applied) {
+          detectedAvailable = withAvailable(detectedAvailable, state.packageName, '')
+          detectedDetails = withAvailableDetail(detectedDetails, state.packageName, null)
+          if (shouldClearIgnoredVersion(state.ignored[state.packageName], choice.version)) {
+            nextIgnored = withoutIgnoredUpdate(state.ignored, state.packageName)
+            writeIgnoredUpdates(nextIgnored, storage)
+          }
+        }
         set(answer.ok ? {
           phase: 'done',
           step: undefined,
@@ -468,8 +532,8 @@ export function createPluginUpdater(
           selectionRestore,
           revision: state.revision + 1,
           ...(applied ? {
-            available: withAvailable(state.available, state.packageName, ''),
-            availableDetails: withAvailableDetail(state.availableDetails, state.packageName, null),
+            ignored: nextIgnored,
+            ...deriveVisible(detectedAvailable, detectedDetails, nextIgnored),
           } : {}),
         } : { phase: 'unknown', step: undefined, message: answer.error.message, revision: state.revision + 1 })
       } catch (error) {
@@ -529,7 +593,16 @@ export function createPluginUpdater(
           if (answer.ok) {
             const app = answer.value.result.application
             const applied = app === 'applied' || app === 'restart-required'
-            const matchesCurrentAvailable = state.available[entry.packageName] === entry.to.replace(/^v/i, '')
+            const matchesCurrentAvailable = detectedAvailable[entry.packageName] === entry.to.replace(/^v/i, '')
+            let nextIgnored = state.ignored
+            if (applied && matchesCurrentAvailable) {
+              detectedAvailable = withAvailable(detectedAvailable, entry.packageName, '')
+              detectedDetails = withAvailableDetail(detectedDetails, entry.packageName, null)
+            }
+            if (applied && shouldClearIgnoredVersion(state.ignored[entry.packageName], entry.to)) {
+              nextIgnored = withoutIgnoredUpdate(state.ignored, entry.packageName)
+              writeIgnoredUpdates(nextIgnored, storage)
+            }
             const nextItems = state.batch.items.map((item, i) => (i === index ? {
               ...item,
               status: app as BatchItemStatus,
@@ -541,9 +614,9 @@ export function createPluginUpdater(
             set({
               batch: { ...state.batch, items: nextItems },
               revision: state.revision + 1,
-              ...(applied && matchesCurrentAvailable ? {
-                available: withAvailable(state.available, entry.packageName, ''),
-                availableDetails: withAvailableDetail(state.availableDetails, entry.packageName, null),
+              ...(applied ? {
+                ignored: nextIgnored,
+                ...deriveVisible(detectedAvailable, detectedDetails, nextIgnored),
               } : {}),
             })
           } else {
@@ -584,6 +657,49 @@ export function createPluginUpdater(
       if (state.batch.phase === 'running') return
       set({ batch: IDLE_BATCH })
     },
+    ignoreVersion(packageName: string, version: string) {
+      const nextIgnored = withIgnoredVersion(state.ignored, packageName, version)
+      if (nextIgnored === state.ignored) return
+      writeIgnoredUpdates(nextIgnored, storage)
+      set({ ignored: nextIgnored, ...deriveVisible(detectedAvailable, detectedDetails, nextIgnored) })
+    },
+    ignoreAllUpdates(packageName: string) {
+      const nextIgnored = withIgnoredAllUpdates(state.ignored, packageName)
+      if (nextIgnored === state.ignored) return
+      writeIgnoredUpdates(nextIgnored, storage)
+      set({ ignored: nextIgnored, ...deriveVisible(detectedAvailable, detectedDetails, nextIgnored) })
+    },
+    unignore(packageName: string) {
+      const previousRule = state.ignored[packageName]
+      const nextIgnored = withoutIgnoredUpdate(state.ignored, packageName)
+      if (nextIgnored === state.ignored) return
+      writeIgnoredUpdates(nextIgnored, storage)
+      set({ ignored: nextIgnored, ...deriveVisible(detectedAvailable, detectedDetails, nextIgnored) })
+      if (previousRule?.mode === 'all' && !(packageName in detectedAvailable)) {
+        void updater.probe([packageName])
+      }
+    },
+    clearPackageState(packageName: string) {
+      const nextDetectedAvailable = withAvailable(detectedAvailable, packageName, '')
+      const nextDetectedDetails = withAvailableDetail(detectedDetails, packageName, null)
+      const nextIgnored = withoutIgnoredUpdate(state.ignored, packageName)
+      const detectedChanged = nextDetectedAvailable !== detectedAvailable || nextDetectedDetails !== detectedDetails
+      const ignoredChanged = nextIgnored !== state.ignored
+      if (!detectedChanged && !ignoredChanged) return
+      detectedAvailable = nextDetectedAvailable
+      detectedDetails = nextDetectedDetails
+      if (ignoredChanged) writeIgnoredUpdates(nextIgnored, storage)
+      set({ ignored: nextIgnored, ...deriveVisible(detectedAvailable, detectedDetails, nextIgnored) })
+    },
+    syncIgnoredFromStorage() {
+      const nextIgnored = readIgnoredUpdates(storage)
+      if (sameIgnoredMap(state.ignored, nextIgnored)) return
+      const toProbe = Object.entries(state.ignored)
+        .filter(([pkg, rule]) => rule.mode === 'all' && nextIgnored[pkg]?.mode !== 'all' && !(pkg in detectedAvailable))
+        .map(([pkg]) => pkg)
+      set({ ignored: nextIgnored, ...deriveVisible(detectedAvailable, detectedDetails, nextIgnored) })
+      if (toProbe.length > 0) void updater.probe(toProbe)
+    },
     progress(event: PluginUpdateProgress) {
       if (activeRequest.kind === 'none' || event.requestId !== activeRequest.requestId) return
       if (activeRequest.kind === 'single' && state.phase === 'updating') {
@@ -598,5 +714,6 @@ export function createPluginUpdater(
       set(IDLE_SINGLE_UPDATE)
     },
   }
+  return updater
 }
 export type PluginUpdater = ReturnType<typeof createPluginUpdater>

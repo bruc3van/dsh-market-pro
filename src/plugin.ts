@@ -36,7 +36,7 @@ import { SafeMarketRuntime } from './runtime.ts'
 import { registerSafeMarketSettings } from './settings.ts'
 import { readSkills } from './skills.ts'
 import { deleteInstalledSkillOnHost, installFeaturedSkillOnHost } from './skillInstall.ts'
-import { adoptMcp, inspectMcpContext, probeManagedMcp, type McpLoaderEntry } from './mcp.ts'
+import { adoptMcp, createAiMcpInstallObserver, inspectMcpContext, probeManagedMcp, type McpLoaderEntry, type RuntimeMcpManagerFace } from './mcp.ts'
 import { registerMarketAiSkill } from './aiSkill.ts'
 import { registerMarketAiTool, type HostPluginManagerUpdateFace, type HostPluginMarketUpdateFace, type MarketApprovalServiceFace } from './aiTools.ts'
 import { registerMarketAiMcpTool } from './aiMcpTools.ts'
@@ -45,7 +45,7 @@ import { adoptDomainState, initialDomainState, safeMarketDomainSpec, type SafeMa
 import { packageNameFromInstallSpec, parseGitHubRepoSlug } from './installInfo.ts'
 import { isValidSemver } from './compatibility.ts'
 import { detectDshVersion } from './hostRuntime.ts'
-import { classifyInstallError, createTelemetryReporter, isTelemetryEnvSuppressed } from './telemetry.ts'
+import { classifyInstallError, createTelemetryReporter, extractInstallErrorDetail, isTelemetryEnvSuppressed } from './telemetry.ts'
 import { TYPERT_MANIFEST } from './typert.ts'
 import type { InstallFeaturedSkillResult, MarketPlugin, SafeMarketSettingsUpdate } from './contract.ts'
 import { PACKAGE_NAME } from './shapes.ts'
@@ -351,35 +351,28 @@ export function applyMarket(ctx: Context, resolved: Config): () => void {
     pluginMarket: () => safeGet<HostPluginMarketUpdateFace>('pluginMarket'),
     getApprover: () => safeGet<MarketApprovalServiceFace>('approval'),
     onInstallOutcome: outcome => {
+      const errorCode = outcome.result === 'failed' ? classifyInstallError(outcome.message, outcome) : undefined
+      const errorDetail = outcome.result === 'failed' ? extractInstallErrorDetail(outcome.message, outcome) : undefined
       telemetry.reportPluginInstall({
         target: outcome.spec,
         mode: 'ai',
         result: outcome.result,
-        ...(outcome.result === 'failed'
-          ? {
-              errorCode: classifyInstallError(outcome.message, {
-                inspectProblem: outcome.inspectProblem,
-                errorCode: outcome.errorCode,
-                packageKind: outcome.packageKind,
-                timedOut: outcome.timedOut,
-              }),
-            }
-          : {}),
+        ...(errorCode !== undefined ? { errorCode } : {}),
+        ...(errorDetail !== undefined ? { errorDetail } : {}),
       })
     },
   })
+  const aiMcpObserver = createAiMcpInstallObserver({
+    getMcpManager: () => safeGet<RuntimeMcpManagerFace>('mcpManager'),
+    report: event => { telemetry.reportMcpInstall(event) },
+    disposeSignal: disposeController.signal,
+  })
+
   const aiMcpTool = registerMarketAiMcpTool(ctx, {
     profile: profile.name,
     readSettings,
     entries: () => ctx.loader.entries() as Iterable<McpLoaderEntry>,
-    onInstallOutcome: outcome => {
-      telemetry.reportMcpInstall({
-        target: outcome.featuredId,
-        mode: 'ai',
-        result: outcome.ok ? 'ok' : 'failed',
-        ...(outcome.ok ? {} : { errorCode: classifyInstallError(outcome.error ?? '') }),
-      })
-    },
+    onInstallOutcome: outcome => { aiMcpObserver.observe(outcome) },
   })
   const reportSkillOutcome = (mode: 'featured' | 'ai', result: InstallFeaturedSkillResult): void => {
     if (result.ok) {
@@ -389,11 +382,20 @@ export function applyMarket(ctx: Context, resolved: Config): () => void {
     if (result.code === 'already-exists' || result.code === 'invalid-project-dir' || result.code === 'not-found') {
       return
     }
+    const stage = result.code === 'download-failed'
+      ? 'connect'
+      : result.code === 'invalid-skill'
+        ? 'inspect'
+        : 'install'
+    const skillHints = { skillErrorCode: result.code, stage }
+    const errorCode = classifyInstallError(result.error, skillHints)
+    const errorDetail = extractInstallErrorDetail(result.error, skillHints)
     telemetry.reportSkillInstall({
       target: result.id,
       mode,
       result: 'failed',
-      errorCode: classifyInstallError(result.error, { skillErrorCode: result.code }),
+      errorCode,
+      ...(errorDetail !== undefined ? { errorDetail } : {}),
     })
   }
   const aiSkillsTool = registerMarketAiSkillsTool(ctx, {

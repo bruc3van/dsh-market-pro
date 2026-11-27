@@ -894,3 +894,225 @@ test('MCP controller save omits onSaveOutcome on local validation errors and rep
 
   detach()
 })
+
+test('MCP controller onInstallOutcome tracks save failures, startup failures, reconnecting timeouts, and cleanup cancellation', async () => {
+  type RecordedOutcome = {
+    name: string
+    ok: boolean
+    stage: 'install' | 'connect'
+    message: string
+    reason?: string
+    timedOut?: boolean
+  }
+  const outcomes: RecordedOutcome[] = []
+  let currentSettings: McpSettingsView = { ...settingsView }
+  const { hosts } = fakeHosts()
+
+  const makeStreamingController = (installTimeoutMs = 45) => {
+    const listeners: Array<(frame: McpServerView[]) => void> = []
+    let latestMutateFail = false
+    const ctrl = createMcpController({
+      ...hosts,
+      manager: () => ({
+        watch(signal) {
+          return {
+            async *[Symbol.asyncIterator]() {
+              const queue: McpServerView[][] = [views]
+              let resolveWait: (() => void) | undefined
+              const onFrame = (frame: McpServerView[]) => {
+                queue.push(frame)
+                resolveWait?.()
+                resolveWait = undefined
+              }
+              listeners.push(onFrame)
+              signal?.addEventListener('abort', () => {
+                resolveWait?.()
+                resolveWait = undefined
+              }, { once: true })
+              while (!signal?.aborted) {
+                while (queue.length > 0) {
+                  yield queue.shift()!
+                }
+                if (signal?.aborted) break
+                await new Promise<void>(r => { resolveWait = r })
+              }
+            },
+          }
+        },
+        restart: async () => ({ ok: true, value: undefined }),
+      }),
+      settings: () => ({
+        describe: async () => ({ ok: true, value: { writable: true, namespaces: [currentSettings] } }),
+        mutate: async (_ns, _ops, revision) => latestMutateFail
+          ? { ok: false, error: { code: 'write-failed', message: 'disk full' } }
+          : (currentSettings = { ...currentSettings, revision: (revision ?? 0) + 1 }, { ok: true, value: currentSettings }),
+      }),
+      onInstallOutcome: (outcome) => {
+        outcomes.push({
+          name: outcome.draft.name,
+          ok: outcome.ok,
+          stage: outcome.stage,
+          message: outcome.message,
+          ...(outcome.reason !== undefined ? { reason: outcome.reason } : {}),
+          ...(outcome.timedOut !== undefined ? { timedOut: outcome.timedOut } : {}),
+        })
+      },
+    }, { debounceMs: 1, installTimeoutMs })
+    return {
+      ctrl,
+      emit: (frame: McpServerView[]) => { for (const fn of [...listeners]) fn(frame) },
+      setMutateFail: (v: boolean) => { latestMutateFail = v },
+    }
+  }
+
+  const { ctrl, emit, setMutateFail } = makeStreamingController(45)
+  const detach = ctrl.attach()
+  await settle()
+
+  // 1. Local validation failure does not emit onInstallOutcome.
+  const localErr = await ctrl.save({ ...emptyDraft(), name: 'mine', command: 'npx', args: ['srv'] }, undefined)
+  assert.equal(localErr.ok, false)
+  assert.equal(outcomes.length, 0)
+
+  // 2. Real save failure emits stage: 'install', ok: false.
+  setMutateFail(true)
+  const saveFail = await ctrl.save({ ...emptyDraft(), name: 'srv-save-fail', command: 'npx', args: ['srv'] }, undefined)
+  assert.equal(saveFail.ok, false)
+  assert.deepEqual(outcomes.at(-1), {
+    name: 'srv-save-fail',
+    ok: false,
+    stage: 'install',
+    message: 'write-failed: disk full',
+  })
+  setMutateFail(false)
+
+  // 3. Disabled save emits stage: 'install', ok: true immediately.
+  const saveDisabled = await ctrl.save({ ...emptyDraft(), name: 'srv-disabled', command: 'npx', args: ['srv'], enabled: false }, undefined)
+  assert.equal(saveDisabled.ok, true)
+  assert.deepEqual(outcomes.at(-1), {
+    name: 'srv-disabled',
+    ok: true,
+    stage: 'install',
+    message: '',
+  })
+
+  // 4. Enabled save settling to connected emits stage: 'connect', ok: true.
+  await ctrl.save({ ...emptyDraft(), name: 'srv-ok', command: 'npx', args: ['srv'] }, undefined)
+  emit([...views, { name: 'srv-ok', configured: true, status: { state: 'connected', toolCount: 2, connectedAt: 1 } }])
+  await settle()
+  assert.deepEqual(outcomes.at(-1), {
+    name: 'srv-ok',
+    ok: true,
+    stage: 'connect',
+    message: '',
+  })
+
+  // 5. Enabled save settling to waiting-credentials emits stage: 'connect', ok: true.
+  await ctrl.save({ ...emptyDraft(), name: 'srv-cred', command: 'npx', args: ['srv'] }, undefined)
+  emit([...views, { name: 'srv-cred', configured: true, status: { state: 'waiting-credentials', lastError: 'missing token' } }])
+  await settle()
+  assert.deepEqual(outcomes.at(-1), {
+    name: 'srv-cred',
+    ok: true,
+    stage: 'connect',
+    message: '',
+  })
+
+  // 6. Enabled save settling to failed preserves reason + lastError.
+  await ctrl.save({ ...emptyDraft(), name: 'srv-fail', command: 'uvx', args: ['srv'] }, undefined)
+  emit([...views, { name: 'srv-fail', configured: true, status: { state: 'failed', reason: 'gave-up', lastError: 'spawn uvx ENOENT' } }])
+  await settle()
+  assert.deepEqual(outcomes.at(-1), {
+    name: 'srv-fail',
+    ok: false,
+    stage: 'connect',
+    message: 'spawn uvx ENOENT',
+    reason: 'gave-up',
+  })
+
+  // 7. Enabled save staying in reconnecting times out with reconnecting-timeout + lastError.
+  await ctrl.save({ ...emptyDraft(), name: 'srv-reconn', transport: 'streamable-http', url: 'https://x.dev/mcp' }, undefined)
+  emit([...views, {
+    name: 'srv-reconn',
+    configured: true,
+    status: { state: 'reconnecting', attempt: 1, maxAttempts: 5, nextRetryAtMs: 1000, lastError: 'HTTP 401 Unauthorized' },
+  }])
+  await new Promise(r => setTimeout(r, 70))
+  assert.deepEqual(outcomes.at(-1), {
+    name: 'srv-reconn',
+    ok: false,
+    stage: 'connect',
+    message: 'HTTP 401 Unauthorized',
+    reason: 'reconnecting-timeout',
+  })
+
+  // 8. Enabled save staying in connecting times out with startup-timeout + timedOut: true.
+  await ctrl.save({ ...emptyDraft(), name: 'srv-conn-timeout', command: 'npx', args: ['srv'] }, undefined)
+  emit([...views, { name: 'srv-conn-timeout', configured: true, status: { state: 'connecting', attempt: 0 } }])
+  await new Promise(r => setTimeout(r, 70))
+  assert.deepEqual(outcomes.at(-1), {
+    name: 'srv-conn-timeout',
+    ok: false,
+    stage: 'connect',
+    message: 'MCP startup timed out',
+    reason: 'startup-timeout',
+    timedOut: true,
+  })
+
+  // 9. Remove cancels pending install without reporting.
+  const countBeforeRemove = outcomes.length
+  await ctrl.save({ ...emptyDraft(), name: 'srv-removed', command: 'npx', args: ['srv'] }, undefined)
+  await ctrl.remove('srv-removed')
+  await new Promise(r => setTimeout(r, 70))
+  assert.equal(outcomes.length, countBeforeRemove)
+
+  // 10. Status transitioning to disabled cancels pending install silently without reporting failure.
+  await ctrl.save({ ...emptyDraft(), name: 'srv-turned-off', command: 'npx', args: ['srv'] }, undefined)
+  emit([...views, { name: 'srv-turned-off', configured: true, status: { state: 'disabled' } }])
+  await new Promise(r => setTimeout(r, 70))
+  assert.equal(outcomes.length, countBeforeRemove)
+
+  // 11. Detaching while a pending install is connecting keeps watch alive until settled.
+  await ctrl.save({ ...emptyDraft(), name: 'srv-after-detach', command: 'npx', args: ['srv'] }, undefined)
+  detach()
+  emit([...views, { name: 'srv-after-detach', configured: true, status: { state: 'connected', toolCount: 1, connectedAt: 2 } }])
+  await settle()
+  assert.deepEqual(outcomes.at(-1), {
+    name: 'srv-after-detach',
+    ok: true,
+    stage: 'connect',
+    message: '',
+  })
+
+  // 12. Without mcpManager mounted, enabled save settles immediately at stage:'install' without timing out.
+  const countBeforeNoManager = outcomes.length
+  let noManagerSettings: McpSettingsView = { ...settingsView }
+  const noManagerCtrl = createMcpController({
+    ...hosts,
+    manager: () => undefined,
+    settings: () => ({
+      describe: async () => ({ ok: true, value: { writable: true, namespaces: [noManagerSettings] } }),
+      mutate: async (_ns, _ops, revision) => (noManagerSettings = { ...noManagerSettings, revision: (revision ?? 0) + 1 }, { ok: true, value: noManagerSettings }),
+    }),
+    onInstallOutcome: (outcome) => {
+      outcomes.push({
+        name: outcome.draft.name,
+        ok: outcome.ok,
+        stage: outcome.stage,
+        message: outcome.message,
+        ...(outcome.reason !== undefined ? { reason: outcome.reason } : {}),
+        ...(outcome.timedOut !== undefined ? { timedOut: outcome.timedOut } : {}),
+      })
+    },
+  }, { debounceMs: 1, installTimeoutMs: 40 })
+  await noManagerCtrl.refresh()
+  const noMgrSave = await noManagerCtrl.save({ ...emptyDraft(), name: 'srv-no-mgr', command: 'npx', args: ['srv'] }, undefined)
+  assert.equal(noMgrSave.ok, true)
+  assert.equal(outcomes.length, countBeforeNoManager + 1)
+  assert.deepEqual(outcomes.at(-1), {
+    name: 'srv-no-mgr',
+    ok: true,
+    stage: 'install',
+    message: '',
+  })
+})

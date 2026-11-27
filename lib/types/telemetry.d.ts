@@ -1,7 +1,7 @@
 import { detectDshVersion } from './hostRuntime.ts';
 import type { TelemetryClientEvent, TelemetryErrorCode, TelemetryHostKind, TelemetryOs } from './contract.ts';
-import { classifyInstallError } from './telemetryError.ts';
-export { classifyInstallError, detectDshVersion };
+import { classifyInstallError, extractInstallErrorDetail, type InstallErrorHints } from './telemetryError.ts';
+export { classifyInstallError, detectDshVersion, extractInstallErrorDetail, type InstallErrorHints };
 export declare const DEFAULT_TELEMETRY_ENDPOINT = "https://dsh-market-pro.com/api/telemetry";
 export interface TelemetryStoragePort {
     read(): {
@@ -40,18 +40,21 @@ export interface TelemetryReporter {
         readonly mode: 'direct' | 'ai';
         readonly result: 'ok' | 'failed';
         readonly errorCode?: TelemetryErrorCode;
+        readonly errorDetail?: string;
     }): void;
     reportMcpInstall(input: {
         readonly target: string;
         readonly mode: 'featured' | 'ai' | 'custom';
         readonly result: 'ok' | 'failed';
         readonly errorCode?: TelemetryErrorCode;
+        readonly errorDetail?: string;
     }): void;
     reportSkillInstall(input: {
         readonly target: string;
         readonly mode: 'featured' | 'ai';
         readonly result: 'ok' | 'failed';
         readonly errorCode?: TelemetryErrorCode;
+        readonly errorDetail?: string;
     }): void;
     dispose(): void;
 }

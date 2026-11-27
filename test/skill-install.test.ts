@@ -546,3 +546,45 @@ test('curated skill installs record provenance that clears on delete/manual repl
     await rm(sandbox, { recursive: true, force: true })
   }
 })
+
+test('installFeaturedSkillOnHost preserves fetch error.cause codes and multi-source failure reasons', async () => {
+  const sandbox = await mkdtemp(join(tmpdir(), 'dsh-skill-error-codes-'))
+  try {
+    const home = join(sandbox, 'home')
+    const item = findFeaturedSkillById('mattpocock/skills/code-review')!
+    assert.ok(item)
+
+    const causeTimeout = new TypeError('fetch failed', {
+      cause: Object.assign(new Error('Connect Timeout Error'), { code: 'UND_ERR_CONNECT_TIMEOUT' }),
+    })
+    const tlsErr = new TypeError('fetch failed', {
+      cause: Object.assign(new Error('self-signed certificate in certificate chain'), { code: 'SELF_SIGNED_CERT_IN_CHAIN' }),
+    })
+
+    let callCount = 0
+    const res = await installFeaturedSkillOnHost(
+      { id: item.id, scope: 'user-dsh' },
+      new AbortController().signal,
+      {
+        home,
+        jsDelivrFallback: true,
+        fetchImpl: async (input) => {
+          const url = String(input)
+          if (url.includes('data.jsdelivr.com')) {
+            return new Response('rate limited', { status: 429 })
+          }
+          callCount += 1
+          throw callCount === 1 ? causeTimeout : tlsErr
+        },
+      },
+    )
+
+    assert.equal(res.ok, false)
+    assert.equal(res.code, 'download-failed')
+    assert.match(res.error, /UND_ERR_CONNECT_TIMEOUT/)
+    assert.match(res.error, /SELF_SIGNED_CERT_IN_CHAIN/)
+    assert.match(res.error, /jsDelivr fallback: HTTP 429/)
+  } finally {
+    await rm(sandbox, { recursive: true, force: true })
+  }
+})

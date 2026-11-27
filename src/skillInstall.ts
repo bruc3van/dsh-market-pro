@@ -270,6 +270,33 @@ function encodePathSegments(path: string): string {
   return path.split('/').map(segment => encodeURIComponent(segment)).join('/')
 }
 
+/** Preserve root cause messages & machine codes (e.g. Node `fetch` `error.cause.code`) across retries. */
+function describeErrorWithCode(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error)
+  const codes: string[] = []
+  const notes: string[] = []
+  let cursor: unknown = error
+  for (let depth = 0; depth < 3 && cursor !== null && typeof cursor === 'object'; depth += 1) {
+    const code = (cursor as { code?: unknown }).code
+    if (typeof code === 'string' && code.trim() !== '') {
+      const cleanCode = code.trim()
+      if (!message.includes(cleanCode) && !codes.includes(cleanCode)) {
+        codes.push(cleanCode)
+      }
+    }
+    if (depth > 0 && cursor instanceof Error && cursor.message.trim() !== '') {
+      const note = cursor.message.trim()
+      if (!message.includes(note) && !notes.includes(note)) {
+        notes.push(note)
+      }
+    }
+    cursor = (cursor as { cause?: unknown }).cause
+  }
+  const suffixParts = [...codes, ...notes]
+  if (suffixParts.length === 0) return message
+  return `${message} (${suffixParts.join('; ')})`
+}
+
 async function fetchBufferWithLimit(
   fetchImpl: typeof fetch,
   url: string,
@@ -346,7 +373,7 @@ export async function fetchSkillSubdirFromJsDelivr(
     manifestJson = JSON.parse(manifestFetch.buffer.toString('utf8'))
   } catch (error) {
     if (signal.aborted) return { ok: false, error: 'installation cancelled' }
-    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+    return { ok: false, error: describeErrorWithCode(error) }
   }
 
   const rawFiles = manifestJson !== null && typeof manifestJson === 'object'
@@ -418,7 +445,7 @@ export async function fetchSkillSubdirFromJsDelivr(
         return
       } catch (error) {
         if (signal.aborted) return
-        fileErr = error instanceof Error ? error.message : String(error)
+        fileErr = describeErrorWithCode(error)
         if (fileErr.includes('exceed')) {
           workerError = fileErr
           return
@@ -497,7 +524,7 @@ export async function installFeaturedSkillOnHost(
       request.scope,
       targetPath,
       'write-failed',
-      error instanceof Error ? error.message : String(error),
+      describeErrorWithCode(error),
     )
   }
 
@@ -507,7 +534,11 @@ export async function installFeaturedSkillOnHost(
   const limits = options.limits ?? DEFAULT_EXTRACT_LIMITS
 
   let files: ReadonlyMap<string, Buffer> | undefined
-  let lastError = 'could not download skill archive'
+  const attemptErrors: string[] = []
+  const recordAttemptError = (msg: string): void => {
+    const clean = msg.trim()
+    if (clean !== '' && !attemptErrors.includes(clean)) attemptErrors.push(clean)
+  }
 
   for (const url of urls) {
     if (signal.aborted) {
@@ -528,7 +559,7 @@ export async function installFeaturedSkillOnHost(
       })
       if (!response.ok) {
         void response.body?.cancel().catch(() => undefined)
-        lastError = `HTTP ${String(response.status)} from ${new URL(url).hostname}`
+        recordAttemptError(`HTTP ${String(response.status)} from ${new URL(url).hostname}`)
         continue
       }
       const extracted = await extractSubdirFromTgzResponse(response, item.path, limits)
@@ -538,12 +569,14 @@ export async function installFeaturedSkillOnHost(
       if (signal.aborted) {
         return failResult(item.id, item.name, request.scope, targetPath, 'cancelled', 'installation cancelled')
       }
-      lastError = error instanceof Error ? error.message : String(error)
+      recordAttemptError(describeErrorWithCode(error))
     } finally {
       clearTimeout(timer)
       signal.removeEventListener('abort', onAbort)
     }
   }
+
+  let lastError = attemptErrors.length > 0 ? attemptErrors.join('; ') : 'could not download skill archive'
 
   if (files === undefined && options.jsDelivrFallback !== false && !signal.aborted) {
     const mirror = await fetchSkillSubdirFromJsDelivr(item.source, item.commit, item.path, signal, {
@@ -650,7 +683,7 @@ export async function installFeaturedSkillOnHost(
       request.scope,
       targetPath,
       'write-failed',
-      error instanceof Error ? error.message : String(error),
+      describeErrorWithCode(error),
     )
   } finally {
     await rm(stageDir, { recursive: true, force: true }).catch(() => undefined)

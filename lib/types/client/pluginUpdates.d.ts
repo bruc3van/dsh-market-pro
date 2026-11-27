@@ -2,6 +2,7 @@
 import { type CompatibilityDirection } from '../compatibility.ts';
 import type { BundleInfo, MarketIndexSummary, MarketQuery, MarketSearchResult, PluginInstallRequestId, PluginUpdateProgress, PluginUpdateResult, PluginVersionList, Registry } from '@deepseek-ai/dsh-api-remotes/client';
 import { type SelectionRestore } from '../pluginUpdateRecovery.ts';
+import { type IgnoredUpdatesMap } from './updateIgnore.ts';
 export { blocksHotUpdates, isBundleInUse } from '../pluginUpdateRecovery.ts';
 type Reply<T> = {
     ok: true;
@@ -89,10 +90,12 @@ export interface UpdateState {
     selectionRestore?: SelectionRestore;
     /** Every settled update invalidates installed facts, including a failed update with restoration. */
     revision: number;
-    /** Newest compatible stable version detected per installed package name. */
+    /** Newest compatible stable version detected per installed package name (filtered by ignore rules). */
     available: Readonly<Record<string, string>>;
-    /** Resolved update targets for one-click batch updates without a second lookup. */
+    /** Resolved update targets for one-click batch updates without a second lookup (filtered by ignore rules). */
     availableDetails: Readonly<Record<string, AvailableUpdate>>;
+    /** Per-package update ignore rules ("ignore version" or "mute all"). */
+    ignored: IgnoredUpdatesMap;
     /** Sequential batch update queue (skips failures, orders self last). */
     batch: BatchUpdateState;
 }
@@ -101,7 +104,7 @@ export declare function orderBatchTargets<T extends {
     readonly packageName: string;
 }>(items: readonly T[], selfName: string): T[];
 /** One shared operation survives switching between the market's three entry points. */
-export declare function createPluginUpdater(host: () => UpdateHost | undefined, market: () => UpdateMarketHost | undefined, getDshVersion?: () => string): {
+export declare function createPluginUpdater(host: () => UpdateHost | undefined, market: () => UpdateMarketHost | undefined, getDshVersion?: () => string, storage?: Storage | null): {
     getSnapshot: () => UpdateState;
     subscribe: (listener: () => void) => () => void;
     probe(packageNames?: readonly string[]): Promise<void>;
@@ -111,6 +114,11 @@ export declare function createPluginUpdater(host: () => UpdateHost | undefined, 
     startBatch(targets: readonly (string | AvailableUpdate)[], selfName?: string): Promise<void>;
     requestStopBatch(): void;
     resetBatch(): void;
+    ignoreVersion(packageName: string, version: string): void;
+    ignoreAllUpdates(packageName: string): void;
+    unignore(packageName: string): void;
+    clearPackageState(packageName: string): void;
+    syncIgnoredFromStorage(): void;
     progress(event: PluginUpdateProgress): void;
     close(): void;
 };

@@ -13,6 +13,8 @@
 import { z } from 'zod';
 import { type InstallInfo } from './installInfo.ts';
 import type { InvocationDescriptor } from '@deepseek-ai/dsh-typert-protocol';
+import { TELEMETRY_ERROR_DETAIL_PATTERN } from './shapes.ts';
+export { TELEMETRY_ERROR_DETAIL_PATTERN };
 /** One row of the market: a community plugin the catalog kept. */
 export interface MarketPlugin {
     readonly icon?: string;
@@ -238,7 +240,7 @@ export type SafeMarketSettingsUpdate = {
 export type TelemetryHostKind = 'desktop' | 'web' | 'other';
 export type TelemetryOs = 'darwin' | 'win32' | 'linux' | 'other';
 export type TelemetryLocale = 'zh' | 'en' | 'other';
-export type TelemetryErrorCode = 'compat' | 'unsupported_platform' | 'not_bundle' | 'already_installed' | 'not_found' | 'pnpm_missing' | 'build_blocked' | 'permission' | 'disk_full' | 'integrity' | 'invalid_spec' | 'network' | 'timeout' | 'refused' | 'cancelled' | 'write_failed' | 'operation_error' | 'unknown';
+export type TelemetryErrorCode = 'compat' | 'unsupported_platform' | 'not_bundle' | 'already_installed' | 'not_found' | 'pnpm_missing' | 'runtime_missing' | 'build_blocked' | 'build_failed' | 'git_failed' | 'tls_error' | 'auth_failed' | 'rate_limited' | 'fs_locked' | 'permission' | 'disk_full' | 'integrity' | 'invalid_spec' | 'network' | 'timeout' | 'refused' | 'cancelled' | 'write_failed' | 'operation_error' | 'unknown';
 export type TelemetryClientEvent = {
     readonly kind: 'client_hello';
     readonly hostKind: TelemetryHostKind;
@@ -249,18 +251,21 @@ export type TelemetryClientEvent = {
     readonly mode: 'direct' | 'ai';
     readonly result: 'ok' | 'failed';
     readonly errorCode?: TelemetryErrorCode;
+    readonly errorDetail?: string;
 } | {
     readonly kind: 'mcp_install';
     readonly target: string;
     readonly mode: 'featured' | 'custom';
     readonly result: 'ok' | 'failed';
     readonly errorCode?: TelemetryErrorCode;
+    readonly errorDetail?: string;
 } | {
     readonly kind: 'skill_install';
     readonly target: string;
     readonly mode: 'featured' | 'ai';
     readonly result: 'ok' | 'failed';
     readonly errorCode?: TelemetryErrorCode;
+    readonly errorDetail?: string;
 };
 /** Live state of one loader entry an installed bundle introduces. */
 export interface MarketInstalledEntry {
@@ -971,7 +976,14 @@ export declare const telemetryClientEventSchema: z.ZodDiscriminatedUnion<[z.ZodR
         already_installed: "already_installed";
         not_found: "not_found";
         pnpm_missing: "pnpm_missing";
+        runtime_missing: "runtime_missing";
         build_blocked: "build_blocked";
+        build_failed: "build_failed";
+        git_failed: "git_failed";
+        tls_error: "tls_error";
+        auth_failed: "auth_failed";
+        rate_limited: "rate_limited";
+        fs_locked: "fs_locked";
         permission: "permission";
         disk_full: "disk_full";
         integrity: "integrity";
@@ -983,6 +995,7 @@ export declare const telemetryClientEventSchema: z.ZodDiscriminatedUnion<[z.ZodR
         operation_error: "operation_error";
         unknown: "unknown";
     }>>;
+    errorDetail: z.ZodOptional<z.ZodString>;
 }, z.core.$strip>>, z.ZodReadonly<z.ZodObject<{
     kind: z.ZodLiteral<"mcp_install">;
     target: z.ZodString;
@@ -1002,7 +1015,14 @@ export declare const telemetryClientEventSchema: z.ZodDiscriminatedUnion<[z.ZodR
         already_installed: "already_installed";
         not_found: "not_found";
         pnpm_missing: "pnpm_missing";
+        runtime_missing: "runtime_missing";
         build_blocked: "build_blocked";
+        build_failed: "build_failed";
+        git_failed: "git_failed";
+        tls_error: "tls_error";
+        auth_failed: "auth_failed";
+        rate_limited: "rate_limited";
+        fs_locked: "fs_locked";
         permission: "permission";
         disk_full: "disk_full";
         integrity: "integrity";
@@ -1014,6 +1034,7 @@ export declare const telemetryClientEventSchema: z.ZodDiscriminatedUnion<[z.ZodR
         operation_error: "operation_error";
         unknown: "unknown";
     }>>;
+    errorDetail: z.ZodOptional<z.ZodString>;
 }, z.core.$strip>>, z.ZodReadonly<z.ZodObject<{
     kind: z.ZodLiteral<"skill_install">;
     target: z.ZodString;
@@ -1033,7 +1054,14 @@ export declare const telemetryClientEventSchema: z.ZodDiscriminatedUnion<[z.ZodR
         already_installed: "already_installed";
         not_found: "not_found";
         pnpm_missing: "pnpm_missing";
+        runtime_missing: "runtime_missing";
         build_blocked: "build_blocked";
+        build_failed: "build_failed";
+        git_failed: "git_failed";
+        tls_error: "tls_error";
+        auth_failed: "auth_failed";
+        rate_limited: "rate_limited";
+        fs_locked: "fs_locked";
         permission: "permission";
         disk_full: "disk_full";
         integrity: "integrity";
@@ -1045,6 +1073,7 @@ export declare const telemetryClientEventSchema: z.ZodDiscriminatedUnion<[z.ZodR
         operation_error: "operation_error";
         unknown: "unknown";
     }>>;
+    errorDetail: z.ZodOptional<z.ZodString>;
 }, z.core.$strip>>], "kind">;
 /** Strict wire codec for an npm package name. */
 export declare const packageNameSchema: z.ZodString;
