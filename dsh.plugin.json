@@ -1,7 +1,7 @@
 {
   "name": "dsh-market-pro",
   "description": "面向 Agent 的 AI 原生插件市场，一站式管理 30,000+ 插件、100 个精选技能与 200 个精选 MCP 服务器，内置 /market-pro AI 选型助手、一键批量更新与安全审查。",
-  "version": "1.20.0",
+  "version": "1.21.0",
   "entry": {
     "name": "dsh-market-pro",
     "inject": [

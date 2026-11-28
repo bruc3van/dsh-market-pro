@@ -1,7 +1,7 @@
 {
   "name": "dsh-market-pro",
   "description": "DSH 插件市场Pro — AI-native plugin, Agent skills & MCP marketplace for DeepSeek Harness (DSH) with 30,000+ plugins, 100 curated skills & 200 curated MCPs, and /market-pro AI discovery.",
-  "version": "1.20.0",
+  "version": "1.21.0",
   "author": {
     "name": "bruc3van",
     "url": "https://dsh-market-pro.com"
