@@ -1,5 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis';
 import type { McpAdoptBlocker, McpAdoptResult, McpHostContext, McpProbeResult, McpToolGroup, McpUnmanagedServer, TelemetryErrorCode } from './contract.ts';
+import { type McpCommandRisk } from './mcpShapes.ts';
 /** The Loader entry fields this scan reads, structurally. */
 export interface McpLoaderEntry {
     readonly id: string;
@@ -136,7 +137,7 @@ export interface ManagedMcpInstallPlan {
     readonly preview: string;
     readonly enabled: boolean;
     readonly credentialRefs: readonly string[];
-    readonly risks: readonly ('fetch' | 'shell')[];
+    readonly risks: readonly McpCommandRisk[];
 }
 /** Outcome of writing a managed MCP server to Settings. */
 export interface ManagedMcpInstallResult {

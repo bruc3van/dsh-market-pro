@@ -163,9 +163,9 @@ export declare const zh: {
     readonly 'ai.pick': "AI 帮我选插件";
     readonly 'ai.pickSkills': "AI 帮我选技能";
     readonly 'ai.pickMcp': "AI 帮我选 MCP";
-    readonly 'ai.pickPrompt': "/market-pro 请先了解我当前已安装的插件、技能和 MCP，然后根据我的需求从插件市场Pro里筛选并推荐最合适的插件与安装方案。我想解决的问题是：";
-    readonly 'ai.pickSkillsPrompt': "/market-pro 请先盘点我当前可用的技能，然后根据我的需求从精选技能中筛选、对比并在我确认后安全安装最合适的技能。我想解决的问题是：";
-    readonly 'ai.pickMcpPrompt': "/market-pro 请先盘点我当前已配置的 MCP 服务器，然后根据我的需求从精选 MCP 中筛选、对比并在我确认后安全安装最合适的 MCP 服务器。我想解决的问题是：";
+    readonly 'ai.pickPrompt': "/market-pro 请根据我的需求，从插件市场Pro里筛选并推荐最合适的插件与安装方案；先看一眼我已安装的相关能力，避免重复推荐，安装前等我确认。我想解决的问题是：";
+    readonly 'ai.pickSkillsPrompt': "/market-pro 请根据我的需求，从精选技能中筛选并对比最合适的技能；先看一眼我当前可用的技能，避免重复推荐，安装前等我确认。我想解决的问题是：";
+    readonly 'ai.pickMcpPrompt': "/market-pro 请根据我的需求，从精选 MCP 中筛选并对比最合适的 MCP 服务器；先看一眼我已配置的 MCP，避免重复推荐，安装前等我确认。我想解决的问题是：";
     readonly 'settings.unavailable': "当前环境不支持在此修改，请在配置文件中调整。";
     readonly 'settings.saveFailed': "保存失败：{reason}";
     readonly 'settings.ai.title': "AI 选型助手（插件 · 技能 · MCP）";
@@ -677,6 +677,7 @@ export declare const zh: {
     readonly "mcp.risk.title": "保存后，宿主将在本机执行：";
     readonly "mcp.risk.fetch": "该命令启动时会从网络下载并运行软件包，请确认包名与来源可信。";
     readonly "mcp.risk.shell": "该命令经由 shell 执行，参数中的任何内容都会被当作命令运行。";
+    readonly "mcp.risk.inline": "该命令会直接运行命令行中的内联代码，请逐字核对这段代码。";
     readonly "mcp.risk.confirm": "我已确认此命令可信";
     readonly "mcp.rebuild": "修改已启用的服务器会重建连接，期间它的工具会暂时不可用。";
     readonly "mcp.save": "保存";

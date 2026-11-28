@@ -129,3 +129,36 @@ export function maskUrl(url: string): string {
 export function isMcpStarting(state: string | undefined): boolean {
   return state === 'connecting' || state === 'reconnecting'
 }
+
+/** Risk notes a stdio launch earns: package download, shell wrapper, or inline code on the command line. */
+export type McpCommandRisk = 'fetch' | 'shell' | 'inline'
+
+/** Per-interpreter flags that take code on the command line (`node -c` and `ruby -c` only check syntax). */
+const INLINE_CODE_FLAGS: readonly (readonly [RegExp, RegExp])[] = [
+  [/^(?:node|nodejs|bun|tsx)$/, /^(?:-e|-p|-pe|--eval|--print)$/],
+  [/^deno$/, /^eval$/],
+  [/^(?:python[\d.]*|py)$/, /^-[A-Za-z]*c$/],
+  [/^(?:perl|ruby)$/, /^-[A-Za-z0-9]*[eE]$/],
+  [/^php$/, /^-r$/],
+  [/^osascript$/, /^-e$/],
+]
+
+/**
+ * Which risk notes a command earns. One definition for the Host approval copy
+ * and the browser's add-server form, so the two never disagree.
+ */
+export function commandRisks(command: string, args: readonly string[]): McpCommandRisk[] {
+  const all = [command, ...args]
+  const words = all.map(word => word.replace(/^.*[\\/]/, '').replace(/\.(?:exe|cmd|bat)$/i, '').toLowerCase())
+  const risks: McpCommandRisk[] = []
+  /** `tool` followed by `sub` as its subcommand: the first word after it that is not a flag. */
+  const subcommand = (tool: string, ...subs: string[]): boolean => words.some((word, index) =>
+    word === tool && subs.includes(words.slice(index + 1).find(next => !next.startsWith('-')) ?? ''))
+  if (words.some(word => ['npx', 'pnpx', 'bunx', 'uvx', 'pipx'].includes(word))
+    || subcommand('pnpm', 'dlx') || subcommand('yarn', 'dlx') || subcommand('npm', 'exec', 'x') || subcommand('bun', 'x')) risks.push('fetch')
+  const shell = words.findIndex(word => ['cmd', 'sh', 'bash', 'zsh', 'powershell', 'pwsh'].includes(word))
+  if (shell >= 0 && all.slice(shell + 1).some(arg => /^(?:\/c|\/k|-[a-z]*c|-command|-encodedcommand)$/i.test(arg))) risks.push('shell')
+  if (INLINE_CODE_FLAGS.some(([interpreter, flag]) => words.some((word, index) =>
+    interpreter.test(word) && all.slice(index + 1).some(arg => flag.test(arg))))) risks.push('inline')
+  return risks
+}

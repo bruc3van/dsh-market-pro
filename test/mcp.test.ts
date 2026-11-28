@@ -235,6 +235,8 @@ test('pasted command lines split on quotes, and fetch/shell launchers earn a ris
   assert.deepEqual(commandRisks('cmd', ['/c', 'npx', '-y', 'pkg']), ['fetch', 'shell'])
   assert.deepEqual(commandRisks('C:\\tools\\server.exe', ['--port', '1']), [])
   assert.deepEqual(commandRisks('uvx', ['mcp-server-fetch']), ['fetch'])
+  assert.deepEqual(commandRisks('node', ['-e', 'process.exit()']), ['inline'])
+  assert.deepEqual(commandRisks('bash', ['-lc', 'id']), ['shell'])
 })
 
 // ——— controller ———

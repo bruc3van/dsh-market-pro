@@ -29,7 +29,7 @@ import { findFeaturedMcpById, mcpIdentityKey, pickAvailableServerName } from './
 import {
   CREDENTIAL_REF_PATTERN, MCP_CLIENT_PACKAGE, MCP_MANAGER_PACKAGE, SERVER_NAME_PATTERN, credentialRefsIn,
   credentialTemplate, isExactCredentialTemplate, isMcpStarting, isSecretField, isSecretUrl, looksSecretValue, malformedTemplate,
-  maskArg, maskUrl, secretArgIndexes, suggestRef,
+  commandRisks, maskArg, maskUrl, secretArgIndexes, suggestRef, type McpCommandRisk,
 } from './mcpShapes.ts'
 import { classifyInstallError, extractInstallErrorDetail, type InstallErrorHints } from './telemetryError.ts'
 import { hasUnsafeTextChars } from './aiSanitize.ts'
@@ -527,7 +527,7 @@ export interface ManagedMcpInstallPlan {
   readonly preview: string
   readonly enabled: boolean
   readonly credentialRefs: readonly string[]
-  readonly risks: readonly ('fetch' | 'shell')[]
+  readonly risks: readonly McpCommandRisk[]
 }
 
 /** Outcome of writing a managed MCP server to Settings. */
@@ -555,17 +555,6 @@ function formatMaskedCommand(command: string, args: readonly string[]): string {
     .filter(part => part !== '')
     .map(part => NEEDS_SHELL_QUOTES.test(part) ? JSON.stringify(part) : part)
     .join(' ')
-}
-
-function detectCommandRisks(command: string, args: readonly string[]): ('fetch' | 'shell')[] {
-  const all = [command, ...args]
-  const words = all.map(word => word.replace(/^.*[\\/]/, '').replace(/\.(?:exe|cmd|bat)$/i, '').toLowerCase())
-  const risks: ('fetch' | 'shell')[] = []
-  if (words.some(word => ['npx', 'bunx', 'uvx', 'pipx'].includes(word))
-    || (words.includes('pnpm') && words.includes('dlx'))) risks.push('fetch')
-  const shell = words.findIndex(word => ['cmd', 'sh', 'bash', 'zsh', 'powershell', 'pwsh'].includes(word))
-  if (shell >= 0 && all.slice(shell + 1).some(arg => /^(?:\/c|\/k|-c|-command|-encodedcommand)$/i.test(arg))) risks.push('shell')
-  return risks
 }
 
 function readManagerSettings(ctx: Context, managerEntry: string | null): {
@@ -872,7 +861,7 @@ export function buildManagedMcpInstallPlan(
         : maskUrl(featured.url ?? ''),
       enabled,
       credentialRefs,
-      risks: featured.transport === 'stdio' ? detectCommandRisks(featured.command ?? '', args) : [],
+      risks: featured.transport === 'stdio' ? commandRisks(featured.command ?? '', args) : [],
     }
   }
 
@@ -930,7 +919,7 @@ export function buildManagedMcpInstallPlan(
       preview: formatMaskedCommand(command, args),
       enabled,
       credentialRefs: refsOfServerEntry(entry),
-      risks: detectCommandRisks(command, args),
+      risks: commandRisks(command, args),
     }
   }
 

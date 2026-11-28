@@ -23,7 +23,7 @@ DeepSeek Harness（DSH）的 AI 原生第三方插件市场（官网与在线目
   - 安装并启用 `dsh-market-pro` 后，默认自动向当前 DSH 会话注册统一内置技能 **`market-pro`** 以及三大底层工具 **`dsh_market_pro`**（插件选型、兼容性检查、`install_plugin` 安全直装与批量更新）、**`dsh_skills_pro`**（100 精选技能检索、盘点与原生审批直装）、**`dsh_mcp_pro`**（精选与自定义 MCP 托管安装），无需手工配置，卸载或停用插件时自动清理。
   - **直接对话即可挑插件、装插件、选技能、配 MCP、一键更插件**：在任意会话中自然语言描述需求，或输入 **`/market-pro`** 显式唤起（支持跨插件/技能/MCP 联合选型与去重）；也可以在市场顶部点击 **「AI 帮我选插件」**、**「AI 帮我选技能」** 或 **「AI 帮我选 MCP」** 一键发起对话。
   - **精准检索、环境盘点与兼容性诊断**：支持中文分词回退、中英多同义词并查、已装/已配项过滤与批量详情核对，直接读取本地缓存的编辑精选、30,000+ 全量插件目录、100 个精选技能与内置 200 个精选 MCP 目录；联合盘点当前环境已安装的插件、技能与 MCP 避免重复推荐，并在检索、详情与更新前自动识别插件与当前 DSH 版本的双向兼容性及多版本自动回退版本。
-  - **纵深防注入、原生审批与零明文密钥**：所有检索与更新探测严格只读，对第三方元数据执行隐形 Unicode 剥离、尖括号中和与 `<untrusted_market_data>` / `<untrusted_mcp_data>` / `<untrusted_skill_data>` 协议边界隔离；插件安装经你确认后直接通过 `dsh_market_pro` 的 `install_plugin` 发起 DSH 原生审批与构建脚本（`pendingBuilds`）显式授权（标准模式即可直接使用；仅在 API 不可用或安装本地/非 GitHub·Gitee 来源时回退至 `plugin_manager`），插件批量更新（`update_plugins`）严格绑定你确认过的精确包名与版本、强制走 DSH 原生审批（fail-closed）并完整列出每一项，技能直装（`install_featured`）与 MCP 安装/启停（`install_featured` / `install_custom` / `set_enabled`）同样强制走原生审批，拒绝一切明文密钥并自动绑定 `${credential:REF}` 凭据模板。
+  - **纵深防注入、原生审批与零明文密钥**：所有检索与更新探测严格只读，对第三方元数据执行隐形 Unicode 剥离、尖括号中和与 `<untrusted_market_data>` / `<untrusted_mcp_data>` / `<untrusted_skill_data>` 协议边界隔离，工具自身给出的下一步指引单独放在信封外的 `<tool_guidance>` 块中，第三方文本无法伪造；插件安装经你确认后直接通过 `dsh_market_pro` 的 `install_plugin` 发起 DSH 原生审批（审批框标明目标是精选/已验证收录、社区收录还是不在目录中，目录不可用时标为未知）与构建脚本（`pendingBuilds`）显式授权（`approvedBuilds` 只接受宿主报告过的包名；标准模式即可直接使用；仅在 API 不可用或安装本地/非 GitHub·Gitee 来源时回退至 `plugin_manager`），插件批量更新（`update_plugins`）严格绑定你确认过的精确包名与版本、强制走 DSH 原生审批（fail-closed）并完整列出每一项，技能直装（`install_featured`）与 MCP 安装/启停（`install_featured` / `install_custom` / `set_enabled`）同样强制走原生审批，拒绝一切明文密钥并自动绑定 `${credential:REF}` 凭据模板；自定义 MCP 的审批框会额外标出内联代码或 shell 执行、凭据将发往的主机以及未加密的 http 端点。
   - **随时可控，兼顾零 Token 偏好**：在市场顶部的 **设置** 页签中可随时一键关闭或开启 **AI 选型助手（插件 · 技能 · MCP）**，关闭后立即撤回内置技能与全部工具、回归零常驻 Token；同时也支持一键开关社区目录联网加载、查看/关闭匿名统计，并在设置页内置永久 GitHub Star 支持入口，修改即时生效并随当前 profile 持久化。顶部操作栏直接展示 **刷新** 与 **仓库**，并在检测到任意已安装插件有新版时展示 **一键更新 (N)**。
 - **精选、官方实验性与全量目录**：剔除蹭标签与非插件项目。打开即展示编辑精选，提供 **官方实验性** 子页签与宿主实时同步管理 DSH 内置可选/实验性插件（支持按启用状态筛选、按需安装并启用、版本更新与卸载进度反馈），同时提供完整社区目录，支持按分类筛选、关键词与包名搜索、「全部」目录按**活跃热门 / Star 最多 / 最近更新**排序，以及在局部视图搜不到时的**跨范围一键引导**。
 - **一键安装与手动添加插件**：已收录安装信息的插件可直接点击安装并启用；未提供直接安装信息的仓库，可一键生成提示词交由 AI 核实后完成安装。右上角提供 **添加插件** 弹窗，支持输入 npm 包名（可指定版本）、GitHub / Git 仓库地址（支持 `#分支` 与 `#path:子目录`）或本地目录路径，内置可折叠安装引导示例、多安装源切换（默认源 / npm 官方源 / 中国大陆镜像 / 自定义私服）与检查/未知状态恢复机制。
@@ -86,7 +86,7 @@ Agent 会通过 `dsh_market_pro` 自动完成以下流程：
 
 1. **环境盘点**（`environment`）：了解当前 profile 已安装的插件和 MCP，避免重复推荐。
 2. **精选与全量检索**（`featured` / `search` / `detail`）：优先检索编辑精选与可直装插件，按需扩展至数万社区仓库并核对安装目标、前置依赖及与当前 DSH 版本的双向兼容性（存在多版本索引时自动选择最新兼容版本）。
-3. **对比建议与安全安装**：给出 2–4 个候选对比；在你确认后，直接调用 `dsh_market_pro` 的 `install_plugin` 发起 DSH 原生审批（标准模式可用，若触发 `pendingBuilds` 需你显式授权构建脚本；本地路径或 API 不可用时回退至 `plugin_manager`），并可继续执行只读安全审查。
+3. **对比建议与安全安装**：给出 2–4 个候选对比；在你确认后，直接调用 `dsh_market_pro` 的 `install_plugin` 发起 DSH 原生审批（标准模式可用，审批框会标明该目标在目录中的收录状态；若触发 `pendingBuilds` 需你显式授权构建脚本，且只能授权宿主报告过的包名；本地路径或 API 不可用时回退至 `plugin_manager`），并可继续执行只读安全审查。
 
 ![对话内 AI 原生选插件](https://raw.githubusercontent.com/bruc3van/dsh-market-pro/master/assets/screenshots/marketplace-ai-chat.png)
 
@@ -114,7 +114,7 @@ Agent 会通过 `dsh_market_pro` 执行安全更新闭环：
 Agent 会通过 `dsh_mcp_pro` 完成端到端安全闭环：
 
 1. **只读盘点与筛选**（`list_configured` / `search_featured` / `detail`）：自动跳过已配置的同类 MCP，对比连接方式（`HTTP` / `npx` / `uvx`）与凭据需求。
-2. **宿主原生审批写入**（`install_featured` / `install_custom` / `set_enabled`）：经你在对话确认后发起 DSH 原生审批，完整展示实际命令、端点、工作目录、环境变量与请求头，拒绝即止。
+2. **宿主原生审批写入**（`install_featured` / `install_custom` / `set_enabled`）：经你在对话确认后发起 DSH 原生审批，完整展示实际命令、端点、工作目录、环境变量与请求头；自定义 MCP 还会标出风险提示（以你的用户权限运行本地命令、内联代码或 shell 执行、凭据将发往的主机、未加密的 http 端点），拒绝即止。
 3. **全程零明文密钥**：需要 API Key 的服务器自动绑定 `${credential:REF}` 凭据模板，不要求在对话中粘贴密钥；保存后直接引导你前往 **插件市场Pro → MCP → 已配置** 点击 **填写** 安全存入凭据库。
 
 ![对话内 AI 原生选配与安全安装 MCP](https://raw.githubusercontent.com/bruc3van/dsh-market-pro/master/assets/screenshots/marketplace-ai-mcp-chat.png)

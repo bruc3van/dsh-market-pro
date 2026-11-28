@@ -351,14 +351,15 @@ test('dsh_mcp_pro emits explicit outcome and nextStep across install and toggle 
   assert.match(enabled.nextStep, /list_configured/)
 })
 
-test('built-in unified market-pro skill contains no stray blank-line runs and documents explicit state branching', () => {
+test('built-in unified market-pro skill contains no stray blank-line runs and defers state branching to tool guidance', () => {
   const marketSkill = buildMarketSkillContent('web')
   assert.equal(marketSkill.includes('\n\n\n'), false)
-  assert.match(marketSkill, /outcome/)
-  assert.match(marketSkill, /updates-available/)
-  assert.match(marketSkill, /already-configured-toggle-needed/)
+  // Per-outcome handling lives in each tool's own `<tool_guidance>`, so the skill
+  // only tells the Agent to branch on it instead of repeating every state.
+  assert.match(marketSkill, /`outcome` \/ `status`/)
+  assert.match(marketSkill, /<tool_guidance>/)
+  assert.doesNotMatch(marketSkill, /updates-available|already-configured-toggle-needed/)
   assert.match(marketSkill, /set_enabled/)
-  assert.match(marketSkill, /`enabled` \/ `disabled`/)
   assert.match(marketSkill, /dsh_skills_pro/)
 })
 

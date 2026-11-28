@@ -50,3 +50,10 @@ export declare function maskArg(arg: string): string;
 export declare function maskUrl(url: string): string;
 /** Whether the managed instance already has a startup or retry in progress. */
 export declare function isMcpStarting(state: string | undefined): boolean;
+/** Risk notes a stdio launch earns: package download, shell wrapper, or inline code on the command line. */
+export type McpCommandRisk = 'fetch' | 'shell' | 'inline';
+/**
+ * Which risk notes a command earns. One definition for the Host approval copy
+ * and the browser's add-server form, so the two never disagree.
+ */
+export declare function commandRisks(command: string, args: readonly string[]): McpCommandRisk[];

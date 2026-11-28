@@ -499,10 +499,12 @@ test('dsh_skills_pro marks installed as unknown (null) and surfaces errors when 
     query: 'ultra-rare-unmatched-topic-xyz',
     lang: 'en',
   })) as {
-    broadenSearch?: { findSkillsInstalled: boolean | null; nextStep: string }
+    broadenSearch?: { findSkillsInstalled: boolean | null }
+    nextStep?: string
   }
   assert.equal(missOut.broadenSearch?.findSkillsInstalled, null)
-  assert.match(missOut.broadenSearch?.nextStep ?? '', /unavailable/i)
+  assert.match(missOut.nextStep ?? '', /unavailable/i)
+  assert.match(missOut.nextStep ?? '', /do not install them yourself/)
 
   const detailOut = JSON.parse(await def.execute({
     action: 'detail',

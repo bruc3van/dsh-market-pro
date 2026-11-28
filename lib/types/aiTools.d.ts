@@ -1,6 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis';
 import { type IncompatibleRequirementItem } from './compatibility.ts';
-import type { MarketCatalogResult, MarketInstalledResult, McpHostContext, SafeMarketSettings } from './contract.ts';
+import type { MarketCatalog, MarketCatalogResult, MarketInstalledResult, McpHostContext, SafeMarketSettings } from './contract.ts';
 export declare const MARKET_TOOL_NAME = "dsh_market_pro";
 /**
  * Wrap model-facing tool output in an explicit untrusted-data envelope.
@@ -198,6 +198,16 @@ export type MarketCheckUpdatesStatus = 'unavailable' | 'updates-available' | 'up
 export type MarketUpdatePluginsOutcome = 'api-unavailable' | 'nothing-to-update' | 'applied' | 'restart-required' | 'partial-failure' | 'failed';
 /** Explicit machine-readable outcome of `install_plugin` for Agent branching. */
 export type MarketInstallPluginOutcome = 'api-unavailable' | 'refused' | 'approval-required' | 'applied' | 'restart-required' | 'overridden' | 'cancelled' | 'failed';
+/** Where an install target stands in the DSH Market Pro catalog; computed locally, never taken from the Agent. */
+export type PluginInstallOrigin = 'curated' | 'community' | 'unlisted' | 'unknown';
+/**
+ * Classify an install spec against the catalog. Full standing needs the exact
+ * listed target or the listed npm package name. A GitHub spec that only shares
+ * the repository (another ref such as `refs/pull/N/head`, or another
+ * subdirectory) can carry code the listing never covered, so it is reported as
+ * an unreviewed community listing at most, whatever the repository's standing.
+ */
+export declare function classifyInstallOrigin(catalog: MarketCatalog, spec: string): Exclude<PluginInstallOrigin, 'unknown'>;
 /** Build the registry-ready `dsh_market_pro` tool definition with a compact schema. */
 export declare function createMarketAiToolDefinition(deps: MarketAiToolDeps): Record<string, unknown>;
 /**

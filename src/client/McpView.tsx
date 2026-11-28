@@ -2418,6 +2418,7 @@ function McpEditor({ t, row, revision, initialDraft, snapshot, controller, onClo
             <pre className="dsh_market_directMessage">{line}</pre>
             {risks.includes('fetch') && <p className="dsh_market_cardNotice" data-warning="true">{t('mcp.risk.fetch')}</p>}
             {risks.includes('shell') && <p className="dsh_market_cardNotice" data-warning="true">{t('mcp.risk.shell')}</p>}
+            {risks.includes('inline') && <p className="dsh_market_cardNotice" data-warning="true">{t('mcp.risk.inline')}</p>}
             <label className="dsh_market_mcpCheck">
               <input type="checkbox" checked={trusted} onChange={event => { resetTransientStatus(); setTrustedLine(event.target.checked ? line : null) }} />
               <span>{t('mcp.risk.confirm')}</span>

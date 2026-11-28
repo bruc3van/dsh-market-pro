@@ -157,10 +157,7 @@ export declare function commandLine(command: string, args: readonly string[]): s
 export declare function targetOf(entry: McpEntry | undefined): string;
 /** Split a pasted command line into words, honouring single and double quotes. */
 export declare function splitCommandLine(line: string): string[];
-/** Risk notes for a stdio command: dynamic package fetches and shell wrappers. */
-export type McpCommandRisk = 'fetch' | 'shell';
-/** Which risk notes a command earns. */
-export declare function commandRisks(command: string, args: readonly string[]): McpCommandRisk[];
+export { commandRisks, type McpCommandRisk } from '../mcpShapes.ts';
 /** One key/value row of the editor (env or headers). */
 export interface McpPair {
     readonly key: string;

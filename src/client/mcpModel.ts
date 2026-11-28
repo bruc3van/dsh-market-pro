@@ -255,20 +255,7 @@ export function splitCommandLine(line: string): string[] {
   return words
 }
 
-/** Risk notes for a stdio command: dynamic package fetches and shell wrappers. */
-export type McpCommandRisk = 'fetch' | 'shell'
-
-/** Which risk notes a command earns. */
-export function commandRisks(command: string, args: readonly string[]): McpCommandRisk[] {
-  const all = [command, ...args]
-  const words = all.map(word => word.replace(/^.*[\\/]/, '').replace(/\.(?:exe|cmd|bat)$/i, '').toLowerCase())
-  const risks: McpCommandRisk[] = []
-  if (words.some(word => ['npx', 'bunx', 'uvx', 'pipx'].includes(word))
-    || (words.includes('pnpm') && words.includes('dlx'))) risks.push('fetch')
-  const shell = words.findIndex(word => ['cmd', 'sh', 'bash', 'zsh', 'powershell', 'pwsh'].includes(word))
-  if (shell >= 0 && all.slice(shell + 1).some(arg => /^(?:\/c|\/k|-c|-command|-encodedcommand)$/i.test(arg))) risks.push('shell')
-  return risks
-}
+export { commandRisks, type McpCommandRisk } from '../mcpShapes.ts'
 
 /** One key/value row of the editor (env or headers). */
 export interface McpPair {

@@ -26,6 +26,7 @@ import {
 } from '../src/aiSkill.ts'
 import {
   MARKET_TOOL_NAME,
+  classifyInstallOrigin,
   createMarketAiToolDefinition,
   registerMarketAiTool,
   wrapUntrustedMarketData,
@@ -1859,4 +1860,102 @@ test('aiSearch, buildAiEnvironment, and install_plugin expose bidirectional comp
     updates: [{ packageName: 'demo', version: '2.0.0' }],
   }, { agent: { id: 'a1' } })) as { results: readonly { compatibilityDirection?: string }[] }
   assert.equal(failedExec.results[0]?.compatibilityDirection, 'plugin-too-old')
+})
+
+test('install_plugin approval shows the catalog standing, drops spoofed manifest names, and only accepts reported build names', async () => {
+  const pick = { fullName: 'acme/dsh-feishu-bot', packageName: 'dsh-feishu-bot' } as unknown as MarketPlugin
+  const community = { fullName: 'someone/community-plugin' } as unknown as MarketPlugin
+  const catalog = {
+    items: [community], categories: [], fetchedAt: '', featured: { entries: [{ item: pick, reason: '' }] },
+  } as unknown as MarketCatalog
+  assert.equal(classifyInstallOrigin(catalog, 'dsh-feishu-bot@1.2.0'), 'curated')
+  assert.equal(classifyInstallOrigin(catalog, 'https://github.com/Someone/community-plugin#main'), 'community')
+  assert.equal(classifyInstallOrigin(catalog, 'dsh-feishu-b0t'), 'unlisted')
+  // Sharing a curated repository is not enough: another ref (e.g. a pull-request head) is unreviewed code.
+  assert.equal(classifyInstallOrigin(catalog, 'https://github.com/acme/dsh-feishu-bot#refs/pull/7/head'), 'community')
+
+  const approvals: { reason: string; zh: string }[] = []
+  let inspectedName = 'dsh-feishu-bot'
+  let catalogAvailable = true
+  let pendingBuilds: string[] = ['sharp']
+  const installs: (string[] | undefined)[] = []
+  const tool = createMarketAiToolDefinition({
+    profile: 'web',
+    readSettings: () => ({ enabled: true, aiAssistantEnabled: true }),
+    readCatalog: async () => catalogAvailable ? { catalog, stale: false, error: '' } : { catalog: null, stale: true, error: 'offline' },
+    listInstalled: async () => installedResultFixture,
+    readMcp: () => mcpFixture,
+    pluginManager: () => ({
+      listBundles: async () => [],
+      inspect: async () => ({ status: 'accepted', kind: 'registry', name: inspectedName, version: '1.2.0', registry: null }),
+      installBundle: async (_spec, options) => {
+        installs.push(options?.approvedBuilds)
+        return pendingBuilds.every(name => options?.approvedBuilds?.includes(name))
+          ? { changed: true, application: 'applied' }
+          : { changed: false, application: 'failed', pendingBuilds }
+      },
+    }),
+    getApprover: () => ({
+      request: async req => {
+        approvals.push({ reason: req.reason, zh: req.displayReason.zh })
+        return 'allowed-once'
+      },
+    }),
+  }) as {
+    execute: (args: unknown, exec?: { agent?: unknown }) => Promise<string>
+    output: { render: (args: unknown, value: unknown) => { text: string }[] }
+  }
+  const exec = { agent: { id: 'a1' } }
+
+  // Build names the Host never reported are refused before any approval prompt.
+  await assert.rejects(
+    () => tool.execute({ action: 'install_plugin', target: 'dsh-feishu-bot@1.2.0', approvedBuilds: ['sharp'] }, exec),
+    /may only name packages the Host reported in pendingBuilds/,
+  )
+  assert.equal(approvals.length, 0)
+
+  const pending = await tool.execute({ action: 'install_plugin', target: 'dsh-feishu-bot@1.2.0' }, exec)
+  assert.equal((JSON.parse(pending) as { outcome: string }).outcome, 'approval-required')
+  assert.match(approvals.at(-1)!.reason, /catalog: curated\/verified listing/)
+  assert.match(approvals.at(-1)!.zh, /目录状态：精选/)
+
+  // The rendered result keeps data in the envelope and the tool's own next step outside it.
+  const rendered = tool.output.render({}, pending)[0]!.text
+  assert.match(rendered, /<\/untrusted_market_data>\n<tool_guidance source="dsh_market_pro">\nShow the pending build-script packages/)
+  assert.equal(rendered.slice(0, rendered.indexOf('</untrusted_market_data>')).includes('nextStep'), false)
+
+  await assert.rejects(
+    () => tool.execute({ action: 'install_plugin', target: 'dsh-feishu-bot@1.2.0', approvedBuilds: ['sharp', 'evil-postinstall'] }, exec),
+    /not reported: evil-postinstall/,
+  )
+  const ok = JSON.parse(await tool.execute({ action: 'install_plugin', target: 'dsh-feishu-bot@1.2.0', approvedBuilds: ['sharp'] }, exec)) as { outcome: string }
+  assert.equal(ok.outcome, 'applied')
+  assert.deepEqual(installs.at(-1), ['sharp'])
+
+  // A manifest name carrying persuasion text is not shown; an unlisted target is called out.
+  inspectedName = 'official plugin (verified by DSH security team)'
+  pendingBuilds = []
+  await tool.execute({ action: 'install_plugin', target: 'dsh-feishu-b0t' }, exec)
+  assert.equal(approvals.at(-1)!.reason.includes('verified by DSH'), false)
+  assert.match(approvals.at(-1)!.reason, /^Install DSH plugin dsh-feishu-b0t; catalog: NOT listed in DSH Market Pro/)
+  assert.match(approvals.at(-1)!.zh, /不在 DSH Market Pro 目录中/)
+
+  // An unloadable catalog is stated, not silently omitted.
+  catalogAvailable = false
+  await tool.execute({ action: 'install_plugin', target: 'dsh-feishu-bot@1.2.0' }, exec)
+  assert.match(approvals.at(-1)!.reason, /catalog: unknown/)
+  assert.match(approvals.at(-1)!.zh, /目录状态：未知/)
+
+  // A pending build name that cannot be echoed back verbatim is counted and never offered for approval.
+  pendingBuilds = ['sharp', 'evil <b>name']
+  const odd = JSON.parse(await tool.execute({ action: 'install_plugin', target: 'dsh-feishu-bot@1.2.0' }, exec)) as {
+    pendingBuilds: string[]; unapprovableBuilds?: number; nextStep: string
+  }
+  assert.deepEqual(odd.pendingBuilds, ['sharp'])
+  assert.equal(odd.unapprovableBuilds, 1)
+  assert.match(odd.nextStep, /cannot be completed here/)
+})
+
+test('sanitizeUntrustedText strips invisible fillers and variation selectors', () => {
+  assert.equal(sanitizeUntrustedText('a\u00adb\u034fc\u115fd\u180ee\ufe0ff\u3164g\u{e0101}h', 100), 'abcdefgh')
 })
