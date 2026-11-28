@@ -1,4 +1,4 @@
-/** Exercise the built plugin against the published 0.2.2-rc.5 Loader and Settings. */
+/** Exercise the built plugin against the host version pinned in devDependencies (the active verification lane). */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, realpath, writeFile, readFile, rm } from 'node:fs/promises'
@@ -14,7 +14,9 @@ import { initialDomainState } from '../src/store.ts'
 import { SAFE_MARKET_INVOCATIONS } from '../src/contract.ts'
 
 test('built market boots, registers RPCs, and persists settings and plugin toggles across restarts', async () => {
-  assert.equal(getDshRuntimeVersion(), '0.2.2-rc.5')
+  // The lane under test is whichever host version the manifest pins in devDependencies.
+  const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as { devDependencies: Record<string, string> }
+  assert.equal(getDshRuntimeVersion(), manifest.devDependencies['@deepseek-ai/dsh-app-boot'])
   const home = await realpath(await mkdtemp(join(tmpdir(), 'safe-market-host-')))
   const previousHome = process.env.DSH_HOME
   const previousTelemetry = process.env.DSH_MARKET_TELEMETRY
@@ -53,7 +55,8 @@ test('built market boots, registers RPCs, and persists settings and plugin toggl
     await writeFile(join(dir, 'cordis.yml'), '[]\n')
     const profile = {
       name: 'test', startedBundles: ['test-market-bundle'], dir, patchPath: join(dir, 'cordis.patch.yml'),
-      installAnchor: join(home, 'package.json'), cwd: home, home, overlays: [], telemetryDisabledEnv: undefined,
+      // Keep both `overlays` (0.2.2-rc.5) and `overlayPaths` (0.2.3-alpha.3+) so both host lanes pass.
+      installAnchor: join(home, 'package.json'), cwd: home, home, overlays: [], overlayPaths: [], telemetryDisabledEnv: undefined,
     }
     const start = async () => {
       const mountedTools = new Set<string>()
@@ -192,7 +195,8 @@ test('disabling telemetry clears persisted telemetryId immediately, across the d
     await writeFile(join(dir, 'cordis.yml'), '[]\n')
     const profile = {
       name: 'test', startedBundles: ['test-market-bundle'], dir, patchPath: join(dir, 'cordis.patch.yml'),
-      installAnchor: join(home, 'package.json'), cwd: home, home, overlays: [], telemetryDisabledEnv: undefined,
+      // Keep both `overlays` (0.2.2-rc.5) and `overlayPaths` (0.2.3-alpha.3+) so both host lanes pass.
+      installAnchor: join(home, 'package.json'), cwd: home, home, overlays: [], overlayPaths: [], telemetryDisabledEnv: undefined,
     }
 
     const seededDomain = () => ({

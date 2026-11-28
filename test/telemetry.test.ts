@@ -596,7 +596,8 @@ async function createTempHostContext() {
     home,
     cwd: home,
     startedBundles: [],
-    overlays: [],
+    // Keep both `overlays` (0.2.2-rc.5) and `overlayPaths` (0.2.3-alpha.3+) so both host lanes pass.
+    overlays: [], overlayPaths: [],
     telemetryDisabledEnv: undefined,
   })
   ctx.provide('settings', {

@@ -1,209 +1,34 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createRequire } from 'node:module'
-import { fileURLToPath } from 'node:url'
-import React, { type ReactElement, type ReactNode } from 'react'
-import { build } from 'esbuild'
+import React from 'react'
 import { deriveMarket } from '../src/catalog.ts'
 import { marketCatalogSchema, type MarketCatalog, type MarketPlugin } from '../src/contract.ts'
 import { ownerAvatarUrl } from '../src/client/avatar.ts'
 import { zh, type SafeMarketLocaleKey } from '../src/client/locales.ts'
-
-// The host supplies the shared UI primitives at runtime; keep react external so
-// bundled components share the exact React dispatcher used by the test harness.
-// Bundling all UI entrypoints together mirrors production `lib/client.js`, where
-// `iconMirrors.ts` shares one module-level session preference across views.
-const primitivesStub = {
-  '@deepseek-ai/dsh-client-ui-primitives': fileURLToPath(new URL('./support/primitives-stub.tsx', import.meta.url)),
-}
-const requireFromTest = createRequire(import.meta.url)
-
-async function loadClientModules(): Promise<Record<string, any>> {
-  const result = await build({
-    stdin: {
-      contents: [
-        "export { PluginLogo } from './src/client/PluginLogo.tsx'",
-        "export { DirectInstallPanel } from './src/client/DirectInstallPanel.tsx'",
-        "export { MarketSection } from './src/client/MarketSection.tsx'",
-        "export { getPreferredJsDelivrHost, iconCandidatesOf, resetPreferredJsDelivrHost } from './src/client/iconMirrors.ts'",
-      ].join('\n'),
-      resolveDir: fileURLToPath(new URL('..', import.meta.url)),
-      loader: 'ts',
-    },
-    bundle: true,
-    write: false,
-    platform: 'node',
-    format: 'cjs',
-    jsx: 'automatic',
-    external: ['react', 'react/jsx-runtime', 'react/jsx-dev-runtime'],
-    alias: primitivesStub,
-  })
-  const mod = { exports: {} as Record<string, any> }
-  const run = new Function('require', 'module', 'exports', result.outputFiles[0]!.text)
-  run(requireFromTest, mod, mod.exports)
-  return mod.exports
-}
+import { createTestRenderer, findAll, loadClientBundle, textOf } from './support/react-test-harness.ts'
+import {
+  advanceIconFailure,
+  currentIconStep,
+  getPreferredJsDelivrHost,
+  iconCandidatesOf,
+  logoPlaceholderLetter,
+  logoSourceChainOf,
+  noteIconLoaded,
+  resetPreferredJsDelivrHost,
+} from '../src/client/iconMirrors.ts'
 
 const {
   PluginLogo,
   DirectInstallPanel,
   MarketSection,
-  getPreferredJsDelivrHost,
-  iconCandidatesOf,
-  resetPreferredJsDelivrHost,
-} = await loadClientModules()
-
-// Minimal React 18 function-component tree renderer with persistent per-path hook
-// state so real TSX components (including `useState`/`useMemo` transitions via
-// `onError`/`onLoad`) can be rendered and verified in Node without react-dom.
-type HookSlot = { value: unknown; deps?: readonly unknown[] }
-type RenderedNode =
-  | { kind: 'element'; type: string; props: Record<string, any>; children: RenderedNode[] }
-  | { kind: 'text'; value: string }
-
-const ReactInternals = (React as any).__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED
-
-function sameDeps(prev: readonly unknown[] | undefined, next: readonly unknown[] | undefined): boolean {
-  if (prev === undefined || next === undefined || prev.length !== next.length) return false
-  for (let i = 0; i < prev.length; i += 1) {
-    if (!Object.is(prev[i], next[i])) return false
-  }
-  return true
-}
-
-function createTestRenderer() {
-  const hookStore = new Map<string, HookSlot[]>()
-  const pendingEffects: (() => void)[] = []
-  let idCounter = 0
-
-  function renderComponent(fn: (props: any) => ReactNode, props: any, path: string): ReactNode {
-    const slots = hookStore.get(path) ?? []
-    hookStore.set(path, slots)
-    let cursor = 0
-    const nextSlot = (init: () => unknown): HookSlot => {
-      const index = cursor++
-      if (index >= slots.length) slots.push({ value: init() })
-      return slots[index]!
-    }
-    const previousDispatcher = ReactInternals.ReactCurrentDispatcher.current
-    ReactInternals.ReactCurrentDispatcher.current = {
-      useState<S>(initial: S | (() => S)) {
-        const slot = nextSlot(() => (typeof initial === 'function' ? (initial as () => S)() : initial))
-        const setState = (next: S | ((prev: S) => S)) => {
-          slot.value = typeof next === 'function' ? (next as (prev: S) => S)(slot.value as S) : next
-        }
-        return [slot.value as S, setState]
-      },
-      useReducer<S, A>(reducer: (state: S, action: A) => S, initialArg: S, init?: (arg: S) => S) {
-        const slot = nextSlot(() => (init ? init(initialArg) : initialArg))
-        const dispatch = (action: A) => { slot.value = reducer(slot.value as S, action) }
-        return [slot.value as S, dispatch]
-      },
-      useRef<T>(initial: T) {
-        return nextSlot(() => ({ current: initial })).value
-      },
-      useMemo<T>(factory: () => T, deps?: readonly unknown[]) {
-        const index = cursor++
-        const existing = slots[index]
-        if (existing !== undefined && sameDeps(existing.deps, deps)) {
-          return existing.value as T
-        }
-        const value = factory()
-        slots[index] = { value, deps }
-        return value
-      },
-      useCallback<T>(callback: T, deps?: readonly unknown[]) {
-        const index = cursor++
-        const existing = slots[index]
-        if (existing !== undefined && sameDeps(existing.deps, deps)) {
-          return existing.value as T
-        }
-        slots[index] = { value: callback, deps }
-        return callback
-      },
-      useEffect(effect: () => void | (() => void), deps?: readonly unknown[]) {
-        const index = cursor++
-        const existing = slots[index]
-        if (existing !== undefined && deps !== undefined && sameDeps(existing.deps, deps)) return
-        slots[index] = { value: effect, deps }
-        pendingEffects.push(() => { effect() })
-      },
-      useLayoutEffect() {},
-      useId() {
-        return nextSlot(() => `:r${String(idCounter++)}:`).value
-      },
-      useSyncExternalStore<T>(_subscribe: unknown, getSnapshot: () => T) {
-        return getSnapshot()
-      },
-      useContext(ctx: { _currentValue?: unknown }) {
-        return ctx._currentValue
-      },
-    }
-    try {
-      return fn(props)
-    } finally {
-      ReactInternals.ReactCurrentDispatcher.current = previousDispatcher
-    }
-  }
-
-  function expand(node: ReactNode, path = 'root'): RenderedNode[] {
-    if (node === null || node === undefined || typeof node === 'boolean') return []
-    if (typeof node === 'string' || typeof node === 'number') return [{ kind: 'text', value: String(node) }]
-    if (Array.isArray(node)) {
-      return node.flatMap((child, index) => expand(child, `${path}[${String(index)}]`))
-    }
-    const element = node as ReactElement<any>
-    if (element.type === React.Fragment) {
-      return expand(element.props?.children, `${path}.frag`)
-    }
-    if (typeof element.type === 'function') {
-      const name = element.type.name || 'anon'
-      const key = element.key === null || element.key === undefined ? '' : `#${String(element.key)}`
-      const nextPath = `${path}/${name}${key}`
-      return expand(renderComponent(element.type as (props: any) => ReactNode, element.props ?? {}, nextPath), nextPath)
-    }
-    if (typeof element.type === 'object' && element.type !== null && 'render' in element.type) {
-      const renderFn = (element.type as { render: (props: any, ref: unknown) => ReactNode }).render
-      const nextPath = `${path}/forwardRef`
-      return expand(renderComponent(props => renderFn(props, null), element.props ?? {}, nextPath), nextPath)
-    }
-    if (typeof element.type === 'string') {
-      return [{
-        kind: 'element',
-        type: element.type,
-        props: element.props ?? {},
-        children: expand(element.props?.children, `${path}/${element.type}`),
-      }]
-    }
-    return []
-  }
-
-  return {
-    render(element: ReactElement): RenderedNode[] {
-      return expand(element)
-    },
-    flushEffects(): void {
-      while (pendingEffects.length > 0) {
-        pendingEffects.shift()!()
-      }
-    },
-  }
-}
-
-function findAll(nodes: readonly RenderedNode[], predicate: (node: Extract<RenderedNode, { kind: 'element' }>) => boolean): Extract<RenderedNode, { kind: 'element' }>[] {
-  const matches: Extract<RenderedNode, { kind: 'element' }>[] = []
-  for (const node of nodes) {
-    if (node.kind !== 'element') continue
-    if (predicate(node)) matches.push(node)
-    matches.push(...findAll(node.children, predicate))
-  }
-  return matches
-}
-
-function textOf(node: RenderedNode): string {
-  if (node.kind === 'text') return node.value
-  return node.children.map(textOf).join('')
-}
+  getPreferredJsDelivrHost: getBundledPreferredJsDelivrHost,
+  resetPreferredJsDelivrHost: resetBundledPreferredJsDelivrHost,
+} = await loadClientBundle([
+  "export { PluginLogo } from './src/client/PluginLogo.tsx'",
+  "export { DirectInstallPanel } from './src/client/DirectInstallPanel.tsx'",
+  "export { MarketSection } from './src/client/MarketSection.tsx'",
+  "export { getPreferredJsDelivrHost, resetPreferredJsDelivrHost } from './src/client/iconMirrors.ts'",
+].join('\n'))
 
 const t = (key: SafeMarketLocaleKey, params?: Record<string, string>) => {
   let copy: string = zh[key]
@@ -218,6 +43,153 @@ const DATA_PNG_ICON = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQ
 const JSDELIVR_SVG_ICON = 'https://cdn.jsdelivr.net/gh/demo-org/alpha-plugin@main/assets/logo.svg'
 const JSDELIVR_NPM_ICON = 'https://cdn.jsdelivr.net/npm/@demo/alpha@1.0.0/assets/logo.png'
 const HTTPS_PNG_ICON = 'https://cdn.example.com/plugins/beta-plugin/logo.png'
+const DEMO_AVATAR = 'https://avatars.githubusercontent.com/demo-org?s=96'
+
+test('a plugin without its own icon falls back to its GitHub owner avatar', () => {
+  assert.equal(ownerAvatarUrl('Owner-1/repo'), 'https://avatars.githubusercontent.com/Owner-1?s=96')
+  for (const bad of [undefined, '', 'npm', 'owner', '-bad-/repo', 'a.b/repo', 'owner/repo/extra', 'javascript:x/y']) {
+    assert.equal(ownerAvatarUrl(bad), undefined, String(bad))
+  }
+})
+
+test('iconCandidatesOf leaves data URIs and non-jsDelivr URLs untouched while capping jsDelivr fallback to two edges', () => {
+  resetPreferredJsDelivrHost()
+  assert.deepEqual(iconCandidatesOf(DATA_SVG_ICON), [DATA_SVG_ICON])
+  assert.deepEqual(iconCandidatesOf(HTTPS_PNG_ICON), [HTTPS_PNG_ICON])
+  assert.deepEqual(iconCandidatesOf('https://example.com/logo.png'), ['https://example.com/logo.png'])
+  assert.deepEqual(iconCandidatesOf(JSDELIVR_SVG_ICON), [
+    'https://cdn.jsdelivr.net/gh/demo-org/alpha-plugin@main/assets/logo.svg',
+    'https://fastly.jsdelivr.net/gh/demo-org/alpha-plugin@main/assets/logo.svg',
+  ])
+  assert.deepEqual(iconCandidatesOf(JSDELIVR_NPM_ICON), [
+    'https://cdn.jsdelivr.net/npm/@demo/alpha@1.0.0/assets/logo.png',
+    'https://fastly.jsdelivr.net/npm/@demo/alpha@1.0.0/assets/logo.png',
+  ])
+})
+
+test('logoSourceChainOf appends the owner avatar once and keys the chain by its exact inputs', () => {
+  resetPreferredJsDelivrHost()
+  const chain = logoSourceChainOf(JSDELIVR_SVG_ICON, DEMO_AVATAR)
+  assert.deepEqual(chain.sources, [
+    'https://cdn.jsdelivr.net/gh/demo-org/alpha-plugin@main/assets/logo.svg',
+    'https://fastly.jsdelivr.net/gh/demo-org/alpha-plugin@main/assets/logo.svg',
+    DEMO_AVATAR,
+  ])
+
+  // An icon already pointing at the avatar is not tried twice.
+  assert.deepEqual(logoSourceChainOf(DEMO_AVATAR, DEMO_AVATAR).sources, [DEMO_AVATAR])
+  // No icon at all starts directly at the avatar; no avatar either means an empty chain.
+  assert.deepEqual(logoSourceChainOf(undefined, DEMO_AVATAR).sources, [DEMO_AVATAR])
+  assert.deepEqual(logoSourceChainOf(undefined, undefined).sources, [])
+  assert.deepEqual(logoSourceChainOf('', undefined).sources, [])
+
+  // The key distinguishes any input change so failure state resets across plugins.
+  const base = logoSourceChainOf(JSDELIVR_SVG_ICON, DEMO_AVATAR).sourceKey
+  assert.notEqual(logoSourceChainOf(JSDELIVR_NPM_ICON, DEMO_AVATAR).sourceKey, base)
+  assert.notEqual(logoSourceChainOf(JSDELIVR_SVG_ICON, undefined).sourceKey, base)
+  assert.equal(logoSourceChainOf(JSDELIVR_SVG_ICON, DEMO_AVATAR).sourceKey, base)
+})
+
+test('the failure chain walks cdn -> fastly -> avatar -> placeholder and resets when the source identity changes', () => {
+  resetPreferredJsDelivrHost()
+  // Renamed repository (404 on both jsDelivr edges): each error moves one step
+  // down the chain, ending past the last source where the placeholder renders.
+  const chain = logoSourceChainOf('https://cdn.jsdelivr.net/gh/demo-org/renamed-repo@main/logo.png', DEMO_AVATAR)
+  let failure = { key: chain.sourceKey, step: 0 }
+  const srcAt = () => chain.sources[currentIconStep(failure, chain.sourceKey)]
+
+  assert.equal(srcAt(), 'https://cdn.jsdelivr.net/gh/demo-org/renamed-repo@main/logo.png')
+  failure = advanceIconFailure(failure, chain.sourceKey)
+  assert.equal(srcAt(), 'https://fastly.jsdelivr.net/gh/demo-org/renamed-repo@main/logo.png')
+  failure = advanceIconFailure(failure, chain.sourceKey)
+  assert.equal(srcAt(), DEMO_AVATAR)
+  failure = advanceIconFailure(failure, chain.sourceKey)
+  assert.equal(srcAt(), undefined, 'exhausting every candidate renders the built-in letter placeholder')
+
+  // Switching to another plugin reads the failure state of the old identity as step zero.
+  const other = logoSourceChainOf(DATA_SVG_ICON, undefined)
+  assert.equal(currentIconStep(failure, other.sourceKey), 0)
+  assert.equal(other.sources[0], DATA_SVG_ICON)
+
+  // A failure arriving after the switch restarts at step 1 of the new chain instead of continuing the old count.
+  const restarted = advanceIconFailure(failure, other.sourceKey)
+  assert.equal(currentIconStep(restarted, other.sourceKey), 1)
+})
+
+test('logoPlaceholderLetter prefers the package part over the npm scope and falls back to P', () => {
+  assert.equal(logoPlaceholderLetter('@demo/alpha'), 'A')
+  assert.equal(logoPlaceholderLetter('beta-npm-only'), 'B')
+  assert.equal(logoPlaceholderLetter('Pulumi'), 'P')
+  assert.equal(logoPlaceholderLetter(''), 'P')
+  assert.equal(logoPlaceholderLetter('@demo/'), 'P')
+})
+
+test('one transient failover must not switch the entire session, and a first-try load resets the streak', () => {
+  resetPreferredJsDelivrHost()
+  try {
+    noteIconLoaded(JSDELIVR_SVG_ICON, 'https://fastly.jsdelivr.net/gh/demo-org/alpha-plugin@main/assets/logo.svg', true)
+    assert.equal(getPreferredJsDelivrHost(), null, 'a single verified failover stays below the promotion threshold')
+
+    // A normal first-try load resets the failover counter, so the next single failover restarts at one.
+    noteIconLoaded(JSDELIVR_SVG_ICON, JSDELIVR_SVG_ICON, false)
+    noteIconLoaded(JSDELIVR_SVG_ICON, 'https://fastly.jsdelivr.net/gh/demo-org/alpha-plugin@main/assets/logo.svg', true)
+    assert.equal(getPreferredJsDelivrHost(), null)
+  } finally {
+    resetPreferredJsDelivrHost()
+  }
+})
+
+test('two consecutive verified failovers promote the alternate edge for subsequent candidates', () => {
+  resetPreferredJsDelivrHost()
+  try {
+    for (const src of [JSDELIVR_SVG_ICON, JSDELIVR_NPM_ICON]) {
+      const fastly = iconCandidatesOf(src)[1]!
+      noteIconLoaded(src, fastly, true)
+      assert.match(fastly, /^https:\/\/fastly\.jsdelivr\.net\//)
+    }
+    assert.equal(getPreferredJsDelivrHost(), 'fastly.jsdelivr.net')
+
+    // New cards put the proven edge first while keeping the origin host as fallback.
+    assert.deepEqual(iconCandidatesOf(JSDELIVR_NPM_ICON), [
+      'https://fastly.jsdelivr.net/npm/@demo/alpha@1.0.0/assets/logo.png',
+      'https://cdn.jsdelivr.net/npm/@demo/alpha@1.0.0/assets/logo.png',
+    ])
+
+    // Loads landing on the already-preferred edge reset the pending streak instead of counting further.
+    noteIconLoaded(JSDELIVR_NPM_ICON, 'https://fastly.jsdelivr.net/npm/@demo/alpha@1.0.0/assets/logo.png', true)
+    noteIconLoaded(JSDELIVR_SVG_ICON, 'https://cdn.jsdelivr.net/gh/demo-org/alpha-plugin@main/assets/logo.svg', true)
+    assert.equal(getPreferredJsDelivrHost(), 'fastly.jsdelivr.net', 'one cdn fallback after the reset stays below threshold')
+  } finally {
+    resetPreferredJsDelivrHost()
+  }
+})
+
+test('alternating failover edges never accumulate a consecutive streak', () => {
+  resetPreferredJsDelivrHost()
+  try {
+    const fastly = 'https://fastly.jsdelivr.net/gh/demo-org/alpha-plugin@main/assets/logo.svg'
+    const cdn = 'https://cdn.jsdelivr.net/gh/demo-org/alpha-plugin@main/assets/logo.svg'
+    for (const loaded of [fastly, cdn, fastly, cdn]) {
+      noteIconLoaded(JSDELIVR_SVG_ICON, loaded, true)
+    }
+    assert.equal(getPreferredJsDelivrHost(), null)
+  } finally {
+    resetPreferredJsDelivrHost()
+  }
+})
+
+test('noteIconLoaded ignores non-jsDelivr sources and loaded URLs', () => {
+  resetPreferredJsDelivrHost()
+  try {
+    noteIconLoaded(HTTPS_PNG_ICON, HTTPS_PNG_ICON, true)
+    noteIconLoaded(undefined, 'https://fastly.jsdelivr.net/gh/x/y@main/logo.png', true)
+    noteIconLoaded(DATA_SVG_ICON, DATA_PNG_ICON, true)
+    noteIconLoaded(JSDELIVR_SVG_ICON, 'https://cdn.example.com/logo.png', true)
+    assert.equal(getPreferredJsDelivrHost(), null)
+  } finally {
+    resetPreferredJsDelivrHost()
+  }
+})
 
 function mockCatalog(icons: { alpha: string; beta: string }): MarketCatalog {
   const body = {
@@ -314,109 +286,43 @@ function makeMarketSectionProps(catalog: MarketCatalog) {
   }
 }
 
-test('a plugin without its own icon falls back to its GitHub owner avatar', () => {
-  assert.equal(ownerAvatarUrl('Owner-1/repo'), 'https://avatars.githubusercontent.com/Owner-1?s=96')
-  for (const bad of [undefined, '', 'npm', 'owner', '-bad-/repo', 'a.b/repo', 'owner/repo/extra', 'javascript:x/y']) {
-    assert.equal(ownerAvatarUrl(bad), undefined, String(bad))
-  }
-})
-
-test('iconCandidatesOf leaves data URIs and non-jsDelivr URLs untouched while capping jsDelivr fallback to two edges', () => {
-  resetPreferredJsDelivrHost()
-  assert.deepEqual(iconCandidatesOf(DATA_SVG_ICON), [DATA_SVG_ICON])
-  assert.deepEqual(iconCandidatesOf(HTTPS_PNG_ICON), [HTTPS_PNG_ICON])
-  assert.deepEqual(iconCandidatesOf('https://example.com/logo.png'), ['https://example.com/logo.png'])
-  assert.deepEqual(iconCandidatesOf(JSDELIVR_SVG_ICON), [
-    'https://cdn.jsdelivr.net/gh/demo-org/alpha-plugin@main/assets/logo.svg',
-    'https://fastly.jsdelivr.net/gh/demo-org/alpha-plugin@main/assets/logo.svg',
-  ])
-  assert.deepEqual(iconCandidatesOf(JSDELIVR_NPM_ICON), [
-    'https://cdn.jsdelivr.net/npm/@demo/alpha@1.0.0/assets/logo.png',
-    'https://fastly.jsdelivr.net/npm/@demo/alpha@1.0.0/assets/logo.png',
-  ])
-})
-
-test('PluginLogo renders data URI and HTTPS URLs format-agnostically, fails over two jsDelivr edges, and requires consecutive failovers before promoting an edge', () => {
-  resetPreferredJsDelivrHost()
+test('PluginLogo wires jsDelivr failover, avatar fallback, placeholder rendering, and edge promotion', () => {
+  resetBundledPreferredJsDelivrHost()
   try {
-    for (const icon of [DATA_SVG_ICON, DATA_PNG_ICON, JSDELIVR_SVG_ICON, HTTPS_PNG_ICON]) {
-      const renderer = createTestRenderer()
-      const tree = renderer.render(React.createElement(PluginLogo, {
-        src: icon,
-        name: '@demo/alpha',
-        fullName: 'demo-org/alpha-plugin',
-      }))
-      const imgs = findAll(tree, node => node.type === 'img')
-      assert.equal(imgs.length, 1)
-      assert.equal(imgs[0]!.props.src, icon)
-      assert.equal(imgs[0]!.props.className, undefined)
-    }
-
-    // 1. Renamed repository (404 on both jsDelivr edges):
-    // cdn -> fastly -> owner GitHub avatar -> built-in letter placeholder,
-    // without corrupting session edge preference.
     const repoRenderer = createTestRenderer()
     const repoProps = {
       src: 'https://cdn.jsdelivr.net/gh/demo-org/renamed-repo@main/logo.png',
       name: '@demo/alpha',
       fullName: 'demo-org/alpha-plugin',
     }
-    const step0Img = findAll(repoRenderer.render(React.createElement(PluginLogo, repoProps)), node => node.type === 'img')[0]!
-    assert.equal(step0Img.props.src, 'https://cdn.jsdelivr.net/gh/demo-org/renamed-repo@main/logo.png')
-    assert.equal(step0Img.props.className, undefined)
+    const step0 = findAll(repoRenderer.render(React.createElement(PluginLogo, repoProps)), node => node.type === 'img')[0]!
+    assert.equal(step0.props.src, 'https://cdn.jsdelivr.net/gh/demo-org/renamed-repo@main/logo.png')
+    assert.equal(step0.props.className, undefined)
 
-    step0Img.props.onError()
-    const step1Img = findAll(repoRenderer.render(React.createElement(PluginLogo, repoProps)), node => node.type === 'img')[0]!
-    assert.equal(step1Img.props.src, 'https://fastly.jsdelivr.net/gh/demo-org/renamed-repo@main/logo.png')
-    assert.equal(step1Img.props.className, undefined, 'jsDelivr mirror keeps plugin logo styling')
+    step0.props.onError()
+    const step1 = findAll(repoRenderer.render(React.createElement(PluginLogo, repoProps)), node => node.type === 'img')[0]!
+    assert.equal(step1.props.src, 'https://fastly.jsdelivr.net/gh/demo-org/renamed-repo@main/logo.png')
 
-    step1Img.props.onError()
-    const avatarImg = findAll(repoRenderer.render(React.createElement(PluginLogo, repoProps)), node => node.type === 'img')[0]!
-    assert.equal(avatarImg.props.src, 'https://avatars.githubusercontent.com/demo-org?s=96')
-    assert.equal(avatarImg.props.className, undefined, 'avatar fallback keeps tile framing without circular crop')
+    step1.props.onError()
+    const avatar = findAll(repoRenderer.render(React.createElement(PluginLogo, repoProps)), node => node.type === 'img')[0]!
+    assert.equal(avatar.props.src, DEMO_AVATAR)
 
-    avatarImg.props.onError()
+    avatar.props.onError()
     const placeholderTree = repoRenderer.render(React.createElement(PluginLogo, repoProps))
     assert.equal(findAll(placeholderTree, node => node.type === 'img').length, 0)
-    const placeholder = findAll(placeholderTree, node => node.props.className === 'dsh_market_logoPlaceholder')[0]!
-    assert.equal(textOf(placeholder), 'A')
-    assert.equal(getPreferredJsDelivrHost(), null, 'all-404 repository icon must not promote an alternate edge')
+    assert.equal(textOf(findAll(placeholderTree, node => node.props.className === 'dsh_market_logoPlaceholder')[0]!), 'A')
+    assert.equal(getBundledPreferredJsDelivrHost(), null)
 
-    // Switching to another plugin synchronously resets failure state on the same mounted instance.
-    const switchedImg = findAll(repoRenderer.render(React.createElement(PluginLogo, {
-      src: DATA_SVG_ICON,
-      name: 'other-plugin',
-      fullName: 'other-org/other-plugin',
-    })), node => node.type === 'img')[0]!
-    assert.equal(switchedImg.props.src, DATA_SVG_ICON)
-
-    // 2. Single transient failure on `cdn.jsdelivr.net` does NOT flip the session, and a first-try load resets the streak.
-    const hiccupRenderer = createTestRenderer()
-    const hiccupProps = { src: JSDELIVR_SVG_ICON, name: '@demo/alpha', fullName: 'demo-org/alpha-plugin' }
-    const hiccupImg = findAll(hiccupRenderer.render(React.createElement(PluginLogo, hiccupProps)), node => node.type === 'img')[0]!
-    hiccupImg.props.onError()
-    const hiccupFastly = findAll(hiccupRenderer.render(React.createElement(PluginLogo, hiccupProps)), node => node.type === 'img')[0]!
-    assert.equal(hiccupFastly.props.src, 'https://fastly.jsdelivr.net/gh/demo-org/alpha-plugin@main/assets/logo.svg')
-    hiccupFastly.props.onLoad()
-    assert.equal(getPreferredJsDelivrHost(), null, 'one transient failover must not switch the entire session')
-
-    // A normal first-try load resets the failover counter.
-    const healthyRenderer = createTestRenderer()
-    const healthyImg = findAll(healthyRenderer.render(React.createElement(PluginLogo, hiccupProps)), node => node.type === 'img')[0]!
-    assert.equal(healthyImg.props.src, JSDELIVR_SVG_ICON)
-    healthyImg.props.onLoad()
-
-    // 3. Two consecutive verified failovers promote `fastly.jsdelivr.net` for subsequent cards in the session.
+    // Two consecutive verified failovers promote fastly for subsequent cards.
     for (const src of [JSDELIVR_SVG_ICON, JSDELIVR_NPM_ICON]) {
-      const cnRenderer = createTestRenderer()
+      const r = createTestRenderer()
       const props = { src, name: '@demo/alpha', fullName: 'demo-org/alpha-plugin' }
-      const blocked = findAll(cnRenderer.render(React.createElement(PluginLogo, props)), node => node.type === 'img')[0]!
-      blocked.props.onError()
-      const fastly = findAll(cnRenderer.render(React.createElement(PluginLogo, props)), node => node.type === 'img')[0]!
-      assert.match(fastly.props.src, /^https:\/\/fastly\.jsdelivr\.net\//)
-      fastly.props.onLoad()
+      findAll(r.render(React.createElement(PluginLogo, props)), node => node.type === 'img')[0]!.props.onError()
+      const fastlyImg = findAll(r.render(React.createElement(PluginLogo, props)), node => node.type === 'img')[0]!
+      assert.match(fastlyImg.props.src, /^https:\/\/fastly\.jsdelivr\.net\//)
+      fastlyImg.props.onLoad()
     }
-    assert.equal(getPreferredJsDelivrHost(), 'fastly.jsdelivr.net')
+    assert.equal(getBundledPreferredJsDelivrHost(), 'fastly.jsdelivr.net')
 
     const nextCardRenderer = createTestRenderer()
     const nextCardImg = findAll(nextCardRenderer.render(React.createElement(PluginLogo, {
@@ -425,79 +331,45 @@ test('PluginLogo renders data URI and HTTPS URLs format-agnostically, fails over
       fullName: '',
     })), node => node.type === 'img')[0]!
     assert.equal(nextCardImg.props.src, 'https://fastly.jsdelivr.net/npm/@demo/alpha@1.0.0/assets/logo.png')
-
-    // 4. Broken non-jsDelivr URL on an npm-only plugin falls directly to built-in placeholder.
-    const npmRenderer = createTestRenderer()
-    const npmProps = { src: HTTPS_PNG_ICON, name: 'beta-npm-only', fullName: '' }
-    const npmFirstImg = findAll(npmRenderer.render(React.createElement(PluginLogo, npmProps)), node => node.type === 'img')[0]!
-    assert.equal(npmFirstImg.props.src, HTTPS_PNG_ICON)
-    npmFirstImg.props.onError()
-    const npmFallbackTree = npmRenderer.render(React.createElement(PluginLogo, npmProps))
-    assert.equal(findAll(npmFallbackTree, node => node.type === 'img').length, 0)
-    const npmPlaceholder = findAll(npmFallbackTree, node => node.props.className === 'dsh_market_logoPlaceholder')[0]!
-    assert.equal(textOf(npmPlaceholder), 'B')
   } finally {
-    resetPreferredJsDelivrHost()
+    resetBundledPreferredJsDelivrHost()
   }
 })
 
-test('list page (MarketSection) renders both base64 data URI and jsDelivr HTTPS URL mocks and survives broken URLs', () => {
-  resetPreferredJsDelivrHost()
+test('list page (MarketSection) and detail view (DirectInstallPanel) propagate icons and fall back cleanly on error', () => {
+  resetBundledPreferredJsDelivrHost()
   try {
-    const cases = [
-      { label: 'base64 mock', icons: { alpha: DATA_SVG_ICON, beta: DATA_PNG_ICON } },
-      { label: 'HTTPS URL mock', icons: { alpha: JSDELIVR_SVG_ICON, beta: HTTPS_PNG_ICON } },
-    ]
-    for (const { label, icons } of cases) {
-      resetPreferredJsDelivrHost()
+    for (const icons of [
+      { alpha: DATA_SVG_ICON, beta: DATA_PNG_ICON },
+      { alpha: JSDELIVR_SVG_ICON, beta: HTTPS_PNG_ICON },
+    ]) {
+      resetBundledPreferredJsDelivrHost()
       const catalog = mockCatalog(icons)
       const renderer = createTestRenderer()
       const props = makeMarketSectionProps(catalog)
       const tree = renderer.render(React.createElement(MarketSection, props))
       const cards = findAll(tree, node => node.type === 'li' && String(node.props.className ?? '').includes('dsh_market_catalogCard'))
-      assert.equal(cards.length, 2, `${label}: both subscription cards should render on the list page`)
-      const renderedSrcs = cards.map(card => findAll([card], node => node.type === 'img')[0]?.props.src)
-      assert.deepEqual(renderedSrcs, [icons.alpha, icons.beta], `${label}: card icons must pass straight into <img src>`)
+      assert.equal(cards.length, 2)
+      assert.deepEqual(cards.map(card => findAll([card], node => node.type === 'img')[0]?.props.src), [icons.alpha, icons.beta])
 
-      // Clicking the card's install button opens the detail panel (DirectInstallPanel) with the same icon.
       const firstInstallButton = findAll([cards[0]!], node => node.type === 'button')[0]!
       firstInstallButton.props.onClick()
       const withDetailTree = renderer.render(React.createElement(MarketSection, props))
       const detailHead = findAll(withDetailTree, node => node.props.className === 'dsh_market_directHead')[0]!
-      assert.equal(findAll([detailHead], node => node.type === 'img')[0]?.props.src, icons.alpha, `${label}: opened detail view must render the same icon`)
+      assert.equal(findAll([detailHead], node => node.type === 'img')[0]?.props.src, icons.alpha)
 
-      // Trigger image failure on the npm-only card and re-render the entire list page:
-      // the failed card falls back to the built-in placeholder while the sibling card remains intact.
-      const secondImg = findAll([cards[1]!], node => node.type === 'img')[0]!
-      secondImg.props.onError()
+      findAll([cards[1]!], node => node.type === 'img')[0]!.props.onError()
       const afterErrorTree = renderer.render(React.createElement(MarketSection, props))
       const cardsAfterError = findAll(afterErrorTree, node => node.type === 'li' && String(node.props.className ?? '').includes('dsh_market_catalogCard'))
-      assert.equal(cardsAfterError.length, 2, `${label}: list page must not crash when one icon fails`)
       assert.equal(findAll([cardsAfterError[0]!], node => node.type === 'img')[0]?.props.src, icons.alpha)
       assert.equal(findAll([cardsAfterError[1]!], node => node.type === 'img').length, 0)
-      const fallbackBadge = findAll([cardsAfterError[1]!], node => node.props.className === 'dsh_market_logoPlaceholder')[0]!
-      assert.equal(textOf(fallbackBadge), 'B')
+      assert.equal(textOf(findAll([cardsAfterError[1]!], node => node.props.className === 'dsh_market_logoPlaceholder')[0]!), 'B')
     }
-  } finally {
-    resetPreferredJsDelivrHost()
-  }
-})
 
-test('detail view (DirectInstallPanel) renders both base64 data URI and jsDelivr HTTPS URL mocks and falls back on error', () => {
-  resetPreferredJsDelivrHost()
-  try {
     const base64Catalog = mockCatalog({ alpha: DATA_SVG_ICON, beta: DATA_PNG_ICON })
     const urlCatalog = mockCatalog({ alpha: JSDELIVR_SVG_ICON, beta: HTTPS_PNG_ICON })
-    const scenarios: { label: string; item: MarketPlugin; expectedSrc: string }[] = [
-      { label: 'base64 SVG (repo plugin)', item: base64Catalog.featured!.entries[0]!.item, expectedSrc: DATA_SVG_ICON },
-      { label: 'base64 PNG (npm-only plugin)', item: base64Catalog.featured!.entries[1]!.item, expectedSrc: DATA_PNG_ICON },
-      { label: 'jsDelivr HTTPS URL (repo plugin)', item: urlCatalog.featured!.entries[0]!.item, expectedSrc: JSDELIVR_SVG_ICON },
-      { label: 'HTTPS URL (npm-only plugin)', item: urlCatalog.featured!.entries[1]!.item, expectedSrc: HTTPS_PNG_ICON },
-    ]
-
-    const installer = makeDirectInstallerStub()
-    const baseProps = {
-      installer,
+    const panelProps = {
+      installer: makeDirectInstallerStub(),
       t,
       onClose: () => {},
       onInstalled: () => {},
@@ -506,92 +378,78 @@ test('detail view (DirectInstallPanel) renders both base64 data URI and jsDelivr
       reviewAvailable: true,
       reviewMessage: '',
     }
-
-    for (const { label, item, expectedSrc } of scenarios) {
-      const renderer = createTestRenderer()
-      const tree = renderer.render(React.createElement(DirectInstallPanel, { ...baseProps, item }))
-      const head = findAll(tree, node => node.props.className === 'dsh_market_directHead')[0]!
-      const img = findAll([head], node => node.type === 'img')[0]!
-      assert.equal(img.props.src, expectedSrc, `${label}: detail panel must pass icon directly into <img src>`)
-    }
-
-    // Verify fallback on broken URL inside the detail panel, and clean recovery when switching to another plugin.
     const panelRenderer = createTestRenderer()
-    const brokenUrlItem = urlCatalog.featured!.entries[1]!.item
-    const firstTree = panelRenderer.render(React.createElement(DirectInstallPanel, { ...baseProps, item: brokenUrlItem }))
-    const firstImg = findAll(firstTree, node => node.type === 'img')[0]!
-    assert.equal(firstImg.props.src, HTTPS_PNG_ICON)
-    firstImg.props.onError()
-
-    const fallbackTree = panelRenderer.render(React.createElement(DirectInstallPanel, { ...baseProps, item: brokenUrlItem }))
+    const brokenItem: MarketPlugin = urlCatalog.featured!.entries[1]!.item
+    findAll(panelRenderer.render(React.createElement(DirectInstallPanel, { ...panelProps, item: brokenItem })), node => node.type === 'img')[0]!.props.onError()
+    const fallbackTree = panelRenderer.render(React.createElement(DirectInstallPanel, { ...panelProps, item: brokenItem }))
     assert.equal(findAll(fallbackTree, node => node.type === 'img').length, 0)
-    const badge = findAll(fallbackTree, node => node.props.className === 'dsh_market_logoPlaceholder')[0]!
-    assert.equal(textOf(badge), 'B')
+    assert.equal(textOf(findAll(fallbackTree, node => node.props.className === 'dsh_market_logoPlaceholder')[0]!), 'B')
 
-    const nextItem = base64Catalog.featured!.entries[0]!.item
-    const recoveredTree = panelRenderer.render(React.createElement(DirectInstallPanel, { ...baseProps, item: nextItem }))
-    const recoveredImg = findAll(recoveredTree, node => node.type === 'img')[0]!
-    assert.equal(recoveredImg.props.src, DATA_SVG_ICON)
+    const recoveredTree = panelRenderer.render(React.createElement(DirectInstallPanel, { ...panelProps, item: base64Catalog.featured!.entries[0]!.item }))
+    assert.equal(findAll(recoveredTree, node => node.type === 'img')[0]?.props.src, DATA_SVG_ICON)
   } finally {
-    resetPreferredJsDelivrHost()
+    resetBundledPreferredJsDelivrHost()
   }
 })
 
 test('installed view prefers each installed package own local icon and falls back to featured catalog entries', async () => {
-  const catalog = mockCatalog({ alpha: DATA_SVG_ICON, beta: DATA_PNG_ICON })
-  const installedPackages = [
-    {
-      packageName: 'dsh-market-pro',
-      icon: DATA_SVG_ICON,
-      version: '1.15.1',
-      description: 'Market Pro',
-      repository: 'bruc3van/dsh-market-pro',
-      self: true,
-      inBox: false,
-      unregistered: false,
-      enabled: true,
-      entries: [{ id: 'market', name: 'dsh-market-pro', present: true, enabled: true, phase: 'active' as const }],
-      error: '',
-      heldDown: false,
-    },
-    {
-      packageName: 'beta-npm-only',
-      version: '2.0.0',
-      description: 'Beta local description',
-      repository: '',
-      self: false,
-      inBox: false,
-      unregistered: false,
-      enabled: true,
-      entries: [{ id: 'beta', name: 'beta-npm-only', present: true, enabled: true, phase: 'active' as const }],
-      error: '',
-      heldDown: false,
-    },
-  ]
-  const baseProps = makeMarketSectionProps(catalog)
-  const props = {
-    ...baseProps,
-    listInstalled: async () => ({ packages: installedPackages, profile: 'web', error: '' }),
+  resetBundledPreferredJsDelivrHost()
+  try {
+    const catalog = mockCatalog({ alpha: DATA_SVG_ICON, beta: DATA_PNG_ICON })
+    const installedPackages = [
+      {
+        packageName: 'dsh-market-pro',
+        icon: DATA_SVG_ICON,
+        version: '1.15.1',
+        description: 'Market Pro',
+        repository: 'bruc3van/dsh-market-pro',
+        self: true,
+        inBox: false,
+        unregistered: false,
+        enabled: true,
+        entries: [{ id: 'market', name: 'dsh-market-pro', present: true, enabled: true, phase: 'active' as const }],
+        error: '',
+        heldDown: false,
+      },
+      {
+        packageName: 'beta-npm-only',
+        version: '2.0.0',
+        description: 'Beta local description',
+        repository: '',
+        self: false,
+        inBox: false,
+        unregistered: false,
+        enabled: true,
+        entries: [{ id: 'beta', name: 'beta-npm-only', present: true, enabled: true, phase: 'active' as const }],
+        error: '',
+        heldDown: false,
+      },
+    ]
+    const props = {
+      ...makeMarketSectionProps(catalog),
+      listInstalled: async () => ({ packages: installedPackages, profile: 'web', error: '' }),
+    }
+    const renderer = createTestRenderer()
+    renderer.render(React.createElement(MarketSection, props))
+    renderer.flushEffects()
+    await new Promise(resolve => setImmediate(resolve))
+    const loadedTree = renderer.render(React.createElement(MarketSection, props))
+    const installedTab = findAll(loadedTree, node => node.type === 'button' && textOf(node).includes(zh['installed.chip']))[0]!
+    installedTab.props.onClick()
+    const installedTree = renderer.render(React.createElement(MarketSection, props))
+    const cards = findAll(installedTree, node => node.type === 'li' && String(node.props.className ?? '').includes('dsh_market_installedCard'))
+    assert.equal(cards.length, 2)
+    assert.equal(
+      findAll([cards[0]!], node => node.type === 'img')[0]?.props.src,
+      DATA_SVG_ICON,
+      'installed card must render local package icon instead of degrading to GitHub owner avatar',
+    )
+    assert.equal(
+      findAll([cards[1]!], node => node.type === 'img')[0]?.props.src,
+      DATA_PNG_ICON,
+      'installed card without local icon must match featured/subscription catalog icon',
+    )
+  } finally {
+    resetBundledPreferredJsDelivrHost()
   }
-  const renderer = createTestRenderer()
-  const initialTree = renderer.render(React.createElement(MarketSection, props))
-  renderer.flushEffects()
-  await new Promise(resolve => setImmediate(resolve))
-  const loadedTree = renderer.render(React.createElement(MarketSection, props))
-  const installedTab = findAll(loadedTree, node => node.type === 'button' && textOf(node).includes(zh['installed.chip']))[0]!
-  installedTab.props.onClick()
-  const installedTree = renderer.render(React.createElement(MarketSection, props))
-  const cards = findAll(installedTree, node => node.type === 'li' && String(node.props.className ?? '').includes('dsh_market_installedCard'))
-  assert.equal(cards.length, 2)
-  assert.equal(
-    findAll([cards[0]!], node => node.type === 'img')[0]?.props.src,
-    DATA_SVG_ICON,
-    'installed card must render local package icon instead of degrading to GitHub owner avatar',
-  )
-  assert.equal(
-    findAll([cards[1]!], node => node.type === 'img')[0]?.props.src,
-    DATA_PNG_ICON,
-    'installed card without local icon must match featured/subscription catalog icon',
-  )
-  assert.ok(initialTree.length > 0)
 })

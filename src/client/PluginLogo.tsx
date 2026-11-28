@@ -1,6 +1,13 @@
 import { useMemo, useState } from 'react'
 import { ownerAvatarUrl } from './avatar.ts'
-import { iconCandidatesOf, noteIconLoaded } from './iconMirrors.ts'
+import {
+  advanceIconFailure,
+  currentIconStep,
+  logoPlaceholderLetter,
+  logoSourceChainOf,
+  noteIconLoaded,
+  type IconFailureState,
+} from './iconMirrors.ts'
 
 /**
  * A plugin's own artwork (data URI or HTTPS URL, with two-edge fallback for
@@ -10,28 +17,15 @@ import { iconCandidatesOf, noteIconLoaded } from './iconMirrors.ts'
  */
 export function PluginLogo({ src, name, fullName }: { src?: string; name: string; fullName?: string }) {
   const avatar = ownerAvatarUrl(fullName)
-  const { sources, sourceKey } = useMemo(() => {
-    const primarySources = iconCandidatesOf(src)
-    const combined = [...primarySources, avatar].filter(
-      (value, index, all): value is string => typeof value === 'string' && value !== '' && all.indexOf(value) === index,
-    )
-    return {
-      sources: combined,
-      sourceKey: `${typeof src === 'string' ? src.trim() : ''}\0${avatar ?? ''}`,
-    }
-  }, [src, avatar])
-  const [failure, setFailure] = useState<{ key: string; step: number }>({ key: sourceKey, step: 0 })
-  const step = failure.key === sourceKey ? failure.step : 0
+  const { sources, sourceKey } = useMemo(() => logoSourceChainOf(src, avatar), [src, avatar])
+  const [failure, setFailure] = useState<IconFailureState>({ key: sourceKey, step: 0 })
+  const step = currentIconStep(failure, sourceKey)
   const current = sources[step]
-  const safeName = typeof name === 'string' ? name : ''
   return <span className="dsh_market_logo" aria-hidden="true">
     {current
       ? <img key={current} src={current} alt="" loading="lazy" decoding="async" draggable={false} referrerPolicy="no-referrer"
           onLoad={() => noteIconLoaded(src, current, step > 0)}
-          onError={() => setFailure(previous => ({
-            key: sourceKey,
-            step: (previous.key === sourceKey ? previous.step : 0) + 1,
-          }))} />
-      : <span className="dsh_market_logoPlaceholder">{[...safeName.replace(/^@[^/]+\//, '').trim()][0]?.toLocaleUpperCase() || 'P'}</span>}
+          onError={() => setFailure(previous => advanceIconFailure(previous, sourceKey))} />
+      : <span className="dsh_market_logoPlaceholder">{logoPlaceholderLetter(name)}</span>}
   </span>
 }

@@ -50,3 +50,6 @@ jobs:
         # fails with ERR_PNPM_IGNORED_BUILDS.
       - name: Typecheck, test, build
         run: pnpm run check
+      - name: Verify 0.2.3-alpha (React 19) forward-compat lane
+        if: matrix.os == 'ubuntu-latest' && github.ref_type != 'tag'
+        run: pnpm run verify:lane:next

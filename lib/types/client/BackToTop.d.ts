@@ -22,7 +22,7 @@ export declare function resolveBackToTopScroller<T extends ScrollHost>(root: T |
 export declare function scrollResultsContainerToTop(list: ScrollHost | null, behavior?: ScrollBehavior): void;
 /** Return the active list to its start without scrolling the surrounding app. */
 export declare function BackToTop({ root, page, label }: {
-    root: RefObject<HTMLDivElement>;
+    root: RefObject<HTMLDivElement | null>;
     page: string;
     label: string;
 }): import("react").JSX.Element | null;

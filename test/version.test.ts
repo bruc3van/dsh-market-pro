@@ -31,26 +31,34 @@ const plugin = JSON.parse(await readFile(resolve(root, 'dsh.plugin.json'), 'utf8
   entry: { name: string }
 }
 
-test('the real rc.5 host accepts our declared baseline without compatibility exemptions', () => {
-  for (const version of ['0.2.2-rc.1', '0.2.2-rc.2', '0.2.2-rc.3', '0.2.2-rc.4', '0.2.2-rc.5', '0.2.2', '0.2.3']) {
-    assert.equal(evaluatePluginCompatibility(pkg, {}, version), undefined)
+test('the host compatibility evaluator accepts every supported runtime without exemptions', () => {
+  for (const version of [
+    '0.2.2-rc.1', '0.2.2-rc.2', '0.2.2-rc.3', '0.2.2-rc.4', '0.2.2-rc.5', '0.2.2', '0.2.3',
+    '0.2.3-alpha.1', '0.2.3-alpha.2', '0.2.3-alpha.3',
+  ]) {
+    assert.equal(evaluatePluginCompatibility(pkg, {}, version), undefined, `runtime ${version} must be accepted`)
   }
   for (const version of ['0.1.7-rc.2', '0.2.0', '0.2.1-rc.4', '0.2.1-rc.5', '0.3.0']) {
-    assert.ok(evaluatePluginCompatibility(pkg, {}, version))
+    assert.ok(evaluatePluginCompatibility(pkg, {}, version), `runtime ${version} must be rejected`)
   }
 })
 
 test('DSH dependencies keep the declared runtime and development baseline', () => {
-  for (const [kind, expected] of [
-    ['peerDependencies', '>=0.2.2-rc.1 <0.3.0'],
-    ['devDependencies', '0.2.2-rc.5'],
-  ] as const) {
-    const dependencies = Object.entries(pkg[kind]).filter(([name]) => name.startsWith('@deepseek-ai/dsh-'))
-    assert.ok(dependencies.length > 0, `${kind} must declare DSH dependencies`)
-    for (const [name, version] of dependencies) {
-      assert.equal(version, expected, `${kind}.${name} must use the DSH baseline`)
-    }
+  const peers = Object.entries(pkg.peerDependencies).filter(([name]) => name.startsWith('@deepseek-ai/dsh-'))
+  assert.ok(peers.length > 0, 'peerDependencies must declare DSH dependencies')
+  for (const [name, version] of peers) {
+    assert.equal(version, '>=0.2.2-rc.1 <0.3.0', `peerDependencies.${name} must use the DSH baseline`)
   }
+  // The development lane is one self-consistent host version: every DSH devDependency
+  // pins the same release, and that release stays inside the supported peer range.
+  // Verification lanes install alternate supported hosts by rewriting these pins together.
+  const devs = Object.entries(pkg.devDependencies).filter(([name]) => name.startsWith('@deepseek-ai/dsh-'))
+  assert.ok(devs.length > 0, 'devDependencies must declare DSH dependencies')
+  const baseline = devs[0]![1]
+  for (const [name, version] of devs) {
+    assert.equal(version, baseline, `devDependencies.${name} must pin the same host version as ${devs[0]![0]}`)
+  }
+  assert.equal(evaluatePluginCompatibility(pkg, {}, baseline), undefined, 'the development baseline must satisfy its own peer range')
   assert.ok('@deepseek-ai/dsh-client-ui-primitives' in pkg.peerDependencies)
   for (const injected of pkg.dsh.client.inject) {
     assert.ok(injected in pkg.peerDependencies, `dsh.client.inject entry ${injected} must be declared in peerDependencies`)

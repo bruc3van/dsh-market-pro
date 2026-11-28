@@ -81,6 +81,53 @@ export function iconCandidatesOf(src: string | undefined): string[] {
   })
 }
 
+/** Ordered deduplicated candidate chain for one plugin logo, plus the identity key that resets failure state when it changes. */
+export interface LogoSourceChain {
+  readonly sources: readonly string[]
+  readonly sourceKey: string
+}
+
+/**
+ * Expand a plugin's icon into the full failover chain `PluginLogo` walks:
+ * jsDelivr edges (or the single non-jsDelivr source) followed by the owner
+ * avatar, deduplicated so an icon already pointing at the avatar is not tried twice.
+ */
+export function logoSourceChainOf(src: string | undefined, avatar: string | undefined): LogoSourceChain {
+  const primarySources = iconCandidatesOf(src)
+  const combined = [...primarySources, avatar].filter(
+    (value, index, all): value is string => typeof value === 'string' && value !== '' && all.indexOf(value) === index,
+  )
+  return {
+    sources: combined,
+    sourceKey: `${typeof src === 'string' ? src.trim() : ''}\0${avatar ?? ''}`,
+  }
+}
+
+/** Failure-chain position; `key` ties the count to one source identity so switching plugins starts over. */
+export interface IconFailureState {
+  readonly key: string
+  readonly step: number
+}
+
+/** Advance the failover chain one step; a failure belonging to a different source identity restarts at step 1. */
+export function advanceIconFailure(previous: IconFailureState, sourceKey: string): IconFailureState {
+  return {
+    key: sourceKey,
+    step: (previous.key === sourceKey ? previous.step : 0) + 1,
+  }
+}
+
+/** Chain position for rendering: failures recorded against a different source identity do not apply. */
+export function currentIconStep(failure: IconFailureState, sourceKey: string): number {
+  return failure.key === sourceKey ? failure.step : 0
+}
+
+/** First letter of the built-in placeholder tile, preferring the package part over the npm scope. */
+export function logoPlaceholderLetter(name: string): string {
+  const safeName = typeof name === 'string' ? name : ''
+  return [...safeName.replace(/^@[^/]+\//, '').trim()][0]?.toLocaleUpperCase() || 'P'
+}
+
 /**
  * Record a completed image load for a jsDelivr icon:
  * - A first-try load (`failedBeforeLoad === false`) resets any pending failover streak.

@@ -43,7 +43,7 @@ export function scrollResultsContainerToTop(list: ScrollHost | null, behavior?: 
 
 /** Return the active list to its start without scrolling the surrounding app. */
 export function BackToTop({ root, page, label }: {
-  root: RefObject<HTMLDivElement>
+  root: RefObject<HTMLDivElement | null>
   page: string
   label: string
 }) {

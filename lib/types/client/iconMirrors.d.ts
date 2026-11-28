@@ -25,6 +25,28 @@ export declare function resetPreferredJsDelivrHost(): void;
  *   failures, that edge is placed first.
  */
 export declare function iconCandidatesOf(src: string | undefined): string[];
+/** Ordered deduplicated candidate chain for one plugin logo, plus the identity key that resets failure state when it changes. */
+export interface LogoSourceChain {
+    readonly sources: readonly string[];
+    readonly sourceKey: string;
+}
+/**
+ * Expand a plugin's icon into the full failover chain `PluginLogo` walks:
+ * jsDelivr edges (or the single non-jsDelivr source) followed by the owner
+ * avatar, deduplicated so an icon already pointing at the avatar is not tried twice.
+ */
+export declare function logoSourceChainOf(src: string | undefined, avatar: string | undefined): LogoSourceChain;
+/** Failure-chain position; `key` ties the count to one source identity so switching plugins starts over. */
+export interface IconFailureState {
+    readonly key: string;
+    readonly step: number;
+}
+/** Advance the failover chain one step; a failure belonging to a different source identity restarts at step 1. */
+export declare function advanceIconFailure(previous: IconFailureState, sourceKey: string): IconFailureState;
+/** Chain position for rendering: failures recorded against a different source identity do not apply. */
+export declare function currentIconStep(failure: IconFailureState, sourceKey: string): number;
+/** First letter of the built-in placeholder tile, preferring the package part over the npm scope. */
+export declare function logoPlaceholderLetter(name: string): string;
 /**
  * Record a completed image load for a jsDelivr icon:
  * - A first-try load (`failedBeforeLoad === false`) resets any pending failover streak.

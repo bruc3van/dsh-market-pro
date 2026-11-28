@@ -121,8 +121,9 @@ test('native bundle management keeps the Host switch in sync and honors its rest
     await writeFile(installAnchor, '{}\n')
     const { loader, updates } = stubLoader([{ id: 'include:demo', disabled: true }])
     ctx.provide('loader', loader)
+    // Keep both `overlays` (0.2.2-rc.5) and `overlayPaths` (0.2.3-alpha.3+) so both host lanes pass.
     ctx.provide('profileContext', { name: 'web', dir: profileDir, patchPath, installAnchor, home, cwd: home,
-      startedBundles: ['demo-plugin'], overlays: [], telemetryDisabledEnv: undefined })
+      startedBundles: ['demo-plugin'], overlays: [], overlayPaths: [], telemetryDisabledEnv: undefined })
     const hostFiber = ctx.plugin(PluginManager, {})
     await hostFiber.await()
     try {
