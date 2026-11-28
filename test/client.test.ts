@@ -136,9 +136,16 @@ test('every class the stylesheet defines is namespaced to this plugin', () => {
 })
 
 test('narrow containers stack search above full-width selectors and drop desktop gutter insets', () => {
+  assert.match(cssText, /\.dsh_market_filterActions\s*\{[^}]*flex-wrap:\s*nowrap/)
+  assert.match(cssText, /\.dsh_market_category\s+\.dsh_market_modeTrigger\s*\{[^}]*width:\s*auto/)
+  const medium = cssText.match(/@container \(max-width:\s*840px\)\s*\{([\s\S]*?)\n\}/)
+  assert.ok(medium, 'expected a @container (max-width: 840px) responsive block')
+  assert.match(medium[1]!, /\.dsh_market_filterActions\s*\{[^}]*flex:\s*1 0 100%/)
+
   const narrow = cssText.match(/@container \(max-width:\s*560px\)\s*\{([\s\S]*?)\n\}/)
   assert.ok(narrow, 'expected a @container (max-width: 560px) responsive block')
   const block = narrow[1]!
+  assert.match(block, /\.dsh_market_filterActions\s*\{[^}]*flex-wrap:\s*wrap/)
   assert.match(block, /\.dsh_market_search\.dsh_market_filterSearch[\s\S]*?flex:\s*1 0 100%/)
   assert.match(block, /\.dsh_market_projectSkills\s+\.dsh_market_search\.dsh_market_skillSearch[\s\S]*?flex:\s*1 0 100%/)
   assert.match(block, /\.dsh_market_category\s+\.dsh_market_modeTrigger[\s\S]*?width:\s*100%/)

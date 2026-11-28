@@ -817,15 +817,15 @@ export const cssText = `
   margin-bottom: 5px; margin-left: auto;
 }
 .dsh_market_filterBar {
-  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px 12px;
 }
 .dsh_market_filterActions {
-  display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap;
-  flex: 1 1 220px; gap: 8px; min-width: 0; margin-left: auto;
+  display: flex; align-items: center; justify-content: flex-end; flex-wrap: nowrap;
+  flex: 1 1 320px; gap: 6px; min-width: 0; margin-left: auto;
 }
 .dsh_market_search.dsh_market_filterSearch {
-  flex: 1 1 180px;
-  min-width: min(100%, 160px);
+  flex: 1 1 130px;
+  min-width: 110px;
 }
 .dsh_market_search.dsh_market_filterSearch,
 .dsh_market_search.dsh_market_skillSearch,
@@ -852,14 +852,14 @@ export const cssText = `
 .dsh_market_scopeButton span { flex: none; color: var(--dsw-alias-label-tertiary); font-weight: 400; font-variant-numeric: tabular-nums; }
 .dsh_market_category,
 .dsh_market_sort {
-  display: flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%;
+  display: flex; flex: 0 1 auto; align-items: center; gap: 8px; min-width: 0; max-width: 100%;
   font-size: 12px; color: var(--dsw-alias-label-secondary);
 }
-.dsh_market_category .dsh_market_modeTrigger { width: 180px; }
-.dsh_market_sort .dsh_market_modeTrigger { min-width: 112px; max-width: 170px; }
+.dsh_market_category .dsh_market_modeTrigger { width: auto; min-width: 104px; max-width: 164px; padding: 0 10px 0 12px; }
+.dsh_market_sort .dsh_market_modeTrigger { min-width: 96px; max-width: 152px; padding: 0 10px 0 12px; }
 .dsh_market_compatToggle {
-  box-sizing: border-box; display: inline-flex; flex: none; align-items: center; gap: 6px;
-  height: 36px; padding: 0 12px; border: 0; border-radius: var(--dsw-radius-md);
+  box-sizing: border-box; display: inline-flex; flex: none; align-items: center; gap: 5px;
+  height: 36px; padding: 0 10px; border: 0; border-radius: var(--dsw-radius-md);
   background: var(--dsw-alias-bg-module-platform); color: var(--dsw-alias-label-secondary);
   font: inherit; font-size: 13px; line-height: 20px; font-weight: 500; white-space: nowrap; cursor: pointer;
 }
@@ -2130,6 +2130,14 @@ button.dsh_market_dangerButton { color: var(--dsw-alias-state-error-primary); }
   margin-top: 8px;
 }
 
+/* Responsive layout for medium containers: move the entire filter action group onto its
+   own full-width row rather than stranding a single selector on a second line. */
+@container (max-width: 840px) {
+  .dsh_market_filterBar { gap: 8px; align-items: flex-start; }
+  .dsh_market_filterActions { flex: 1 0 100%; width: 100%; margin-left: 0; justify-content: flex-start; }
+  .dsh_market_search.dsh_market_filterSearch { min-width: 140px; }
+}
+
 /* Responsive layout for narrow containers (mobile screens, split panes, sidebars):
    stack search above equal-width selectors, remove desktop scrollbar gutter insets so
    cards align flush with toolbars, and switch to natural-height single-column cards. */
@@ -2146,7 +2154,7 @@ button.dsh_market_dangerButton { color: var(--dsw-alias-state-error-primary); }
   .dsh_market_filterBar { gap: 8px; }
   .dsh_market_scope { width: 100%; box-sizing: border-box; flex-wrap: wrap; }
   .dsh_market_scopeButton { flex: 1 0 auto; justify-content: center; min-width: max-content; padding: 0 10px; gap: 5px; }
-  .dsh_market_filterActions { flex: 1 0 100%; width: 100%; margin-left: 0; justify-content: flex-start; }
+  .dsh_market_filterActions { flex: 1 0 100%; width: 100%; margin-left: 0; justify-content: flex-start; flex-wrap: wrap; }
   .dsh_market_search.dsh_market_filterSearch,
   .dsh_market_search.dsh_market_skillSearch,
   .dsh_market_projectSkills .dsh_market_search.dsh_market_skillSearch { flex: 1 0 100%; width: 100%; min-width: 0; margin-left: 0; }
