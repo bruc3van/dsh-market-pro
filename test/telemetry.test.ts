@@ -1,11 +1,20 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { Context } from '@deepseek-ai/cordis'
 import {
   CN_MIRROR_CATALOG_BASE,
   DEFAULT_CATALOG_BASE,
   MIRROR_CATALOG_BASE,
   isOfficialCatalogBase,
 } from '../src/catalog.ts'
+// Built bundle import: `src/runtime.ts` uses `@Remote` parameter/method syntax not supported in
+// Node strip-only mode, so `applyMarket` lifecycle tests run against `lib/plugin.js` built by `pnpm run check`.
+import { applyMarket } from '../lib/plugin.js'
+import { Config } from '../src/index.ts'
+import { initialDomainState, type SafeMarketDomainState } from '../src/store.ts'
 import {
   classifyInstallError,
   createTelemetryReporter,
@@ -519,4 +528,270 @@ test('createTelemetryReporter does not write back telemetryId when opted out whi
 
   reporter.dispose()
   reporter2.dispose()
+})
+
+test('createTelemetryReporter suppresses pings, install feedback, and ID generation while storage is non-durable', async () => {
+  const sent: Array<Record<string, unknown>> = []
+  let durable = false
+  let storageState = { telemetryId: '', telemetryLastPingDay: '', telemetryLastPingKind: '' }
+
+  const reporter = createTelemetryReporter({
+    endpoint: 'https://dsh-market-pro.com/api/telemetry',
+    pluginVersion: '1.21.1',
+    dshVersion: '0.2.2-rc.5',
+    hostKind: 'desktop',
+    os: 'darwin',
+    env: {},
+    bootDelayMs: 5,
+    isEnabled: () => true,
+    isPublicPluginTarget: () => true,
+    storage: {
+      isDurable: () => durable,
+      read: () => storageState,
+      write: (patch) => { storageState = { ...storageState, ...patch } },
+    },
+    now: () => new Date('2026-11-28T02:00:00Z'),
+    fetcher: (async (_url: string | URL | Request, init?: RequestInit) => {
+      sent.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
+      return new Response(JSON.stringify({ ok: true }), { status: 202 })
+    }) as typeof fetch,
+  })
+
+  reporter.scheduleBootPing()
+  reporter.handleClientEvent({ kind: 'client_hello', hostKind: 'desktop', locale: 'zh' })
+  reporter.handleClientEvent({ kind: 'plugin_install', target: 'dsh-better-sidebar@0.32.1', mode: 'direct', result: 'ok' })
+  reporter.reportMcpInstall({ target: 'playwright', mode: 'featured', result: 'ok' })
+  reporter.reportSkillInstall({ target: 'vercel-labs/skills/find-skills', mode: 'featured', result: 'ok' })
+  await new Promise(resolve => setTimeout(resolve, 25))
+
+  assert.equal(sent.length, 0)
+  assert.equal(storageState.telemetryId, '')
+
+  // Once durable storage returns, telemetry resumes and persists a single UUID.
+  durable = true
+  reporter.handleClientEvent({ kind: 'client_hello', hostKind: 'desktop', locale: 'zh' })
+  await new Promise(resolve => setTimeout(resolve, 20))
+  assert.equal(sent.length, 1)
+  assert.equal(sent[0]?.event, 'ping')
+  assert.notEqual(storageState.telemetryId, '')
+
+  reporter.dispose()
+})
+
+async function createTempHostContext() {
+  const home = await mkdtemp(join(tmpdir(), 'dsh-market-telemetry-'))
+  const profileDir = join(home, 'profiles', 'web')
+  await mkdir(profileDir, { recursive: true })
+  const patchPath = join(profileDir, 'cordis.patch.yml')
+  const installAnchor = join(home, 'package.json')
+  await writeFile(patchPath, '[]\n')
+  await writeFile(installAnchor, '{}\n')
+
+  const ctx = new Context()
+  ctx.provide('profileContext', {
+    name: 'web',
+    dir: profileDir,
+    patchPath,
+    installAnchor,
+    home,
+    cwd: home,
+    startedBundles: [],
+    overlays: [],
+    telemetryDisabledEnv: undefined,
+  })
+  ctx.provide('settings', {
+    configure: () => () => {},
+    update: async () => {},
+  })
+  ctx.provide('skills', {
+    registerProvider: () => () => {},
+  })
+  ctx.provide('loader', {
+    entries: () => [][Symbol.iterator](),
+  })
+  ctx.provide('typert', {
+    register: () => async () => {},
+  })
+
+  const config = Config({ enabled: false, aiAssistantEnabled: false, telemetryEnabled: true })
+  return { home, ctx, config }
+}
+
+function mountMarketPlugin(ctx: Context, config: Config) {
+  return ctx.plugin((pluginCtx) => {
+    pluginCtx.fiber.entry = { options: { id: 'dsh-market-pro' } } as never
+    return applyMarket(pluginCtx, config)
+  })
+}
+
+test('applyMarket awaits domain.close() on disposal so immediate HMR reload does not hit already-open', async () => {
+  const { home, ctx, config } = await createTempHostContext()
+  const persistedId = '550e8400-e29b-41d4-a716-446655440000'
+  let storedGlobal: SafeMarketDomainState = {
+    ...initialDomainState,
+    telemetryId: persistedId,
+    telemetryLastPingDay: '2026-11-28',
+    telemetryLastPingKind: 'desktop',
+  }
+  let open = false
+  let closeCalls = 0
+  let closeFinished = false
+  let releaseClose!: () => void
+  const closeGate = new Promise<void>((resolve) => { releaseClose = resolve })
+
+  ctx.provide('storageDomain', {
+    open: async () => {
+      if (open) throw new Error('already-open')
+      open = true
+      return {
+        name: 'safe_market',
+        global: {
+          get: () => storedGlobal,
+          set: async (next: SafeMarketDomainState) => { storedGlobal = next },
+        },
+        close: async () => {
+          closeCalls += 1
+          await closeGate
+          open = false
+          closeFinished = true
+        },
+      }
+    },
+  })
+
+  try {
+    const first = mountMarketPlugin(ctx, config)
+    await first.await()
+    // Let the async storageDomain.open() effect settle.
+    await new Promise(resolve => setTimeout(resolve, 20))
+    assert.equal(open, true)
+
+    let disposed = false
+    const disposing = first.dispose().then(() => { disposed = true })
+    await new Promise(resolve => setTimeout(resolve, 20))
+    assert.equal(closeCalls, 1)
+    assert.equal(disposed, false, 'fiber disposal must wait for domain.close() to release the domain')
+
+    releaseClose()
+    await disposing
+    assert.equal(closeFinished, true)
+    assert.equal(open, false)
+    assert.equal(closeCalls, 1, 'idempotent disposeSeat must close the domain at most once')
+
+    // Immediate remount on the same strict single-open storageDomain succeeds without already-open.
+    const second = mountMarketPlugin(ctx, config)
+    await second.await()
+    await new Promise(resolve => setTimeout(resolve, 20))
+    assert.equal(open, true)
+    assert.equal(storedGlobal.telemetryId, persistedId)
+
+    releaseClose = () => {}
+    await second.dispose()
+  } finally {
+    await rm(home, { recursive: true, force: true })
+  }
+})
+
+test('applyMarket awaits domain.close() when disposed while storageDomain.open() is still pending', async () => {
+  const { home, ctx, config } = await createTempHostContext()
+  let open = false
+  let closeCalls = 0
+  let closeFinished = false
+  let resolveOpen!: (domain: unknown) => void
+  const pendingOpen = new Promise((resolve) => { resolveOpen = resolve })
+  let releaseClose!: () => void
+  const closeGate = new Promise<void>((resolve) => { releaseClose = resolve })
+
+  ctx.provide('storageDomain', {
+    open: () => pendingOpen,
+  })
+
+  try {
+    const fiber = mountMarketPlugin(ctx, config)
+    await fiber.await()
+    await new Promise(resolve => setTimeout(resolve, 10))
+
+    let disposed = false
+    const disposing = fiber.dispose().then(() => { disposed = true })
+    await new Promise(resolve => setTimeout(resolve, 10))
+    assert.equal(disposed, false)
+
+    open = true
+    resolveOpen({
+      name: 'safe_market',
+      global: {
+        get: () => initialDomainState,
+        set: async () => {},
+      },
+      close: async () => {
+        closeCalls += 1
+        await closeGate
+        open = false
+        closeFinished = true
+      },
+    })
+
+    await new Promise(resolve => setTimeout(resolve, 20))
+    assert.equal(closeCalls, 1)
+    assert.equal(disposed, false, 'disposal must stay pending until the late-resolved domain finishes closing')
+
+    releaseClose()
+    await disposing
+    assert.equal(closeFinished, true)
+    assert.equal(open, false)
+    assert.equal(closeCalls, 1)
+  } finally {
+    await rm(home, { recursive: true, force: true })
+  }
+})
+
+test('applyMarket memory-only fallback suppresses outgoing telemetry instead of minting an ephemeral UUID', async () => {
+  const { home, ctx, config } = await createTempHostContext()
+  const envBackup = {
+    CI: process.env.CI,
+    DO_NOT_TRACK: process.env.DO_NOT_TRACK,
+    DSH_TELEMETRY_DISABLED: process.env.DSH_TELEMETRY_DISABLED,
+    DSH_MARKET_TELEMETRY: process.env.DSH_MARKET_TELEMETRY,
+  }
+  delete process.env.CI
+  delete process.env.DO_NOT_TRACK
+  delete process.env.DSH_TELEMETRY_DISABLED
+  delete process.env.DSH_MARKET_TELEMETRY
+
+  const originalFetch = globalThis.fetch
+  const telemetryCalls: string[] = []
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    telemetryCalls.push(String(input))
+    return new Response(JSON.stringify({ ok: true }), { status: 202 })
+  }) as typeof fetch
+
+  ctx.provide('storageDomain', {
+    open: async () => { throw new Error('simulated schema or disk failure') },
+  })
+
+  const originalWarn = console.warn
+  console.warn = () => {}
+
+  try {
+    const fiber = mountMarketPlugin(ctx, config)
+    await fiber.await()
+    await new Promise(resolve => setTimeout(resolve, 20))
+
+    const runtime = ctx.get('dshMarketPro' as never) as {
+      reportTelemetry(event: { kind: 'client_hello'; hostKind: 'desktop'; locale: 'zh' }): { ok: boolean }
+    }
+    runtime.reportTelemetry({ kind: 'client_hello', hostKind: 'desktop', locale: 'zh' })
+    await new Promise(resolve => setTimeout(resolve, 30))
+
+    assert.deepEqual(telemetryCalls, [], 'memory-only fallback must never send telemetry with a non-persisted UUID')
+    await fiber.dispose()
+  } finally {
+    console.warn = originalWarn
+    globalThis.fetch = originalFetch
+    for (const [key, value] of Object.entries(envBackup)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+    await rm(home, { recursive: true, force: true })
+  }
 })

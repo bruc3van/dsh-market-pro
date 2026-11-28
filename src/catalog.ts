@@ -83,8 +83,9 @@ const SCHEMA_VERSION = 2
  * 9 — `publishedAt`, the feed's own publish stamp used for cross-mirror freshness comparison.
  * 10 — DSH runtime compatibility target selection (`dshEngine`, `compatFallback`) hydrated across subscription and repository cards.
  * 11 — `plugin-selection-meta.json` sidecar keywords and weak-description Chinese summary hydration.
+ * 12 — `feedVersion`, the feed package version carried in the catalog envelope.
  */
-export const CATALOG_FORMAT = 11
+export const CATALOG_FORMAT = 12
 
 /** The editorial list is capped. Published subscription packages are not. */
 const FEATURED_LIMIT = 1000
@@ -368,6 +369,7 @@ function deriveMarketInternal(
     ...(subscription === undefined ? {} : { subscription }),
     fetchedAt: clipCatalogText(envelope.source_fetched_at, 40),
     ...(publishedAt === '' ? {} : { publishedAt }),
+    ...(feedVersion === '' ? {} : { feedVersion }),
     refreshedAt: new Date().toISOString(),
     scanned: count(envelope.source_repo_count) || rows.length,
   }

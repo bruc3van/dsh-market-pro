@@ -144,6 +144,8 @@ export interface McpSnapshot {
   readonly staticToggles: Readonly<Record<string, McpStaticToggle>> | null
   /** Managed row name → what moving it from a static row did, until the page reloads. */
   readonly adopted: Readonly<Record<string, McpAdoptNote>>
+  /** ISO timestamp of the latest successful host/settings read. */
+  readonly updatedAt?: string
 }
 
 /**
@@ -396,7 +398,7 @@ export function createMcpController(hosts: McpHosts, options: McpControllerOptio
       }
       writable = reply.value.writable
       const view = reply.value.namespaces.find(candidate => candidate.ns === ns) ?? null
-      set({ settings: view, settingsError: view === null ? 'namespace-missing' : '', hasSettingsDocument: reply.value.hasDocument !== false })
+      set({ settings: view, settingsError: view === null ? 'namespace-missing' : '', hasSettingsDocument: reply.value.hasDocument !== false, updatedAt: new Date().toISOString() })
       await loadCredentials()
     } catch (error) {
       if (seq === settingsSeq) set({ settingsError: message(error), hasSettingsDocument: false })
@@ -439,7 +441,7 @@ export function createMcpController(hosts: McpHosts, options: McpControllerOptio
     try {
       const host = await hosts.inspect()
       if (seq !== hostSeq) return
-      set({ host, hostError: '' })
+      set({ host, hostError: '', updatedAt: new Date().toISOString() })
     } catch (error) {
       if (seq === hostSeq) set({ hostError: message(error) })
       return

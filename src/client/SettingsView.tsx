@@ -66,11 +66,6 @@ export function SettingsView({
 
   return (
     <div className="dsh_market_page dsh_market_settingsPage">
-      <div className="dsh_market_settingsIntro">
-        <h3 className="dsh_market_settingsTitle">{t('settings.title')}</h3>
-        <p className="dsh_market_settingsDesc">{t('settings.subtitle')}</p>
-      </div>
-
       {saveState.status === 'error' && <p className="dsh_market_status" data-error="true" role="alert">{saveState.message}</p>}
       {!updateSettings && <p className="dsh_market_status">{t('settings.unavailable')}</p>}
 

@@ -16,6 +16,7 @@ import type { BatchUninstaller } from './batchUninstall.ts'
 import { BatchUninstallPanel } from './BatchUninstallPanel.tsx'
 import type { IgnoredUpdateRule, IgnoredUpdatesMap } from './updateIgnore.ts'
 import type { SkillsSessionSource } from './skillsSubscription.ts'
+import { buildRefreshTooltip, formatVersionTag } from './refreshTooltip.ts'
 /**
  * The shared Marketplace surface, with Plugins and Skills pages.
  *
@@ -204,6 +205,7 @@ export interface HeaderRefreshAction {
   readonly label: string
   readonly busy: boolean
   readonly disabled: boolean
+  readonly tooltip?: string
   readonly onClick: () => void
 }
 
@@ -265,6 +267,7 @@ function useInstalled({ t, active, listInstalled, subscribeInstalledChanges, set
   action: InstalledActionState
   feedback: InstalledFeedback
   count: number
+  refreshedAt: string
   reload: () => void
   refresh: () => void
   toggle: (item: MarketInstalledPackage) => void
@@ -273,6 +276,7 @@ function useInstalled({ t, active, listInstalled, subscribeInstalledChanges, set
   cancelUninstall: () => void
 } {
   const [state, setState] = useState<InstalledState>({ status: 'loading' })
+  const [refreshedAt, setRefreshedAt] = useState('')
   const [action, setAction] = useState<InstalledActionState>({ status: 'idle' })
   const [feedback, setFeedback] = useState<InstalledFeedback>({ status: 'none' })
   const mounted = useRef(true)
@@ -293,18 +297,23 @@ function useInstalled({ t, active, listInstalled, subscribeInstalledChanges, set
   // it too, retiring any read that has not yet returned.
   const readSeq = useRef(0)
 
+  const applyReady = useCallback((result: MarketInstalledResult): void => {
+    setState({ status: 'ready', result })
+    if (result.error === '') setRefreshedAt(new Date().toISOString())
+  }, [])
+
   const load = useCallback((): void => {
     if (!active) return
     const seq = (readSeq.current += 1)
     setState(previous => (previous.status === 'ready' ? previous : { status: 'loading' }))
     void listInstalled().then((result) => {
       if (!mounted.current || seq !== readSeq.current) return
-      setState({ status: 'ready', result })
+      applyReady(result)
     }, (error: unknown) => {
       if (!mounted.current || seq !== readSeq.current) return
       setState({ status: 'error', message: error instanceof Error ? error.message : String(error) })
     })
-  }, [active, listInstalled])
+  }, [active, listInstalled, applyReady])
 
   useEffect(() => { load() }, [load])
   useEffect(() => {
@@ -322,7 +331,7 @@ function useInstalled({ t, active, listInstalled, subscribeInstalledChanges, set
       // This verb's own list is the fresh one; retire any read still in flight.
       readSeq.current += 1
       setAction({ status: 'idle' })
-      setState({ status: 'ready', result })
+      applyReady(result)
       if (result.restartRequired) setFeedback({ status: 'notice', message: t('installed.restartRequired') })
     }, (error: unknown) => {
       if (!mounted.current) return
@@ -355,7 +364,7 @@ function useInstalled({ t, active, listInstalled, subscribeInstalledChanges, set
               { name: item.packageName, faults },
             )
       setFeedback({ status: 'notice', message })
-      setState({ status: 'ready', result })
+      applyReady(result)
       onPackageUninstalled?.(item.packageName)
     }, (error: unknown) => {
       if (!mounted.current) return
@@ -383,7 +392,7 @@ function useInstalled({ t, active, listInstalled, subscribeInstalledChanges, set
   }, [load])
 
   const count = state.status === 'ready' && state.result.error === '' ? state.result.packages.length : 0
-  return { state, action, feedback, count, reload, refresh: load, toggle, uninstall, requestUninstall, cancelUninstall }
+  return { state, action, feedback, count, refreshedAt, reload, refresh: load, toggle, uninstall, requestUninstall, cancelUninstall }
 }
 
 function useElapsedSeconds(active: boolean): number {
@@ -1493,6 +1502,29 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
       ? officialState?.status === 'loading'
       : installed.state.status === 'loading'
   const refreshLabel = refreshBusy ? t('refreshing') : t('refresh')
+  const dshTag = formatVersionTag(dshVersion)
+  const refreshTooltip = officialSelected
+    ? buildRefreshTooltip(t, {
+      source: t('refresh.source.official'),
+      version: dshVersion,
+      timestamp: officialState?.updatedAt,
+      timestampKind: 'read',
+    })
+    : installedSelected
+      ? buildRefreshTooltip(t, {
+        source: snapshot.profile ? t('refresh.source.installed', { profile: snapshot.profile }) : t('refresh.source.installedFallback'),
+        extra: dshTag !== '' ? `DSH ${dshTag}` : undefined,
+        timestamp: installed.refreshedAt,
+        timestampKind: 'read',
+      })
+      : catalog !== null
+        ? buildRefreshTooltip(t, {
+          source: t('refresh.source.catalog'),
+          version: catalog.feedVersion,
+          timestamp: catalog.publishedAt || catalog.fetchedAt,
+          timestampKind: 'updated',
+        })
+        : undefined
   const triggerRefresh = () => {
     if (enabled) load(true)
     if (officialSelected) {
@@ -1514,9 +1546,10 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
       label: refreshLabel,
       busy: refreshBusy,
       disabled: refreshDisabled,
+      tooltip: refreshTooltip,
       onClick: () => triggerRefreshRef.current(),
     } : null)
-  }, [onRegisterRefresh, canRefresh, refreshLabel, refreshBusy, refreshDisabled])
+  }, [onRegisterRefresh, canRefresh, refreshLabel, refreshBusy, refreshDisabled, refreshTooltip])
   useEffect(() => () => { onRegisterRefresh?.(null) }, [onRegisterRefresh])
 
   if (!snapshot.settingsReady) {
@@ -1597,18 +1630,20 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
         </div>
       )}
         {!onRegisterRefresh && canRefresh && (
-          <button
-            type="button"
-            className="dsh_market_headerAction dsh_market_refreshMarket"
-            disabled={refreshDisabled}
-            aria-busy={refreshBusy}
-            onClick={triggerRefresh}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M20 4v6h-6M20 10a8 8 0 1 0-1.7 7" />
-            </svg>
-            {refreshLabel}
-          </button>
+          <Tooltip label={refreshTooltip ?? ''} side="top" align="end" portal maxWidth={360} disabled={!refreshTooltip}>
+            <button
+              type="button"
+              className="dsh_market_headerAction dsh_market_refreshMarket"
+              disabled={refreshDisabled}
+              aria-busy={refreshBusy}
+              onClick={triggerRefresh}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M20 4v6h-6M20 10a8 8 0 1 0-1.7 7" />
+              </svg>
+              {refreshLabel}
+            </button>
+          </Tooltip>
         )}
 
       <div className="dsh_market_filterBar">
@@ -1958,7 +1993,7 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
         </ul>
       )}
 
-      {catalog !== null && !installedSelected && (
+      {catalog !== null && !installedSelected && !officialSelected && (
         <p className="dsh_market_note">
           {t('snapshot', { date: catalog.fetchedAt.slice(0, 10), scanned: String(catalog.scanned) })}
           {' · '}
@@ -2065,30 +2100,42 @@ export function MarketSection({
     refreshHandlers.current[target] = action.onClick
     setRefreshByPage(prev => {
       const current = prev[target]
-      if (current && current.label === action.label && current.busy === action.busy && current.disabled === action.disabled) {
+      if (
+        current
+        && current.label === action.label
+        && current.busy === action.busy
+        && current.disabled === action.disabled
+        && current.tooltip === action.tooltip
+      ) {
         return prev
       }
-      return { ...prev, [target]: { label: action.label, busy: action.busy, disabled: action.disabled } }
+      return {
+        ...prev,
+        [target]: {
+          label: action.label,
+          busy: action.busy,
+          disabled: action.disabled,
+          ...(action.tooltip !== undefined ? { tooltip: action.tooltip } : {}),
+        },
+      }
     })
   }, [])
   const onRegisterPluginsRefresh = useCallback((action: HeaderRefreshAction | null) => registerRefresh('plugins', action), [registerRefresh])
   const onRegisterSkillsRefresh = useCallback((action: HeaderRefreshAction | null) => registerRefresh('skills', action), [registerRefresh])
   const onRegisterMcpRefresh = useCallback((action: HeaderRefreshAction | null) => registerRefresh('mcp', action), [registerRefresh])
-  const [mcpToolbar, setMcpToolbar] = useState<Pick<McpToolbarActions, 'canOpenDocument' | 'openingDocument' | 'canAdd'> | null>(null)
-  const mcpToolbarHandlers = useRef<{ onOpenDocument?: () => void; onAdd?: () => void }>({})
+  const [mcpToolbar, setMcpToolbar] = useState<Pick<McpToolbarActions, 'canAdd'> | null>(null)
+  const mcpToolbarHandlers = useRef<{ onAdd?: () => void }>({})
   const onRegisterMcpToolbar = useCallback((actions: McpToolbarActions | null) => {
     if (actions === null) {
       mcpToolbarHandlers.current = {}
       setMcpToolbar(null)
       return
     }
-    mcpToolbarHandlers.current = { onOpenDocument: actions.onOpenDocument, onAdd: actions.onAdd }
+    mcpToolbarHandlers.current = { onAdd: actions.onAdd }
     setMcpToolbar(prev => (
-      prev && prev.canOpenDocument === actions.canOpenDocument
-        && prev.openingDocument === actions.openingDocument
-        && prev.canAdd === actions.canAdd
+      prev && prev.canAdd === actions.canAdd
         ? prev
-        : { canOpenDocument: actions.canOpenDocument, openingDocument: actions.openingDocument, canAdd: actions.canAdd }
+        : { canAdd: actions.canAdd }
     ))
   }, [])
   const activeRefresh = page === 'settings' ? undefined : refreshByPage[page]
@@ -2324,20 +2371,6 @@ export function MarketSection({
               {t('update.to', { version: selfUpdateVersion })}
             </MarketButton>
           )}
-          {activeRefresh && page !== 'settings' && (
-            <button
-              type="button"
-              className="dsh_market_headerAction"
-              disabled={activeRefresh.disabled}
-              aria-busy={activeRefresh.busy}
-              onClick={() => refreshHandlers.current[page]?.()}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M20 4v6h-6M20 10a8 8 0 1 0-1.7 7" />
-              </svg>
-              {activeRefresh.label}
-            </button>
-          )}
           <a
             className="dsh_market_headerAction"
             href={STAR_REPOSITORY_URL}
@@ -2412,22 +2445,25 @@ export function MarketSection({
           </button>
         ))}
       </div>
-      {((page === 'plugins' && directInstaller !== undefined)
-        || (page === 'mcp' && mcpToolbar && (mcpToolbar.canOpenDocument || mcpToolbar.canAdd))
+      {page !== 'settings' && (Boolean(activeRefresh)
+        || (page === 'plugins' && directInstaller !== undefined)
+        || (page === 'mcp' && Boolean(mcpToolbar?.canAdd))
         || (snapshot.settingsReady && snapshot.value.aiAssistantEnabled)) && (
         <div className="dsh_market_tabToolbarActions">
-          {page === 'mcp' && mcpToolbar?.canOpenDocument && (
-            <MarketButton
-              intent="secondary"
-              title={t('mcp.openDocument.hint')}
-              disabled={mcpToolbar.openingDocument}
-              onClick={() => mcpToolbarHandlers.current.onOpenDocument?.()}
-              icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" />
-              </svg>}
-            >
-              {t('mcp.openDocument')}
-            </MarketButton>
+          {activeRefresh && (
+            <Tooltip label={activeRefresh.tooltip ?? ''} side="top" align="end" portal maxWidth={360} disabled={!activeRefresh.tooltip}>
+              <MarketButton
+                intent="secondary"
+                disabled={activeRefresh.disabled}
+                aria-busy={activeRefresh.busy}
+                onClick={() => refreshHandlers.current[page]?.()}
+                icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M20 4v6h-6M20 10a8 8 0 1 0-1.7 7" />
+                </svg>}
+              >
+                {activeRefresh.label}
+              </MarketButton>
+            </Tooltip>
           )}
           {snapshot.settingsReady && snapshot.value.aiAssistantEnabled && (
             <MarketButton
@@ -2535,6 +2571,7 @@ export function MarketSection({
             pickProjectDir={directoryBrowser ? () => directoryBrowser.pick(tabsId) : undefined}
             canOpenFolder={canOpenFolder}
             openFolder={openFolder}
+            pluginVersion={snapshot.version}
             onRegisterRefresh={onRegisterSkillsRefresh}
             onAskAiInstall={askAiInstallSkill}
             aiInstallBusy={aiDraftBusy}
@@ -2554,6 +2591,7 @@ export function MarketSection({
           <McpView
             t={t}
             controller={mcp}
+            pluginVersion={snapshot.version}
             onBrowsePlugins={() => { setPage('plugins') }}
             onRegisterRefresh={onRegisterMcpRefresh}
             onRegisterToolbarActions={onRegisterMcpToolbar}

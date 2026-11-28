@@ -166,8 +166,6 @@ export declare const zh: {
     readonly 'ai.pickPrompt': "/market-pro 请先了解我当前已安装的插件、技能和 MCP，然后根据我的需求从插件市场Pro里筛选并推荐最合适的插件与安装方案。我想解决的问题是：";
     readonly 'ai.pickSkillsPrompt': "/market-pro 请先盘点我当前可用的技能，然后根据我的需求从精选技能中筛选、对比并在我确认后安全安装最合适的技能。我想解决的问题是：";
     readonly 'ai.pickMcpPrompt': "/market-pro 请先盘点我当前已配置的 MCP 服务器，然后根据我的需求从精选 MCP 中筛选、对比并在我确认后安全安装最合适的 MCP 服务器。我想解决的问题是：";
-    readonly 'settings.title': "市场设置";
-    readonly 'settings.subtitle': "修改后立即生效。";
     readonly 'settings.unavailable': "当前环境不支持在此修改，请在配置文件中调整。";
     readonly 'settings.saveFailed': "保存失败：{reason}";
     readonly 'settings.ai.title': "AI 选型助手（插件 · 技能 · MCP）";
@@ -187,6 +185,16 @@ export declare const zh: {
     readonly 'featured.summary': "{count} 个编辑精选插件";
     readonly refresh: "刷新";
     readonly refreshing: "刷新中…";
+    readonly 'refresh.source.catalog': "社区插件目录";
+    readonly 'refresh.source.official': "本机 DSH 宿主";
+    readonly 'refresh.source.installed': "本机配置（{profile}）";
+    readonly 'refresh.source.installedFallback': "本机已安装插件";
+    readonly 'refresh.source.skillsFeatured': "内置精选技能";
+    readonly 'refresh.source.skillsLocal': "本机技能";
+    readonly 'refresh.source.mcpFeatured': "内置精选 MCP";
+    readonly 'refresh.source.mcpLocal': "本机 MCP 配置";
+    readonly 'refresh.updatedAt': "更新于 {time}";
+    readonly 'refresh.readAt': "读取于 {time}";
     readonly loading: "正在加载插件…";
     readonly 'loading.title': "正在加载插件目录";
     readonly 'loading.settingsTitle': "正在准备插件市场";
@@ -451,7 +459,7 @@ export declare const zh: {
     readonly "mcp.title": "MCP 服务器";
     readonly "mcp.refresh": "刷新";
     readonly "mcp.add": "添加 MCP";
-    readonly "mcp.summary": "{servers} 台服务器 · 已连接 {connected} · {tools} 个工具";
+    readonly "mcp.summary": "共 {servers} 个 MCP 服务 · 已连接 {connected} 个 · 共 {tools} 个工具";
     readonly "mcp.search": "搜索名称、命令或工具";
     readonly "mcp.filter.aria": "按状态筛选";
     readonly "mcp.filter.all": "全部";

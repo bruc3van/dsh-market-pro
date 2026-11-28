@@ -20,6 +20,7 @@ import type { McpToolGroup, McpUnmanagedServer } from '../contract.ts'
 import { isMcpStarting } from '../mcpShapes.ts'
 import type { MarketLocale } from './copy.ts'
 import type { HeaderRefreshAction } from './MarketSection.tsx'
+import { buildRefreshTooltip } from './refreshTooltip.ts'
 import { staticKey, type McpAdoptNote, type McpController, type McpProbeState, type McpSnapshot } from './mcpController.ts'
 import {
   deleteMcpDescription, getMcpDescription, getMcpDescriptions, saveMcpDescription, subscribeMcpDescriptions,
@@ -121,9 +122,6 @@ type McpModalState =
 
 /** MCP-owned actions hoisted into the shared tab toolbar alongside the AI assistant button. */
 export interface McpToolbarActions {
-  readonly canOpenDocument: boolean
-  readonly openingDocument: boolean
-  readonly onOpenDocument: () => void
   readonly canAdd: boolean
   readonly onAdd: () => void
 }
@@ -345,9 +343,10 @@ type EditorStatus =
   | { readonly status: 'confirm-discard'; readonly previous: EditorIdleSubmitState }
 
 /** The MCP page. */
-export function McpView({ t, controller, onBrowsePlugins, onRegisterRefresh, onRegisterToolbarActions }: {
+export function McpView({ t, controller, pluginVersion, onBrowsePlugins, onRegisterRefresh, onRegisterToolbarActions }: {
   t: MarketLocale
   controller: McpController
+  pluginVersion?: string
   onBrowsePlugins?: () => void
   onRegisterRefresh?: (action: HeaderRefreshAction | null) => void
   onRegisterToolbarActions?: (actions: McpToolbarActions | null) => void
@@ -441,8 +440,6 @@ export function McpView({ t, controller, onBrowsePlugins, onRegisterRefresh, onR
     setDocumentState(failure === '' ? { status: 'idle' } : { status: 'error', message: failure })
   }
 
-  const openDocumentRef = useRef(openDocument)
-  openDocumentRef.current = openDocument
   const openEditModal = (row: McpRow) => {
     const current = controller.getSnapshot()
     const latest = current.rows.find(item => item.name === row.name)
@@ -455,13 +452,10 @@ export function McpView({ t, controller, onBrowsePlugins, onRegisterRefresh, onR
   useEffect(() => {
     if (!onRegisterToolbarActions) return
     onRegisterToolbarActions({
-      canOpenDocument,
-      openingDocument,
-      onOpenDocument: () => { void openDocumentRef.current() },
       canAdd: writable,
       onAdd: () => openAddModalRef.current(),
     })
-  }, [onRegisterToolbarActions, canOpenDocument, openingDocument, writable])
+  }, [onRegisterToolbarActions, writable])
   useEffect(() => () => { onRegisterToolbarActions?.(null) }, [onRegisterToolbarActions])
 
   const openProbe = (name: string) => {
@@ -469,7 +463,7 @@ export function McpView({ t, controller, onBrowsePlugins, onRegisterRefresh, onR
     void controller.probe(name)
   }
 
-  const showInlineToolbarActions = !onRegisterToolbarActions && (canOpenDocument || writable)
+  const showInlineToolbarActions = !onRegisterToolbarActions && writable
   const hasFeaturedFilterNotice = subTab === 'featured'
     && (featuredQuery.trim() !== '' || featuredCategory !== 'all' || featuredRuntime !== 'all')
     && featuredItems.length > 0
@@ -480,31 +474,46 @@ export function McpView({ t, controller, onBrowsePlugins, onRegisterRefresh, onR
   refreshRef.current = refresh
   const refreshBusy = loading || refreshing
   const refreshLabel = refreshBusy ? t('refreshing') : t('mcp.refresh')
+  const refreshTooltip = buildRefreshTooltip(t, subTab === 'featured'
+    ? {
+      source: t('refresh.source.mcpFeatured'),
+      version: pluginVersion,
+      timestamp: snapshot.updatedAt,
+      timestampKind: 'read',
+    }
+    : {
+      source: t('refresh.source.mcpLocal'),
+      timestamp: snapshot.updatedAt,
+      timestampKind: 'read',
+    })
   useEffect(() => {
     if (!onRegisterRefresh) return
     onRegisterRefresh({
       label: refreshLabel,
       busy: refreshBusy,
       disabled: refreshBusy,
+      tooltip: refreshTooltip,
       onClick: () => { void refreshRef.current() },
     })
-  }, [onRegisterRefresh, refreshLabel, refreshBusy])
+  }, [onRegisterRefresh, refreshLabel, refreshBusy, refreshTooltip])
   useEffect(() => () => { onRegisterRefresh?.(null) }, [onRegisterRefresh])
 
   return (
     <div className="dsh_market_page dsh_market_fixedPage">
       <div className="dsh_market_controls">
         {!onRegisterRefresh && (
-          <button
-            className="dsh_market_headerAction dsh_market_refreshMarket"
-            type="button"
-            disabled={refreshBusy}
-            aria-busy={refreshBusy}
-            onClick={() => { void refresh() }}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 4v6h-6M20 10a8 8 0 1 0-1.7 7" /></svg>
-            {refreshLabel}
-          </button>
+          <Tooltip label={refreshTooltip ?? ''} side="top" align="end" portal maxWidth={360} disabled={!refreshTooltip}>
+            <button
+              className="dsh_market_headerAction dsh_market_refreshMarket"
+              type="button"
+              disabled={refreshBusy}
+              aria-busy={refreshBusy}
+              onClick={() => { void refresh() }}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 4v6h-6M20 10a8 8 0 1 0-1.7 7" /></svg>
+              {refreshLabel}
+            </button>
+          </Tooltip>
         )}
         <div className="dsh_market_filterBar">
           <div className="dsh_market_scope" role="group" aria-label={t('mcp.subtab.aria')}>
@@ -614,19 +623,28 @@ export function McpView({ t, controller, onBrowsePlugins, onRegisterRefresh, onR
               </p>
             )}
             {showConfiguredSummary && (
-              <p className="dsh_market_meta">{t('mcp.summary', {
-                servers: String(counts.servers), connected: String(counts.connected), tools: String(totalTools),
-              })}</p>
-            )}
-            {showInlineToolbarActions && (
-              <div className="dsh_market_headingActions">
+              <div className="dsh_market_mcpSummaryInfo">
+                <p className="dsh_market_meta">{t('mcp.summary', {
+                  servers: String(counts.servers), connected: String(counts.connected), tools: String(totalTools),
+                })}</p>
                 {canOpenDocument && (
-                  <button className="dsh_market_headerAction" type="button" title={t('mcp.openDocument.hint')} disabled={documentState.status === 'opening'}
-                    onClick={() => { void openDocument() }}>
-                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" /></svg>
+                  <button
+                    type="button"
+                    className="dsh_market_mcpOpenDocLink"
+                    title={t('mcp.openDocument.hint')}
+                    disabled={openingDocument}
+                    onClick={() => { void openDocument() }}
+                  >
+                    <svg width="13" height="13" viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" />
+                    </svg>
                     {t('mcp.openDocument')}
                   </button>
                 )}
+              </div>
+            )}
+            {showInlineToolbarActions && (
+              <div className="dsh_market_headingActions">
                 {writable && (
                   <MarketButton intent="primary" className="dsh_market_mcpAdd" onClick={() => setModal({ kind: 'editor', row: null })}>
                     {t('mcp.add')}

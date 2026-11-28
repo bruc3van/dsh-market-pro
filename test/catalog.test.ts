@@ -146,11 +146,13 @@ test('deriveMarket carries the source counts from the envelope', () => {
   assert.equal(fallback.scanned, 1)
 })
 
-test('deriveMarket carries the feed publish stamp when the envelope has one', () => {
-  const stamped = market([entry()], { published_at: '2026-11-25T06:16:40Z' })
+test('deriveMarket carries the feed publish stamp and version when the envelope has them', () => {
+  const stamped = market([entry()], { published_at: '2026-11-25T06:16:40Z', feed_version: '0.20261125.3' })
   assert.equal(stamped.publishedAt, '2026-11-25T06:16:40Z')
+  assert.equal(stamped.feedVersion, '0.20261125.3')
   const unstamped = market([entry()])
   assert.equal(unstamped.publishedAt, undefined, 'feeds that predate the stamp parse without it')
+  assert.equal(unstamped.feedVersion, undefined, 'feeds without feed_version parse without it')
 })
 
 test('deriveMarket reduces an unsafe default_branch to main (M2)', () => {
@@ -1697,7 +1699,7 @@ function compactV4Feed(overrides: Record<string, unknown> = {}) {
 }
 
 test('parseSelectionMeta and selectionMetaUrlOf handle live envelope shape, bounds, and URL mapping', () => {
-  assert.equal(CATALOG_FORMAT, 11)
+  assert.equal(CATALOG_FORMAT, 12)
   assert.equal(TARBALL_SELECTION_META_PATH, 'package/data/plugin-selection-meta.json')
   assert.equal(selectionMetaUrlOf(DEFAULT_CATALOG_BASE), 'https://cdn.jsdelivr.net/npm/awesome-dsh-plugin-feed@latest/data/plugin-selection-meta.json')
   assert.equal(selectionMetaUrlOf(MIRROR_CATALOG_BASE), 'https://unpkg.com/awesome-dsh-plugin-feed@latest/data/plugin-selection-meta.json')

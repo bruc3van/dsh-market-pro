@@ -33,6 +33,7 @@ import {
 import { watchSkills, type SkillsSessionSource } from './skillsSubscription.ts'
 import type { MarketLocale } from './copy.ts'
 import type { HeaderRefreshAction } from './MarketSection.tsx'
+import { buildRefreshTooltip } from './refreshTooltip.ts'
 import { matchesSkill } from './rows.ts'
 
 export const NO_SESSION = 'no-session'
@@ -128,6 +129,7 @@ export function SkillsView({
   canOpenFolder,
   openFolder,
   project = false,
+  pluginVersion,
   onRegisterRefresh,
   onAskAiInstall,
   aiInstallBusy = false,
@@ -135,6 +137,7 @@ export function SkillsView({
 }: SkillsActions & {
   t: MarketLocale
   project?: boolean
+  pluginVersion?: string
   installFeaturedSkill?: (request: InstallFeaturedSkillRequest, signal?: AbortSignal) => Promise<InstallFeaturedSkillResult>
   pickProjectDir?: () => Promise<string | null>
   onRegisterRefresh?: (action: HeaderRefreshAction | null) => void
@@ -151,6 +154,7 @@ export function SkillsView({
   const [featuredOrigin, setFeaturedOrigin] = useState<FeaturedSkillOriginFilter>('all')
   const [selectedFeatured, setSelectedFeatured] = useState<FeaturedSkill | null>(null)
   const [state, setState] = useState<SkillsState>({ status: 'loading' })
+  const [refreshedAt, setRefreshedAt] = useState('')
   const [query, setQuery] = useState('')
   const [origin, setOrigin] = useState<Origin | 'all'>('all')
   const [refresh, setRefresh] = useState(0)
@@ -176,7 +180,10 @@ export function SkillsView({
       setActionError('')
       setState({ status: 'loading' })
     },
-    result: result => setState({ status: 'ready', result }),
+    result: result => {
+      setState({ status: 'ready', result })
+      if (result.error === '') setRefreshedAt(new Date().toISOString())
+    },
     error: error => {
       const raw = error instanceof Error ? error.message : String(error)
       setState({ status: 'error', message: raw === '' ? 'unknown error' : raw })
@@ -271,6 +278,19 @@ export function SkillsView({
     }
   }
 
+  const showFeatured = !project && subTab === 'featured'
+  const refreshTooltip = buildRefreshTooltip(t, showFeatured
+    ? {
+      source: t('refresh.source.skillsFeatured'),
+      version: pluginVersion,
+      timestamp: refreshedAt,
+      timestampKind: 'read',
+    }
+    : {
+      source: t('refresh.source.skillsLocal'),
+      timestamp: refreshedAt,
+      timestampKind: 'read',
+    })
   const retryRef = useRef(retry)
   retryRef.current = retry
   const refreshLabel = busy ? t('refreshing') : t('skills.refresh')
@@ -281,27 +301,28 @@ export function SkillsView({
       label: refreshLabel,
       busy,
       disabled: busy,
+      tooltip: refreshTooltip,
       onClick: () => retryRef.current(),
     } : null)
-  }, [onRegisterRefresh, showHeaderRefresh, refreshLabel, busy])
+  }, [onRegisterRefresh, showHeaderRefresh, refreshLabel, busy, refreshTooltip])
   useEffect(() => () => { onRegisterRefresh?.(null) }, [onRegisterRefresh])
 
   const refreshButton = showHeaderRefresh ? (
-    <button
-      className={project ? 'dsh_market_headerAction' : 'dsh_market_headerAction dsh_market_refreshMarket'}
-      type="button"
-      disabled={busy}
-      aria-busy={busy}
-      onClick={retry}
-    >
-      <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M20 4v6h-6M20 10a8 8 0 1 0-1.7 7" />
-      </svg>
-      {refreshLabel}
-    </button>
+    <Tooltip label={refreshTooltip ?? ''} side="top" align="end" portal maxWidth={360} disabled={!refreshTooltip}>
+      <button
+        className={project ? 'dsh_market_headerAction' : 'dsh_market_headerAction dsh_market_refreshMarket'}
+        type="button"
+        disabled={busy}
+        aria-busy={busy}
+        onClick={retry}
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M20 4v6h-6M20 10a8 8 0 1 0-1.7 7" />
+        </svg>
+        {refreshLabel}
+      </button>
+    </Tooltip>
   ) : null
-
-  const showFeatured = !project && subTab === 'featured'
 
   return (
     <div className={project ? 'dsh_market_projectSkills' : 'dsh_market_page dsh_market_fixedPage'}>

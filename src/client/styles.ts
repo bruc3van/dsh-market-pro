@@ -1610,6 +1610,27 @@ button.dsh_market_dangerButton { color: var(--dsw-alias-state-error-primary); }
 .dsh_market_mcpSummaryBar {
   display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 12px;
 }
+.dsh_market_mcpSummaryInfo {
+  display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px 10px;
+}
+.dsh_market_mcpOpenDocLink {
+  display: inline-flex; align-items: center; gap: 3px;
+  padding: 0; border: 0; background: transparent;
+  color: var(--dsw-alias-state-business-primary);
+  font: inherit; font-size: 12px; line-height: 18px; cursor: pointer;
+}
+.dsh_market_mcpOpenDocLink svg {
+  display: block; width: 13px; height: 13px; flex: none;
+  fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round;
+}
+@media (hover: hover) {
+  .dsh_market_mcpOpenDocLink:hover:not(:disabled) { text-decoration: underline; text-underline-offset: 3px; }
+}
+.dsh_market_mcpOpenDocLink:disabled { opacity: .4; cursor: not-allowed; }
+.dsh_market_mcpOpenDocLink:focus-visible {
+  outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  outline-offset: 2px; border-radius: var(--dsw-radius-xs);
+}
 .dsh_market_mcpSummaryBar .dsh_market_headingActions { margin-left: auto; }
 .dsh_market_mcpCard .dsh_market_cardError, .dsh_market_mcpCard .dsh_market_cardNotice,
 .dsh_market_mcpEditor .dsh_market_cardError, .dsh_market_mcpEditor .dsh_market_cardNotice {
@@ -1966,14 +1987,12 @@ button.dsh_market_dangerButton { color: var(--dsw-alias-state-error-primary); }
 
 /* Settings page: host settings rows aligned with the section column. */
 .dsh_market_settingsPage { gap: 0; padding-bottom: 24px; }
-.dsh_market_settingsIntro { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
-.dsh_market_settingsTitle { margin: 0; font-size: 14px; font-weight: 500; line-height: 22px; color: var(--dsw-alias-label-primary); }
-.dsh_market_settingsDesc { margin: 0; font-size: 13px; line-height: 20px; color: var(--dsw-alias-label-secondary); }
 /* One host settings row: title and description beside the control, a hairline below. */
 .dsh_market_settingRow {
   display: flex; flex-direction: column; gap: 12px; padding: 16px 0;
   border-bottom: 0.5px solid var(--dsw-alias-border-l2);
 }
+.dsh_market_settingRow:first-child { padding-top: 4px; }
 .dsh_market_settingRow:last-child { border-bottom: none; }
 .dsh_market_settingHead { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .dsh_market_settingCopy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; padding-right: 48px; }

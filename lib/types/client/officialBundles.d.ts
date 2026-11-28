@@ -107,6 +107,7 @@ export interface OfficialBundlesState {
     readonly confirmingUninstall: string | null;
     readonly notice: OfficialBundlesNotice | null;
     readonly error: string;
+    readonly updatedAt?: string;
 }
 export interface OfficialBundlesController {
     getSnapshot(): OfficialBundlesState;

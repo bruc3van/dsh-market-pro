@@ -51,6 +51,13 @@ export interface TelemetryStoragePort {
     readonly telemetryLastPingKind?: string
   }): void
   readonly ready?: Promise<void>
+  /**
+   * Whether the backing store can persist `telemetryId` across restarts.
+   * Defaults to `true` when omitted. When `false` (e.g. `memory-only` fallback
+   * after a storage-domain open failure), telemetry refuses to mint an
+   * ephemeral UUID or send events so installs are never double-counted.
+   */
+  readonly isDurable?: () => boolean
 }
 
 export interface TelemetryOptions {
@@ -208,6 +215,7 @@ export function createTelemetryReporter(options: TelemetryOptions): TelemetryRep
   const canSend = (): boolean =>
     !disposed
     && !(options.disposeSignal?.aborted ?? false)
+    && (options.storage.isDurable?.() ?? true)
     && !isTelemetryEnvSuppressed(env)
     && options.isEnabled()
 

@@ -148,6 +148,7 @@ export interface HeaderRefreshAction {
     readonly label: string;
     readonly busy: boolean;
     readonly disabled: boolean;
+    readonly tooltip?: string;
     readonly onClick: () => void;
 }
 /** The Marketplace section. */

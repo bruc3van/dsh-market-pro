@@ -15,6 +15,7 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { en, zh, type SafeMarketLocaleKey } from '../src/client/locales.ts'
 import { adoptStyles, cssText, STYLE_ID } from '../src/client/styles.ts'
+import { buildRefreshTooltip, formatRefreshTimestamp, formatVersionTag, joinRefreshTooltip } from '../src/client/refreshTooltip.ts'
 import {
   INSTALLED_FILTER,
   SELF_CARD_KEY,
@@ -812,4 +813,49 @@ test('stateOf distinguishes incompatible-version and other non-running hostError
     bundleEnabled: false,
     hostError: { code: 'unsupported-platform' },
   }), 'disabled')
+})
+
+test('refreshTooltip helpers normalize versions, timestamps, and middle-dot labels', () => {
+  assert.equal(formatVersionTag('0.20261128.4'), 'v0.20261128.4')
+  assert.equal(formatVersionTag('V1.21.1'), 'v1.21.1')
+  assert.equal(formatVersionTag('  '), '')
+  assert.equal(formatVersionTag(undefined), '')
+
+  assert.equal(formatRefreshTimestamp('2026-11-28'), '2026-11-28')
+  assert.equal(formatRefreshTimestamp('invalid-date'), '')
+  assert.equal(formatRefreshTimestamp(''), '')
+  const expectedLocal = (() => {
+    const d = new Date('2026-11-28T10:02:28.547Z')
+    const p = (n: number) => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+  })()
+  assert.equal(formatRefreshTimestamp('2026-11-28T10:02:28.547Z'), expectedLocal)
+
+  assert.equal(joinRefreshTooltip(['社区插件目录 v0.20261128.4', '', undefined, '更新于 2026-11-28 18:02']), '社区插件目录 v0.20261128.4 · 更新于 2026-11-28 18:02')
+  assert.equal(joinRefreshTooltip(['', '  ', null]), undefined)
+
+  const t = (key: SafeMarketLocaleKey, vars?: Record<string, string>) => {
+    let text = zh[key]
+    for (const [k, v] of Object.entries(vars ?? {})) text = text.replaceAll(`{${k}}`, v)
+    return text
+  }
+  assert.equal(
+    buildRefreshTooltip(t, {
+      source: t('refresh.source.catalog'),
+      version: '0.20261128.4',
+      timestamp: '2026-11-28T10:02:28.547Z',
+      timestampKind: 'updated',
+    }),
+    `社区插件目录 v0.20261128.4 · 更新于 ${expectedLocal}`,
+  )
+  assert.equal(
+    buildRefreshTooltip(t, {
+      source: t('refresh.source.installed', { profile: 'web' }),
+      extra: 'DSH v0.2.2-rc.5',
+      timestamp: 'invalid',
+      timestampKind: 'read',
+    }),
+    '本机配置（web） · DSH v0.2.2-rc.5',
+  )
+  assert.equal(buildRefreshTooltip(t, { source: '' }), undefined)
 })

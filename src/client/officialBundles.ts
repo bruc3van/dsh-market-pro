@@ -215,6 +215,7 @@ export interface OfficialBundlesState {
   readonly confirmingUninstall: string | null
   readonly notice: OfficialBundlesNotice | null
   readonly error: string
+  readonly updatedAt?: string
 }
 
 const INITIAL_STATE: OfficialBundlesState = {
@@ -299,7 +300,7 @@ export function createOfficialBundlesController(options: {
             continue
           }
           const filtered = orderOfficialBundles(reply.value.filter(isListedOfficialBundle))
-          publish({ status: 'ready', bundles: filtered, error: '' })
+          publish({ status: 'ready', bundles: filtered, error: '', updatedAt: new Date().toISOString() })
         } catch (error) {
           if (disposed || gen !== generation) return
           publish({ status: 'error', error: errorMessage(error) })

@@ -102,6 +102,8 @@ export interface MarketCatalog {
      * one crawl snapshot still order correctly when mirrors are compared.
      */
     readonly publishedAt?: string;
+    /** Version of the feed package (`feed_version` in the catalog envelope), when declared. */
+    readonly feedVersion?: string;
     /** When this Host last read the snapshot. */
     readonly refreshedAt: string;
     /** How many repositories the crawl saw, before curation and the top cut. */
@@ -688,6 +690,7 @@ export declare const marketCatalogSchema: z.ZodReadonly<z.ZodObject<{
     }, z.core.$strip>>>;
     fetchedAt: z.ZodString;
     publishedAt: z.ZodOptional<z.ZodString>;
+    feedVersion: z.ZodOptional<z.ZodString>;
     refreshedAt: z.ZodString;
     scanned: z.ZodNumber;
 }, z.core.$strip>>;
@@ -879,6 +882,7 @@ export declare const marketCatalogResultSchema: z.ZodReadonly<z.ZodObject<{
         }, z.core.$strip>>>;
         fetchedAt: z.ZodString;
         publishedAt: z.ZodOptional<z.ZodString>;
+        feedVersion: z.ZodOptional<z.ZodString>;
         refreshedAt: z.ZodString;
         scanned: z.ZodNumber;
     }, z.core.$strip>>, z.ZodNull]>;

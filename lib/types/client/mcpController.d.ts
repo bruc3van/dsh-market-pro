@@ -161,6 +161,8 @@ export interface McpSnapshot {
     readonly staticToggles: Readonly<Record<string, McpStaticToggle>> | null;
     /** Managed row name → what moving it from a static row did, until the page reloads. */
     readonly adopted: Readonly<Record<string, McpAdoptNote>>;
+    /** ISO timestamp of the latest successful host/settings read. */
+    readonly updatedAt?: string;
 }
 /**
  * The outcome of one adoption, as its managed card reports it.

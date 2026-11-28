@@ -20,9 +20,10 @@ export interface SkillAiInstallFeedback {
     readonly status: 'error' | 'needs-workspace';
     readonly message: string;
 }
-export declare function SkillsView({ t, listSkills, skillsSession, installFeaturedSkill, deleteInstalledSkill, pickProjectDir, canOpenFolder, openFolder, project, onRegisterRefresh, onAskAiInstall, aiInstallBusy, aiInstallFeedback, }: SkillsActions & {
+export declare function SkillsView({ t, listSkills, skillsSession, installFeaturedSkill, deleteInstalledSkill, pickProjectDir, canOpenFolder, openFolder, project, pluginVersion, onRegisterRefresh, onAskAiInstall, aiInstallBusy, aiInstallFeedback, }: SkillsActions & {
     t: MarketLocale;
     project?: boolean;
+    pluginVersion?: string;
     installFeaturedSkill?: (request: InstallFeaturedSkillRequest, signal?: AbortSignal) => Promise<InstallFeaturedSkillResult>;
     pickProjectDir?: () => Promise<string | null>;
     onRegisterRefresh?: (action: HeaderRefreshAction | null) => void;

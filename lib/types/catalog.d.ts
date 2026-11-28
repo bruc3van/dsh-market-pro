@@ -21,8 +21,9 @@ export declare const TARBALL_SELECTION_META_PATH = "package/data/plugin-selectio
  * 9 — `publishedAt`, the feed's own publish stamp used for cross-mirror freshness comparison.
  * 10 — DSH runtime compatibility target selection (`dshEngine`, `compatFallback`) hydrated across subscription and repository cards.
  * 11 — `plugin-selection-meta.json` sidecar keywords and weak-description Chinese summary hydration.
+ * 12 — `feedVersion`, the feed package version carried in the catalog envelope.
  */
-export declare const CATALOG_FORMAT = 11;
+export declare const CATALOG_FORMAT = 12;
 /** Where a parsed catalog survives a restart. */
 export interface CatalogCache {
     read: () => {
