@@ -52,7 +52,7 @@ import { FEATURED_CATEGORY, PACKAGE_NAME, SUBSCRIPTION_CATEGORY, isSafeVersion }
 import type { MarketLocale } from './copy.ts'
 import { catalogIndexForInstalled, hasRemainingTargets, ownedBy, ownedIndexOf, shortName } from './owned.ts'
 import {
-  INSTALLED_FILTER, OFFICIAL_EXPERIMENTAL_FILTER, SELF_CARD_KEY, allCatalogMatchCount, featuredRows, installedReviewCardKey, marketKey, marketRows, matches, pageOf, sortMarketRows, starCount, stateOf, type MarketSort,
+  INSTALLED_FILTER, OFFICIAL_EXPERIMENTAL_FILTER, SELF_CARD_KEY, allCatalogMatchCount, featuredRows, installedReviewCardKey, isCompatibleCatalogItem, marketKey, marketRows, matches, pageOf, sortMarketRows, starCount, stateOf, type MarketSort,
 } from './rows.ts'
 import { SkillsView } from './SkillsView.tsx'
 import type { FeaturedSkill } from '../skillsFeatured.ts'
@@ -1284,6 +1284,7 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
   const [installedFilter, setInstalledFilter] = useState<'all' | 'updatable' | 'ignored'>('all')
   const [officialFilter, setOfficialFilter] = useState<'all' | 'enabled' | 'disabled'>('all')
   const [filterCategory, setFilterCategory] = useState('')
+  const [compatibleOnly, setCompatibleOnly] = useState(false)
   const [sort, setSort] = useState<MarketSort>('active')
   const [page, setPage] = useState(0)
   const resultsRef = useRef<HTMLDivElement>(null)
@@ -1439,20 +1440,38 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
     ? catalog.featured?.categories ?? []
     : catalog?.categories.filter(entry => entry.key !== FEATURED_CATEGORY && entry.key !== SUBSCRIPTION_CATEGORY) ?? []
   const scope = filterCategories.some(entry => entry.key === filterCategory) ? filterCategory : ''
+  const dshVersion = snapshot.dshVersion?.trim() || undefined
+  const compatFilterActive = compatibleOnly && dshVersion !== undefined
+  const compatibleCategoryCounts = useMemo(() => {
+    const counts = new Map<string, number>()
+    if (!compatFilterActive || catalog === null) return counts
+    const source = featuredSelected
+      ? (catalog.featured?.entries.map(entry => entry.item) ?? [])
+      : catalog.items
+    for (const item of source) {
+      if (!isCompatibleCatalogItem(item, dshVersion)) continue
+      counts.set(item.category, (counts.get(item.category) ?? 0) + 1)
+    }
+    return counts
+  }, [compatFilterActive, catalog, featuredSelected, dshVersion])
   const shown = useMemo<readonly { item: MarketPlugin; reason?: string }[]>(() => catalog === null || installedSelected || officialSelected
     ? []
     : featuredSelected
-      ? featuredRows(catalog.featured, needle, english, scope)
+      ? featuredRows(catalog.featured, needle, english, scope, { compatibleOnly: compatFilterActive, dshVersion })
       : sortMarketRows(
-        marketRows(catalog.items, catalog.featured, needle).filter(item => matches(item, needle, scope, english)),
+        marketRows(catalog.items, catalog.featured, needle).filter(item =>
+          matches(item, needle, scope, english) && (!compatFilterActive || isCompatibleCatalogItem(item, dshVersion))),
         sort,
         catalog.fetchedAt,
-      ).map(item => ({ item })), [catalog, installedSelected, officialSelected, featuredSelected, needle, english, scope, sort])
+      ).map(item => ({ item })), [catalog, installedSelected, officialSelected, featuredSelected, needle, english, scope, sort, compatFilterActive, dshVersion])
   const allMatchCount = useMemo(() => {
     if (catalog === null || installedSelected || officialSelected || shown.length > 0) return 0
     if (!featuredSelected && scope === '') return 0
-    return allCatalogMatchCount(catalog.items, catalog.featured, needle, english)
-  }, [catalog, installedSelected, officialSelected, shown.length, featuredSelected, scope, needle, english])
+    return allCatalogMatchCount(catalog.items, catalog.featured, needle, english, {
+      compatibleOnly: compatFilterActive,
+      dshVersion,
+    })
+  }, [catalog, installedSelected, officialSelected, shown.length, featuredSelected, scope, needle, english, compatFilterActive, dshVersion])
   const paged = pageOf(shown, page)
   useLayoutEffect(() => {
     scrollResultsToTop('instant')
@@ -1460,7 +1479,7 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
   useEffect(() => {
     setPage(0)
     scrollResultsToTop()
-  }, [catalog, category, filterCategory, sort, query, english])
+  }, [catalog, category, filterCategory, compatFilterActive, sort, query, english])
 
   const canRefresh = snapshot.settingsReady && (enabled || installedSelected || officialSelected)
   const refreshBusy = enabled
@@ -1537,6 +1556,7 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
   const clearFilters = (): void => {
     setQuery('')
     setFilterCategory('')
+    setCompatibleOnly(false)
   }
 
   const switchToAll = (focusSearch = false, clearQuery = false): void => {
@@ -1555,7 +1575,7 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
     setCategory(FEATURED_CATEGORY)
   }
 
-  const hasFilters = query.trim() !== '' || scope !== ''
+  const hasFilters = query.trim() !== '' || scope !== '' || compatFilterActive
 
   return (
     <div className="dsh_market_page dsh_market_fixedPage">
@@ -1680,7 +1700,27 @@ function PluginsPage({ t, english, snapshot, loadCatalog, peekCatalog, listInsta
             {!installedSelected && !officialSelected && filterCategories.length > 0 && <MarketSelector
               value={scope} onChange={setFilterCategory} label={t('filter.category')} className="dsh_market_category"
               options={[{ value: '', label: t('filter.allCategories') }, ...filterCategories
-                .map(entry => ({ value: entry.key, label: english ? entry.en : entry.zh, count: entry.count }))]} />}
+                .map(entry => ({
+                  value: entry.key,
+                  label: english ? entry.en : entry.zh,
+                  count: compatFilterActive ? (compatibleCategoryCounts.get(entry.key) ?? 0) : entry.count,
+                }))]} />}
+            {!installedSelected && !officialSelected && catalog !== null && dshVersion !== undefined && (
+              <Tooltip label={t('filter.compatibleOnlyHint', { version: dshVersion })} side="top" portal maxWidth={260}>
+                <button
+                  type="button"
+                  className="dsh_market_compatToggle"
+                  aria-pressed={compatibleOnly}
+                  onClick={() => setCompatibleOnly(current => !current)}
+                >
+                  <svg className="dsh_market_compatToggleIcon" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M12 3 4 6.5v5.2c0 4.6 3.4 8.8 8 9.8 4.6-1 8-5.2 8-9.8V6.5L12 3Z" />
+                    <path d="m9 12.2 2.1 2.1 4-4.2" />
+                  </svg>
+                  {t('filter.compatibleOnly')}
+                </button>
+              </Tooltip>
+            )}
             {allSelected && catalog !== null && <MarketSelector
               value={sort} onChange={setSort} label={t('filter.sort')} className="dsh_market_sort"
               options={[

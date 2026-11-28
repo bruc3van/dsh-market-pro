@@ -9,6 +9,21 @@
  * it lives here and the section imports it.
  */
 import type { MarketFeatured, MarketFeaturedEntry, MarketInstalledPackage, MarketPlugin, MarketSkill } from '../contract.ts'
+import { catalogItemCompatibility } from './compatCopy.ts'
+
+/** Optional host-compatibility filter passed to catalog row helpers. */
+export interface MarketCompatFilterOptions {
+  readonly compatibleOnly?: boolean
+  readonly dshVersion?: string
+}
+
+/**
+ * Whether a catalog plugin has at least one target compatible with `dshVersion`
+ * (or carries no DSH engine constraints / no known Host version).
+ */
+export function isCompatibleCatalogItem(item: Pick<MarketPlugin, 'installInfo'>, dshVersion: string | undefined): boolean {
+  return catalogItemCompatibility(item, dshVersion) === undefined
+}
 
 /**
  * The category chip that selects the installed set instead of a catalog
@@ -147,10 +162,18 @@ export function matches(item: MarketPlugin, query: string, category: string, eng
  * Picks surviving the query and optional subscription category, in published
  * order. Legacy editorial reasons remain searchable alongside row fields.
  */
-export function featuredRows(featured: MarketFeatured | undefined, query: string, english: boolean, category = ''): readonly MarketFeaturedEntry[] {
+export function featuredRows(
+  featured: MarketFeatured | undefined,
+  query: string,
+  english: boolean,
+  category = '',
+  compat: MarketCompatFilterOptions = {},
+): readonly MarketFeaturedEntry[] {
   if (featured === undefined) return []
+  const filterCompat = compat.compatibleOnly === true && Boolean(compat.dshVersion)
   return featured.entries.filter(entry =>
-    matches({ ...entry.item, description: `${entry.item.description} ${entry.reason}` }, query, category, english))
+    matches({ ...entry.item, description: `${entry.item.description} ${entry.reason}` }, query, category, english)
+    && (!filterCompat || isCompatibleCatalogItem(entry.item, compat.dshVersion)))
 }
 
 /**
@@ -174,12 +197,17 @@ export function allCatalogMatchCount(
   featured: MarketFeatured | undefined,
   query: string,
   english: boolean,
+  compat: MarketCompatFilterOptions = {},
 ): number {
   const rows = marketRows(items, featured, query)
-  if (query === '') return rows.length
+  const filterCompat = compat.compatibleOnly === true && Boolean(compat.dshVersion)
+  if (query === '' && !filterCompat) return rows.length
   let count = 0
   for (const item of rows) {
-    if (matches(item, query, '', english)) count += 1
+    if ((query === '' || matches(item, query, '', english))
+      && (!filterCompat || isCompatibleCatalogItem(item, compat.dshVersion))) {
+      count += 1
+    }
   }
   return count
 }

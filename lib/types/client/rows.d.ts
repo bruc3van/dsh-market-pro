@@ -9,6 +9,16 @@
  * it lives here and the section imports it.
  */
 import type { MarketFeatured, MarketFeaturedEntry, MarketInstalledPackage, MarketPlugin, MarketSkill } from '../contract.ts';
+/** Optional host-compatibility filter passed to catalog row helpers. */
+export interface MarketCompatFilterOptions {
+    readonly compatibleOnly?: boolean;
+    readonly dshVersion?: string;
+}
+/**
+ * Whether a catalog plugin has at least one target compatible with `dshVersion`
+ * (or carries no DSH engine constraints / no known Host version).
+ */
+export declare function isCompatibleCatalogItem(item: Pick<MarketPlugin, 'installInfo'>, dshVersion: string | undefined): boolean;
 /**
  * The category chip that selects the installed set instead of a catalog
  * category. The catalog's own keys are slugs from the shortlist, so a value
@@ -35,7 +45,7 @@ export declare function matches(item: MarketPlugin, query: string, category: str
  * Picks surviving the query and optional subscription category, in published
  * order. Legacy editorial reasons remain searchable alongside row fields.
  */
-export declare function featuredRows(featured: MarketFeatured | undefined, query: string, english: boolean, category?: string): readonly MarketFeaturedEntry[];
+export declare function featuredRows(featured: MarketFeatured | undefined, query: string, english: boolean, category?: string, compat?: MarketCompatFilterOptions): readonly MarketFeaturedEntry[];
 /**
  * The rows the All view filters. A pick the shortlist does not carry is still
  * something the legacy market can install, so a search reaches it too.
@@ -47,7 +57,7 @@ export declare function marketRows(items: readonly MarketPlugin[], featured: Mar
  * categories, so narrowed scopes can tell the user whether widening to All
  * will yield results.
  */
-export declare function allCatalogMatchCount(items: readonly MarketPlugin[], featured: MarketFeatured | undefined, query: string, english: boolean): number;
+export declare function allCatalogMatchCount(items: readonly MarketPlugin[], featured: MarketFeatured | undefined, query: string, english: boolean, compat?: MarketCompatFilterOptions): number;
 /**
  * How a row can be installed, from the same two sources the install button
  * reads: the publisher's `install_status` when the feed carries one (schema 3),

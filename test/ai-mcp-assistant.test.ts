@@ -247,8 +247,8 @@ test('dsh_mcp_pro read actions discover curated MCPs, mask secrets, support CJK/
     matched: number
     items: { id: string; configured?: { name: string; source: string } }[]
   }
-  assert.equal(listed.totalCurated, 100)
-  assert.equal(listed.matched, 100)
+  assert.equal(listed.totalCurated, 200)
+  assert.equal(listed.matched, 200)
   assert.equal(listed.items.length, DEFAULT_AI_MCP_LIST_LIMIT, 'omitting limit on list_featured defaults to a bounded page')
   assert.deepEqual(listed.items.find(item => item.id === 'playwright')?.configured, {
     name: 'playwright',
@@ -266,7 +266,7 @@ test('dsh_mcp_pro read actions discover curated MCPs, mask secrets, support CJK/
   const fullListed = JSON.parse(await tool.execute({ action: 'list_featured', limit: MAX_AI_MCP_LIMIT, lang: 'en' })) as {
     items: { id: string }[]
   }
-  assert.equal(fullListed.items.length, 100)
+  assert.equal(fullListed.items.length, 200)
 
   // Omitting limit on search_featured defaults to DEFAULT_AI_MCP_SEARCH_LIMIT.
   const broadSearch = JSON.parse(await tool.execute({
@@ -297,6 +297,30 @@ test('dsh_mcp_pro read actions discover curated MCPs, mask secrets, support CJK/
   })) as { items: { id: string }[] }
   assert.ok(chartsBatch.items.some(item => item.id === 'antv-chart'))
   assert.ok(chartsBatch.items.some(item => item.id === 'next-ai-drawio'))
+
+  // High-frequency Chinese scene keywords rank curated matches cleanly via scoreFeaturedMcp.
+  const zhPaint = JSON.parse(await tool.execute({
+    action: 'search_featured', queries: ['AI绘画', '生图'], lang: 'zh',
+  })) as { items: { id: string }[] }
+  assert.ok(zhPaint.items.some(item => item.id === 'comfyui'))
+
+  const zhPdf = JSON.parse(await tool.execute({
+    action: 'search_featured', queries: ['PDF解析', 'PDF转Markdown'], lang: 'zh',
+  })) as { items: { id: string }[] }
+  assert.ok(zhPdf.items.some(item => item.id === 'mineru'))
+  assert.ok(zhPdf.items.some(item => item.id === 'docling'))
+
+  const zhMemory = JSON.parse(await tool.execute({
+    action: 'search_featured', queries: ['长期记忆', '跨会话记忆'], lang: 'zh',
+  })) as { items: { id: string }[] }
+  assert.ok(zhMemory.items.some(item => item.id === 'honcho'))
+  assert.ok(zhMemory.items.some(item => item.id === 'memory'))
+
+  const zhToken = JSON.parse(await tool.execute({
+    action: 'search_featured', queries: ['省Token'], lang: 'zh',
+  })) as { items: { id: string }[] }
+  assert.ok(zhToken.items.some(item => item.id === 'token-optimizer'))
+
   await assert.rejects(() => tool.execute({
     action: 'search_featured', queries: ['chart', 'diagram', '图表', 'mermaid', 'visualization', 'drawio', '绘图'],
   }), /queries:.*<=6/)

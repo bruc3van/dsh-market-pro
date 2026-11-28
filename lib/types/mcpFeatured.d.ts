@@ -43,6 +43,7 @@ export interface FeaturedMcpServer {
     readonly category: FeaturedMcpCategory;
     readonly descriptionZh: string;
     readonly descriptionEn: string;
+    readonly keywords?: readonly string[];
     readonly transport: 'stdio' | 'streamable-http';
     readonly command?: string;
     readonly args?: readonly string[];

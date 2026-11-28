@@ -113,6 +113,7 @@ export function featuredMcpSearchTexts(featured: FeaturedMcpServer | undefined, 
     featured.repo ?? '',
     featured.descriptionZh,
     featured.descriptionEn,
+    ...(featured.keywords ?? []),
     categoryLabel,
   ]
 }

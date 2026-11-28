@@ -51,7 +51,7 @@ export const MAX_AI_MCP_QUERIES = 6
 export const MAX_AI_MCP_DETAILS = 6
 export const DEFAULT_AI_MCP_SEARCH_LIMIT = 12
 export const DEFAULT_AI_MCP_LIST_LIMIT = 25
-export const MAX_AI_MCP_LIMIT = 100
+export const MAX_AI_MCP_LIMIT = 200
 
 /** Wrap model-facing MCP discovery/result output in an unforgeable untrusted-data boundary. */
 export function wrapUntrustedMcpData(payload: string): string {
@@ -229,6 +229,7 @@ function scoreFeaturedMcp(item: FeaturedMcpServer, queries: readonly string[]): 
   const publisher = item.publisher.toLowerCase()
   const descZh = item.descriptionZh.toLowerCase()
   const descEn = item.descriptionEn.toLowerCase()
+  const keywords = (item.keywords ?? []).join(' ').toLowerCase()
   const target = featuredTargetPreview(item).toLowerCase()
   let best = 0
   for (const raw of queries) {
@@ -237,6 +238,7 @@ function scoreFeaturedMcp(item: FeaturedMcpServer, queries: readonly string[]): 
     let score = 0
     if (id === q || title === q) score += 120
     else if (id.includes(q) || title.includes(q)) score += 60
+    if (keywords.includes(q)) score += 45
     if (publisher.includes(q)) score += 25
     if (target.includes(q)) score += 35
     if (descZh.includes(q) || descEn.includes(q)) score += 30
@@ -244,7 +246,7 @@ function scoreFeaturedMcp(item: FeaturedMcpServer, queries: readonly string[]): 
       const tokens = tokenizeQuery(q)
       for (const token of tokens) {
         if (id.includes(token) || title.includes(token)) score += 24
-        else if (target.includes(token) || publisher.includes(token)) score += 14
+        else if (keywords.includes(token) || target.includes(token) || publisher.includes(token)) score += 16
         else if (descZh.includes(token) || descEn.includes(token)) score += 10
       }
     }

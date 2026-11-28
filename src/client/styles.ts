@@ -830,7 +830,8 @@ export const cssText = `
 .dsh_market_search.dsh_market_filterSearch,
 .dsh_market_search.dsh_market_skillSearch,
 .dsh_market_category .dsh_market_modeTrigger,
-.dsh_market_sort .dsh_market_modeTrigger { height: 36px; }
+.dsh_market_sort .dsh_market_modeTrigger,
+.dsh_market_compatToggle { height: 36px; }
 .dsh_market_scope {
   /* The host SegmentedControl's track: hover-fill track, 4px inset, R12 outside, R8 segments. */
   display: inline-flex; flex: none; gap: 2px; padding: 4px; border-radius: var(--dsw-radius-md);
@@ -856,6 +857,35 @@ export const cssText = `
 }
 .dsh_market_category .dsh_market_modeTrigger { width: 180px; }
 .dsh_market_sort .dsh_market_modeTrigger { min-width: 112px; max-width: 170px; }
+.dsh_market_compatToggle {
+  box-sizing: border-box; display: inline-flex; flex: none; align-items: center; gap: 6px;
+  height: 36px; padding: 0 12px; border: 0; border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-bg-module-platform); color: var(--dsw-alias-label-secondary);
+  font: inherit; font-size: 13px; line-height: 20px; font-weight: 500; white-space: nowrap; cursor: pointer;
+}
+@media (hover: hover) {
+  .dsh_market_compatToggle:hover {
+    background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary);
+  }
+}
+.dsh_market_compatToggle:focus-visible {
+  outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary)); outline-offset: 2px;
+}
+.dsh_market_compatToggle[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 12%, var(--dsw-alias-bg-module-platform));
+  color: var(--dsw-alias-state-business-primary);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--dsw-alias-state-business-primary) 38%, transparent);
+}
+@media (hover: hover) {
+  .dsh_market_compatToggle[aria-pressed="true"]:hover {
+    background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 18%, var(--dsw-alias-bg-module-platform));
+    color: var(--dsw-alias-state-business-primary);
+  }
+}
+.dsh_market_compatToggleIcon {
+  flex: none; width: 14px; height: 14px; fill: none; stroke: currentColor;
+  stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round;
+}
 .dsh_market_selectLabel { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dsh_market_optionRow { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; }
 .dsh_market_optionLabel { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
@@ -2124,6 +2154,7 @@ button.dsh_market_dangerButton { color: var(--dsw-alias-state-error-primary); }
   .dsh_market_sort { flex: 1 1 0; min-width: 0; }
   .dsh_market_category .dsh_market_modeTrigger,
   .dsh_market_sort .dsh_market_modeTrigger { width: 100%; min-width: 0; max-width: none; padding: 0 12px; }
+  .dsh_market_compatToggle { flex: 0 0 auto; }
   .dsh_market_batchUpdateButton,
   .dsh_market_batchUninstallButton { flex: 1 1 auto; }
   .dsh_market_scroll { scrollbar-gutter: auto; padding-right: 0; }
@@ -2410,6 +2441,7 @@ button.dsh_market_dangerButton { color: var(--dsw-alias-state-error-primary); }
   .dsh_market_search.dsh_market_skillSearch,
   .dsh_market_category .dsh_market_modeTrigger,
   .dsh_market_sort .dsh_market_modeTrigger,
+  .dsh_market_compatToggle,
   .dsh_market_dirCreateForm .dsh_market_search { height: 38px; }
   .dsh_market_dirRow { min-height: 42px; }
   .dsh_market_scopeButton { height: 32px; }

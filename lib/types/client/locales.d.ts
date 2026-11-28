@@ -242,6 +242,8 @@ export declare const zh: {
     readonly 'filter.sort.active': "活跃热门";
     readonly 'filter.sort.stars': "Star 最多";
     readonly 'filter.sort.updated': "最近更新";
+    readonly 'filter.compatibleOnly': "仅看兼容";
+    readonly 'filter.compatibleOnlyHint': "隐藏与当前 DSH v{version} 不兼容的插件";
     readonly 'filter.results': "找到 {shown} 个插件";
     readonly 'filter.clear': "清除筛选";
     readonly 'pagination.label': "插件列表分页";

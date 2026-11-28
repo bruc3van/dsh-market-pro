@@ -10,6 +10,7 @@ import {
   FEATURED_MCP_SERVERS,
   draftFromFeatured,
   featuredForServer,
+  featuredMcpSearchTexts,
   featuredRuntimeBadge,
   featuredTargetPreview,
   findInstalledFeatured,
@@ -51,6 +52,11 @@ test('curated catalog invariants: valid unique ids, identity keys, transports, l
     assert.ok(item.publisher.trim() !== '')
     assert.ok(item.descriptionZh.trim() !== '')
     assert.ok(item.descriptionEn.trim() !== '')
+    assert.ok(Array.isArray(item.keywords) && item.keywords.length >= 2, `missing keywords on ${item.id}`)
+    for (const kw of item.keywords) {
+      assert.equal(typeof kw, 'string')
+      assert.ok(kw.trim() !== '', `empty keyword on ${item.id}`)
+    }
     assert.match(item.icon ?? '', /^https:\/\//)
     assert.match(item.homepage, /^https:\/\//)
 
@@ -299,6 +305,53 @@ test('matchesFeaturedMcp filters by category and Chinese/English/package queries
   assert.equal(matchesFeaturedMcp(byId('arxiv'), '论文', 'knowledge-research'), true)
   assert.equal(matchesFeaturedMcp(byId('aihot'), '热点', 'knowledge-research'), true)
   assert.equal(matchesFeaturedMcp(byId('basic-memory'), 'Obsidian', 'agents-workflows'), true)
+  assert.equal(matchesFeaturedMcp(byId('neon'), 'Serverless Postgres', 'developer-tools'), true)
+  assert.equal(matchesFeaturedMcp(byId('mineru'), 'MinerU', 'knowledge-research'), true)
+  assert.equal(matchesFeaturedMcp(byId('firefox-devtools'), 'Mozilla', 'web-browser'), true)
+  assert.equal(matchesFeaturedMcp(byId('comfyui'), 'VRAM', 'media-vision'), true)
+  assert.equal(matchesFeaturedMcp(byId('kaneo'), '看板', 'integrations-sharing'), true)
+  assert.equal(matchesFeaturedMcp(byId('screenpipe'), 'OCR', 'utilities'), true)
+  assert.equal(matchesFeaturedMcp(byId('honcho'), '状态', 'agents-workflows'), true)
+
+  // High-frequency Chinese scene keywords and whitespace-separated multi-term queries.
+  const zhSceneChecks: readonly [string, string][] = [
+    ['neon', 'PostgreSQL'],
+    ['postman', '接口测试'],
+    ['netdata', '服务器监控'],
+    ['mineru', 'PDF解析'],
+    ['docling', 'PDF 转 Markdown'],
+    ['word-mcp-live', 'Word编辑'],
+    ['anki', '闪卡'],
+    ['paperbanana', '科研绘图'],
+    ['stockscreen', '股票'],
+    ['jobspy', '找工作'],
+    ['brightdata', '爬虫'],
+    ['comfyui', 'AI绘画'],
+    ['photoshop', 'PS'],
+    ['autoclip', '短视频切片'],
+    ['audio', '音频剪辑'],
+    ['voicemode', '语音对话'],
+    ['pascal-3d', '3D建模'],
+    ['godot', '游戏开发'],
+    ['semiotic', '数据可视化'],
+    ['openbrand', '配色'],
+    ['solidinvoice', '发票'],
+    ['screenpipe', '录屏'],
+    ['everything-search', '文件搜索'],
+    ['computer-use', '桌面控制'],
+    ['google-maps', '地图导航'],
+    ['unifi-network', '路由器'],
+    ['honcho', '长期记忆'],
+    ['token-optimizer', '省Token'],
+    ['grandet', '模型比价'],
+    ['opik', 'LLM评估'],
+    ['concord', '多Agent协作'],
+    ['neon', 'PostgreSQL 数据库'],
+  ]
+  for (const [id, query] of zhSceneChecks) {
+    assert.equal(matchesFeaturedMcp(byId(id), query, 'all'), true, `expected ${id} to match "${query}"`)
+  }
+  assert.equal(featuredMcpSearchTexts(byId('comfyui'), '设计与视觉').includes('AI绘画'), true)
 })
 
 test('expanded curated servers keep secret credentials templated, arg flags intact, and fit within MAX_AI_MCP_LIMIT', () => {
@@ -314,6 +367,44 @@ test('expanded curated servers keep secret credentials templated, arg flags inta
   assert.deepEqual(draftPlaintext(dbhubDraft), [])
   assert.deepEqual(dbhubDraft.env, [{ key: 'DSN', value: '${credential:MCP_DBHUB_DSN}' }])
   assert.equal(JSON.stringify(entryFromDraft(dbhubDraft)).includes('super_secret_pw'), false)
+
+  const netdataDraft = draftFromFeatured(byId('netdata'), {
+    Authorization: 'ndc_secret_token_99999',
+  }, { name: 'netdata', enabled: true })
+  assert.deepEqual(validateDraft(netdataDraft, new Set()), [])
+  assert.deepEqual(draftPlaintext(netdataDraft), [])
+  assert.deepEqual(netdataDraft.headers, [{ key: 'Authorization', value: 'Bearer ${credential:MCP_NETDATA_AUTHORIZATION}' }])
+  assert.equal(JSON.stringify(entryFromDraft(netdataDraft)).includes('ndc_secret_token_99999'), false)
+
+  const obsidianDraft = draftFromFeatured(byId('obsidian'), {
+    OBSIDIAN_API_KEY: 'obs_secret_key_12345',
+  }, { name: 'obsidian', enabled: true })
+  assert.deepEqual(validateDraft(obsidianDraft, new Set()), [])
+  assert.deepEqual(draftPlaintext(obsidianDraft), [])
+  assert.deepEqual(obsidianDraft.env, [
+    { key: 'OBSIDIAN_BASE_URL', value: 'https://127.0.0.1:27124' },
+    { key: 'OBSIDIAN_API_KEY', value: '${credential:MCP_OBSIDIAN_OBSIDIAN_API_KEY}' },
+  ])
+  assert.deepEqual(entryFromDraft(obsidianDraft).env, {
+    OBSIDIAN_BASE_URL: 'https://127.0.0.1:27124',
+    OBSIDIAN_API_KEY: '${credential:MCP_OBSIDIAN_OBSIDIAN_API_KEY}',
+  })
+  assert.equal(JSON.stringify(entryFromDraft(obsidianDraft)).includes('obs_secret_key_12345'), false)
+
+  const obsidianHttpDraft = draftFromFeatured(byId('obsidian'), {
+    OBSIDIAN_API_KEY: 'obs_secret_key_12345',
+    OBSIDIAN_BASE_URL: 'http://127.0.0.1:27123',
+  }, { name: 'obsidian', enabled: true })
+  assert.deepEqual(obsidianHttpDraft.env, [
+    { key: 'OBSIDIAN_BASE_URL', value: 'http://127.0.0.1:27123' },
+    { key: 'OBSIDIAN_API_KEY', value: '${credential:MCP_OBSIDIAN_OBSIDIAN_API_KEY}' },
+  ])
+
+  assert.deepEqual(byId('financetoolkit').args, ['--from', 'financetoolkit[mcp]', 'financetoolkit-mcp'])
+  const mineruTokenDescZh = byId('mineru').inputs[0]?.descriptionZh ?? ''
+  assert.equal(mineruTokenDescZh.includes('本地能力'), false)
+  assert.equal(mineruTokenDescZh.includes('上传'), true)
+  assert.equal(mineruTokenDescZh.includes('云端'), true)
 
   const excelDraft = draftFromFeatured(byId('excel'), { allowDir: '/Users/dev/sheets' }, {
     name: 'excel',
@@ -332,7 +423,13 @@ test('expanded curated servers keep secret credentials templated, arg flags inta
   const scraplingDraft = draftFromFeatured(byId('scrapling'), {}, { name: 'scrapling', enabled: true })
   assert.equal(entryFromDraft(scraplingDraft).startupTimeoutMs, 120_000)
 
-  assert.equal(FEATURED_MCP_SERVERS.length, 100)
+  const doclingDraft = draftFromFeatured(byId('docling'), {}, { name: 'docling', enabled: true })
+  assert.equal(entryFromDraft(doclingDraft).startupTimeoutMs, 120_000)
+
+  const tooluniverseDraft = draftFromFeatured(byId('tooluniverse'), {}, { name: 'tooluniverse', enabled: true })
+  assert.equal(entryFromDraft(tooluniverseDraft).startupTimeoutMs, 120_000)
+
+  assert.equal(FEATURED_MCP_SERVERS.length, 200)
   assert.equal(byId('context7').inputs[0]?.helpUrl, 'https://context7.com/dashboard')
   assert.equal(byId('gitlab').inputs[0]?.helpUrl, 'https://gitlab.com/-/user_settings/personal_access_tokens')
   assert.equal(byId('supabase').inputs[0]?.helpUrl, 'https://supabase.com/dashboard/account/tokens')
@@ -341,6 +438,12 @@ test('expanded curated servers keep secret credentials templated, arg flags inta
   assert.equal(matchesFeaturedRuntime(byId('drawio'), 'http'), true)
   assert.equal(matchesFeaturedRuntime(byId('dbhub'), 'npx'), true)
   assert.equal(matchesFeaturedRuntime(byId('duckdb'), 'uvx'), true)
+  assert.equal(matchesFeaturedRuntime(byId('svelte'), 'no-key'), true)
+  assert.equal(matchesFeaturedRuntime(byId('svelte'), 'http'), true)
+  assert.equal(matchesFeaturedRuntime(byId('mineru'), 'uvx'), true)
+  assert.equal(matchesFeaturedRuntime(byId('mineru'), 'no-key'), true)
+  assert.equal(matchesFeaturedRuntime(byId('obsidian'), 'npx'), true)
+  assert.equal(matchesFeaturedRuntime(byId('obsidian'), 'no-key'), false)
   assert.equal(matchesFeaturedMcp(byId('duckdb'), 'Parquet', 'developer-tools', 'uvx'), true)
   assert.equal(matchesFeaturedMcp(byId('duckdb'), 'Parquet', 'developer-tools', 'npx'), false)
 })

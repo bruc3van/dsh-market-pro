@@ -19,7 +19,7 @@ export declare const MAX_AI_MCP_QUERIES = 6;
 export declare const MAX_AI_MCP_DETAILS = 6;
 export declare const DEFAULT_AI_MCP_SEARCH_LIMIT = 12;
 export declare const DEFAULT_AI_MCP_LIST_LIMIT = 25;
-export declare const MAX_AI_MCP_LIMIT = 100;
+export declare const MAX_AI_MCP_LIMIT = 200;
 /** Wrap model-facing MCP discovery/result output in an unforgeable untrusted-data boundary. */
 export declare function wrapUntrustedMcpData(payload: string): string;
 /** Structural subset of DSH's `ApprovalService`. */

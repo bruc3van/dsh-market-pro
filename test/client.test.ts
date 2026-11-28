@@ -24,6 +24,7 @@ import {
   hasInstallTarget,
   installState,
   installedReviewCardKey,
+  isCompatibleCatalogItem,
   marketRows,
   matches,
   matchesSkill,
@@ -382,6 +383,91 @@ test('allCatalogMatchCount reports how many full-catalog plugins match across ca
   assert.equal(allCatalogMatchCount([notify, calendar], subscriptionPicks, 'tools', true), 1)
   assert.equal(allCatalogMatchCount([notify, calendar], subscriptionPicks, '工具', false), 1)
   assert.equal(allCatalogMatchCount([notify, calendar], subscriptionPicks, 'nonesuch', false), 0)
+})
+
+test('isCompatibleCatalogItem, featuredRows, and allCatalogMatchCount exclude host-incompatible plugins when compatibleOnly is active', () => {
+  const host = '0.2.2-rc.5'
+  const compatible = plugin({
+    fullName: 'a/compat',
+    name: 'compat',
+    description: '兼容插件',
+    installInfo: {
+      mode: 'command',
+      targets: [{ install: 'compat-pkg', profile: 'web', note: '', dshEngine: '>=0.2.2-rc.1 <0.3.0' }],
+      tasks: [],
+      requirements: [],
+    },
+  })
+  const hostTooOld = plugin({
+    fullName: 'b/future',
+    name: 'future',
+    description: '高版本插件',
+    installInfo: {
+      mode: 'command',
+      targets: [{ install: 'future-pkg', profile: 'web', note: '', dshEngine: '>=0.3.0' }],
+      tasks: [],
+      requirements: [],
+    },
+  })
+  const pluginTooOld = plugin({
+    fullName: 'c/legacy',
+    name: 'legacy',
+    description: '旧版插件',
+    installInfo: {
+      mode: 'command',
+      targets: [{ install: 'legacy-pkg', profile: 'web', note: '', dshEngine: '^0.1.0' }],
+      tasks: [],
+      requirements: [],
+    },
+  })
+  const partialMonorepo = plugin({
+    fullName: 'd/monorepo',
+    name: 'monorepo',
+    description: '部分兼容插件',
+    installInfo: {
+      mode: 'command',
+      targets: [
+        { install: 'mono-compat', profile: 'web', note: '', dshEngine: '^0.2.0' },
+        { install: 'mono-future', profile: 'web', note: '', dshEngine: '>=0.3.0' },
+      ],
+      tasks: [],
+      requirements: [],
+    },
+  })
+  const unconstrained = plugin({ fullName: 'e/unconstrained', name: 'unconstrained', description: '无约束插件' })
+
+  assert.equal(isCompatibleCatalogItem(compatible, host), true)
+  assert.equal(isCompatibleCatalogItem(hostTooOld, host), false)
+  assert.equal(isCompatibleCatalogItem(pluginTooOld, host), false)
+  assert.equal(isCompatibleCatalogItem(partialMonorepo, host), true)
+  assert.equal(isCompatibleCatalogItem(unconstrained, host), true)
+  assert.equal(isCompatibleCatalogItem(hostTooOld, undefined), true)
+
+  const picks: MarketFeatured = {
+    titleZh: '编辑精选',
+    titleEn: "Editor's Picks",
+    updatedAt: '',
+    count: 4,
+    categories: [],
+    entries: [
+      { item: compatible, reason: '' },
+      { item: hostTooOld, reason: '' },
+      { item: pluginTooOld, reason: '' },
+      { item: partialMonorepo, reason: '' },
+    ],
+  }
+  assert.equal(featuredRows(picks, '', false).length, 4)
+  assert.deepEqual(
+    featuredRows(picks, '', false, '', { compatibleOnly: true, dshVersion: host }).map(entry => entry.item.fullName),
+    ['a/compat', 'd/monorepo'],
+  )
+
+  const items = [compatible, hostTooOld, pluginTooOld, partialMonorepo, unconstrained]
+  assert.equal(allCatalogMatchCount(items, picks, '', false), 5)
+  assert.equal(allCatalogMatchCount(items, picks, '', false, { compatibleOnly: true, dshVersion: host }), 3)
+  assert.equal(allCatalogMatchCount(items, picks, '插件', false, { compatibleOnly: true, dshVersion: host }), 3)
+  assert.equal(allCatalogMatchCount(items, picks, '高版本', false, { compatibleOnly: true, dshVersion: host }), 0)
+  assert.match(cssText, /\.dsh_market_compatToggle\[aria-pressed="true"\]/)
 })
 
 test('sortMarketRows orders All rows by active heat, stars, or update date', () => {
