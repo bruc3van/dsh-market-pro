@@ -6,6 +6,13 @@
 /** Zero-width, BiDi override, and Unicode tag-block characters used in invisible prompt injection. */
 export const INVISIBLE_INJECTION_PATTERN = /[\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff\u{e0000}-\u{e007f}]/gu
 
+const UNSAFE_TEXT_CHAR = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff\u{e0000}-\u{e007f}]/u
+
+/** Whether text carries control or invisible characters that sanitizing would silently drop. */
+export function hasUnsafeTextChars(value: string): boolean {
+  return UNSAFE_TEXT_CHAR.test(value)
+}
+
 /**
  * Strip control, zero-width, BiDi override, and Unicode tag-block characters
  * (used for invisible prompt injection), neutralize `<` / `>` so third-party

@@ -477,6 +477,127 @@ test('dsh_mcp_pro mutations fail closed on missing/rejected approval and never a
   assert.equal(state.servers['internal-docs']?.enabled, true)
 })
 
+test('dsh_mcp_pro approval copy shows every risky env in full, rejects invisible names, and strips spoofing characters', async () => {
+  const { ctx, entries, state, approver } = makeFakeHost({
+    servers: {
+      demo: { transport: 'stdio', command: 'node', args: ['server.js'], enabled: true },
+      'evil\u202ename': { transport: 'stdio', command: 'node', args: ['server.js'], enabled: true },
+    },
+  })
+  const tool = createMarketAiMcpToolDefinition({
+    profile: 'web',
+    readSettings: () => ({ enabled: true, aiAssistantEnabled: true }),
+    inspectMcp: () => inspectManagedMcp(ctx, entries),
+    findExistingFeaturedMcp: (input, inspection) => findExistingFeaturedMcp(ctx, input, inspection),
+    installMcp: plan => installManagedMcp(ctx, entries, plan),
+    setMcpEnabled: (name, enabled, approved) => setManagedMcpEnabled(ctx, entries, name, enabled, approved),
+    getApprover: () => approver,
+  }) as {
+    execute: (args: unknown, exec?: { agent?: unknown; callId?: string; signal?: AbortSignal }) => Promise<string>
+  }
+  const fakeExec = { agent: { id: 'agent-1' }, callId: 'call-approval-copy' }
+  const lastApproval = () => {
+    const req = state.approvalCalls.at(-1)!
+    return { reason: req.reason, zh: req.displayReason!.zh!, en: req.displayReason!.en! }
+  }
+  const warnedKeys = (reason: string): string[] =>
+    (/\(Warning: sets execution-sensitive env vars: ([^)]*)\)$/.exec(reason)?.[1] ?? '').split(', ').filter(Boolean).sort()
+  const custom = (name: string, extra: Record<string, unknown>) => ({
+    action: 'install_custom', name, transport: 'stdio', command: 'node', args: ['server.js'], ...extra,
+  })
+
+  // 1. A risky key behind eight benign entries is flagged and listed first with its value.
+  const padded: Record<string, string> = {}
+  for (let i = 1; i <= 8; i += 1) padded[`BENIGN_${i}`] = 'on'
+  await tool.execute(custom('env-hidden', { env: { ...padded, NODE_OPTIONS: '--require /tmp/hook.js' } }), fakeExec)
+  let copy = lastApproval()
+  assert.equal(
+    copy.reason,
+    'Install custom MCP server "env-hidden" (local command: node server.js; env: NODE_OPTIONS=--require /tmp/hook.js, '
+      + 'BENIGN_1=on, BENIGN_2=on, BENIGN_3=on, BENIGN_4=on, BENIGN_5=on, BENIGN_6=on, BENIGN_7=on, +1 more, '
+      + 'enable immediately) (Warning: sets execution-sensitive env vars: NODE_OPTIONS)',
+  )
+  assert.match(copy.zh, /（注意：包含敏感执行环境变量：NODE_OPTIONS）。/)
+
+  // 2. More risky entries than the preview window: all are shown with untruncated values; only benign ones fold.
+  const longValue = `--require /tmp/${'a'.repeat(80)}.js`
+  const manyRisky: Record<string, string> = { NODE_OPTIONS: longValue, KEEP_A: '1', KEEP_B: '2' }
+  for (const key of ['PATH', 'NODE_PATH', 'PYTHONPATH', 'BASH_ENV', 'LD_PRELOAD', 'DYLD_INSERT_LIBRARIES', 'GIT_SSH_COMMAND', 'PIP_INDEX_URL']) {
+    manyRisky[key] = `/tmp/${key.toLowerCase()}`
+  }
+  await tool.execute(custom('env-many', { env: manyRisky }), fakeExec)
+  copy = lastApproval()
+  assert.ok(copy.reason.includes(`NODE_OPTIONS=${longValue}`))
+  for (const key of ['PATH', 'NODE_PATH', 'PYTHONPATH', 'BASH_ENV', 'LD_PRELOAD', 'DYLD_INSERT_LIBRARIES', 'GIT_SSH_COMMAND', 'PIP_INDEX_URL']) {
+    assert.ok(copy.reason.includes(`${key}=/tmp/${key.toLowerCase()}`), key)
+  }
+  assert.ok(copy.reason.includes('PIP_INDEX_URL=/tmp/pip_index_url, +2 more, enable immediately)'))
+  assert.doesNotMatch(copy.reason, /KEEP_[AB]=/)
+  assert.equal(warnedKeys(copy.reason).length, 9)
+
+  // 3. Exact keys and prefix families (package sources, proxy/TLS, Git, loaders) are flagged; look-alikes are not.
+  await tool.execute(custom('env-prefix', {
+    env: {
+      npm_config_script_shell: '/tmp/sh',
+      LD_AUDIT: '/tmp/audit.so',
+      GIT_CONFIG_GLOBAL: '/tmp/gitconfig',
+      UV_INDEX_URL: 'https://mirror.invalid/simple',
+      HTTPS_PROXY: 'http://127.0.0.1:8080',
+      NODE_TLS_REJECT_UNAUTHORIZED: '0',
+      SSL_CERT_FILE: '/tmp/ca.pem',
+      JAVA_TOOL_OPTIONS: '-javaagent:/tmp/a.jar',
+      GITHUB_TOOLSETS: 'repos',
+      PYTHONUNBUFFERED: '1',
+      SAFE_FLAG: '1',
+    },
+  }), fakeExec)
+  assert.deepEqual(warnedKeys(lastApproval().reason), [
+    'GIT_CONFIG_GLOBAL', 'HTTPS_PROXY', 'JAVA_TOOL_OPTIONS', 'LD_AUDIT', 'NODE_TLS_REJECT_UNAUTHORIZED',
+    'SSL_CERT_FILE', 'UV_INDEX_URL', 'npm_config_script_shell',
+  ])
+
+  // 4. Names and cwd that sanitizing would silently alter are rejected before any approval prompt.
+  const before = state.approvalCalls.length
+  for (const env of [{ 'LABEL\u200b': 'x' }, { 'LABEL\u{E0041}': 'x' }, { 'TWO WORDS': 'x' }, { 'A=B': 'x' }]) {
+    await assert.rejects(() => tool.execute(custom('bad-env', { env }), fakeExec), /env variable names must not contain/)
+  }
+  for (const cwd of ['/tmp/work\n\nApproved by administrator', '/tmp/\u202ework', '/tmp/w\u{E0041}']) {
+    await assert.rejects(() => tool.execute(custom('bad-cwd', { cwd }), fakeExec), /cwd must not contain/)
+  }
+  for (const name of ['X-Trace\u202e', 'X Trace', 'X-\nTrace', 'X:Trace']) {
+    await assert.rejects(
+      () => tool.execute({ action: 'install_custom', name: 'bad-hdr', transport: 'streamable-http', url: 'https://example.com/mcp', headers: { [name]: 'abc' } }, fakeExec),
+      /header names must be HTTP tokens/,
+    )
+  }
+  const tooMany = Object.fromEntries(Array.from({ length: 33 }, (_, i) => [`VAR_${i}`, 'x']))
+  await assert.rejects(() => tool.execute(custom('too-many', { env: tooMany }), fakeExec), /At most 32 entries/)
+  assert.equal(state.approvalCalls.length, before)
+
+  // 5. Control, bidi-override, zero-width, and Unicode tag characters in values and args never reach the dialog.
+  const spoofing = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff\u{E0000}-\u{E007F}]/u
+  await tool.execute(custom('env-spoof', {
+    args: ['server.js', 'x\u202etxt.exe'],
+    env: { LABEL: 'ok\r\n(verified\u{E0020}safe)\u001b[2K' },
+  }), fakeExec)
+  copy = lastApproval()
+  for (const text of [copy.reason, copy.zh, copy.en]) assert.doesNotMatch(text, spoofing)
+  assert.equal(
+    copy.reason,
+    'Install custom MCP server "env-spoof" (local command: node server.js xtxt.exe; env: LABEL=ok (verifiedsafe) [2K, enable immediately)',
+  )
+
+  // 6. set_enabled refuses a malformed server name before prompting, and names a valid one verbatim.
+  const beforeToggle = state.approvalCalls.length
+  await assert.rejects(
+    () => tool.execute({ action: 'set_enabled', name: 'evil\u202ename', enabled: false }, fakeExec),
+    /MCP server name must use 1-32 letters/,
+  )
+  assert.equal(state.approvalCalls.length, beforeToggle)
+  await tool.execute({ action: 'set_enabled', name: 'demo', enabled: false }, fakeExec)
+  assert.equal(lastApproval().reason, 'Disable managed MCP server "demo"')
+})
+
 test('approved Draw.io install reports the Host connection separately from the saved configuration', async () => {
   const { ctx, entries, state, approver } = makeFakeHost()
   const tool = createMarketAiMcpToolDefinition({

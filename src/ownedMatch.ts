@@ -103,6 +103,7 @@ export function ownedBy(
     const matched = ownedByTarget(index, targets[0]!.install)
     if (matched !== undefined) return matched
   } else if (targets.length > 1) {
+    let repoless: MarketInstalledPackage | undefined
     for (const target of targets) {
       const matched = ownedByTarget(index, target.install)
       if (matched === undefined) continue
@@ -110,8 +111,17 @@ export function ownedBy(
       // manifest points to another repository); do not let that mark this
       // repository card as installed.
       if (itemRepo !== '' && matched.repository !== '' && matched.repository.toLowerCase() !== itemRepo) continue
+      // A package that declares no repository cannot be told apart from a
+      // companion, so it only stands in when none of the card's own packages
+      // is installed — otherwise target order would decide which version the
+      // card (and its update check) reports.
+      if (itemRepo !== '' && matched.repository === '') {
+        repoless ??= matched
+        continue
+      }
       return matched
     }
+    if (repoless !== undefined) return repoless
   }
   // When a card names explicit `#path:` or npm package targets and none of them
   // are installed, never fall back to repo/subRepo/short-name matching — that

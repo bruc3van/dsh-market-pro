@@ -45,6 +45,7 @@ import {
   type FeaturedMcpCategory,
   type FeaturedMcpServer,
 } from './mcpFeatured.ts'
+import { SERVER_NAME_PATTERN } from './mcpShapes.ts'
 
 export const MCP_TOOL_NAME = 'dsh_mcp_pro'
 export const MAX_AI_MCP_QUERIES = 6
@@ -52,6 +53,7 @@ export const MAX_AI_MCP_DETAILS = 6
 export const DEFAULT_AI_MCP_SEARCH_LIMIT = 12
 export const DEFAULT_AI_MCP_LIST_LIMIT = 25
 export const MAX_AI_MCP_LIMIT = 200
+export const MAX_AI_MCP_RECORD_ENTRIES = 32
 
 /** Wrap model-facing MCP discovery/result output in an unforgeable untrusted-data boundary. */
 export function wrapUntrustedMcpData(payload: string): string {
@@ -66,6 +68,9 @@ const READ_ACTIONS = new Set(['list_featured', 'search_featured', 'detail', 'lis
 const MCP_ACTIONS = ['list_featured', 'search_featured', 'detail', 'list_configured', 'install_featured', 'install_custom', 'set_enabled'] as const
 
 const stringRecordSchema = z.record(z.string().min(1).max(120), z.string().max(1000))
+  .refine(record => Object.keys(record).length <= MAX_AI_MCP_RECORD_ENTRIES, {
+    message: `At most ${MAX_AI_MCP_RECORD_ENTRIES} entries are allowed`,
+  })
 
 const mcpToolArgsSchema = z.object({
   action: z.enum(MCP_ACTIONS),
@@ -346,19 +351,52 @@ async function requestMcpApproval(
 
 const HIGH_RISK_ENV_KEYS = new Set([
   'NODE_OPTIONS',
-  'LD_PRELOAD',
-  'LD_LIBRARY_PATH',
-  'DYLD_INSERT_LIBRARIES',
-  'DYLD_LIBRARY_PATH',
+  'NODE_PATH',
+  'NODE_TLS_REJECT_UNAUTHORIZED',
+  'NODE_EXTRA_CA_CERTS',
   'PYTHONPATH',
+  'PYTHONHOME',
   'PYTHONSTARTUP',
   'RUBYOPT',
+  'RUBYLIB',
   'PERL5OPT',
+  'PERL5LIB',
+  'JAVA_TOOL_OPTIONS',
+  '_JAVA_OPTIONS',
+  'JDK_JAVA_OPTIONS',
   'BASH_ENV',
   'ENV',
   'PATH',
+  'PATHEXT',
+  'COMSPEC',
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'ALL_PROXY',
+  'SSL_CERT_FILE',
+  'SSL_CERT_DIR',
+  'REQUESTS_CA_BUNDLE',
+  'CURL_CA_BUNDLE',
+  'SSH_ASKPASS',
 ])
 
+const HIGH_RISK_ENV_PREFIXES = ['LD_', 'DYLD_', 'GIT_', 'NPM_CONFIG_', 'YARN_', 'PIP_', 'UV_']
+
+const APPROVAL_MAP_PREVIEW_LIMIT = 8
+
+function isHighRiskEnvKey(key: string): boolean {
+  const upper = key.trim().toUpperCase()
+  return HIGH_RISK_ENV_KEYS.has(upper) || HIGH_RISK_ENV_PREFIXES.some(prefix => upper.startsWith(prefix))
+}
+
+/** Sanitize Agent-supplied text for approval copy without truncating it. */
+function approvalText(value: string): string {
+  return sanitizeUntrustedText(value, Number.POSITIVE_INFINITY)
+}
+
+/**
+ * Risk is judged over every entry, and every risky entry is shown in full and
+ * first; only benign entries are clipped or folded into "+N more".
+ */
 function formatApprovalMapPreview(record: unknown): {
   readonly summary: string
   readonly riskyKeys: string[]
@@ -369,14 +407,16 @@ function formatApprovalMapPreview(record: unknown): {
   const entries = Object.entries(record as Record<string, unknown>)
     .filter((entry): entry is [string, string] => typeof entry[1] === 'string')
   if (entries.length === 0) return { summary: '', riskyKeys: [] }
-  const riskyKeys: string[] = []
-  const parts = entries.slice(0, 8).map(([key, value]) => {
-    if (HIGH_RISK_ENV_KEYS.has(key.toUpperCase())) riskyKeys.push(key)
-    const compact = value.length > 48 ? `${value.slice(0, 47)}…` : value
-    return `${key}=${compact}`
-  })
-  if (entries.length > 8) parts.push(`+${entries.length - 8} more`)
-  return { summary: parts.join(', '), riskyKeys }
+  const risky = entries.filter(([key]) => isHighRiskEnvKey(key))
+  const benign = entries.filter(([key]) => !isHighRiskEnvKey(key))
+  const shownBenign = benign.slice(0, Math.max(0, APPROVAL_MAP_PREVIEW_LIMIT - risky.length))
+  const parts = [
+    ...risky.map(([key, value]) => `${approvalText(key)}=${approvalText(value)}`),
+    ...shownBenign.map(([key, value]) => `${approvalText(key)}=${sanitizeUntrustedText(value, 48)}`),
+  ]
+  const hidden = benign.length - shownBenign.length
+  if (hidden > 0) parts.push(`+${hidden} more`)
+  return { summary: parts.join(', '), riskyKeys: risky.map(([key]) => approvalText(key)) }
 }
 
 function buildInstallApprovalCopy(plan: ManagedMcpInstallPlan): {
@@ -385,9 +425,11 @@ function buildInstallApprovalCopy(plan: ManagedMcpInstallPlan): {
 } {
   const kindZh = plan.source === 'featured' ? '内置精选 MCP' : '自定义 MCP'
   const kindEn = plan.source === 'featured' ? 'curated MCP' : 'custom MCP'
-  const transportZh = plan.transport === 'stdio' ? `本地命令：${plan.preview}` : `远程端点：${plan.preview}`
-  const transportEn = plan.transport === 'stdio' ? `local command: ${plan.preview}` : `remote endpoint: ${plan.preview}`
-  const cwd = typeof plan.entry.cwd === 'string' ? plan.entry.cwd.trim() : ''
+  const name = approvalText(plan.name)
+  const preview = approvalText(plan.preview)
+  const transportZh = plan.transport === 'stdio' ? `本地命令：${preview}` : `远程端点：${preview}`
+  const transportEn = plan.transport === 'stdio' ? `local command: ${preview}` : `remote endpoint: ${preview}`
+  const cwd = typeof plan.entry.cwd === 'string' ? approvalText(plan.entry.cwd) : ''
   const cwdZh = cwd !== '' ? `；工作目录：${cwd}` : ''
   const cwdEn = cwd !== '' ? `; cwd: ${cwd}` : ''
   const envInfo = plan.transport === 'stdio' ? formatApprovalMapPreview(plan.entry.env) : { summary: '', riskyKeys: [] }
@@ -395,7 +437,7 @@ function buildInstallApprovalCopy(plan: ManagedMcpInstallPlan): {
   const envEn = envInfo.summary !== '' ? `; env: ${envInfo.summary}` : ''
   const headerKeys = plan.transport === 'streamable-http'
     && plan.entry.headers !== null && typeof plan.entry.headers === 'object' && !Array.isArray(plan.entry.headers)
-    ? Object.keys(plan.entry.headers as Record<string, unknown>)
+    ? Object.keys(plan.entry.headers as Record<string, unknown>).map(key => sanitizeUntrustedText(key, 120))
     : []
   const headerZh = headerKeys.length > 0 ? `；请求头：${headerKeys.join(', ')}` : ''
   const headerEn = headerKeys.length > 0 ? `; headers: ${headerKeys.join(', ')}` : ''
@@ -419,10 +461,10 @@ function buildInstallApprovalCopy(plan: ManagedMcpInstallPlan): {
   const stateZh = plan.enabled ? '保存后立即启用' : '以停用状态保存'
   const stateEn = plan.enabled ? 'enable immediately' : 'save disabled'
   return {
-    reason: `Install ${kindEn} server "${plan.name}" (${transportEn}${cwdEn}${envEn}${headerEn}${credEn}, ${stateEn})${riskEn}`,
+    reason: `Install ${kindEn} server "${name}" (${transportEn}${cwdEn}${envEn}${headerEn}${credEn}, ${stateEn})${riskEn}`,
     displayReason: {
-      zh: `允许添加${kindZh}服务器「${plan.name}」（${transportZh}${cwdZh}${envZh}${headerZh}${credZh}，${stateZh}）${riskZh}。更改会写入当前 DSH profile 的 MCP 配置。`,
-      en: `Allow adding ${kindEn} server "${plan.name}" (${transportEn}${cwdEn}${envEn}${headerEn}${credEn}, ${stateEn})${riskEn}. Changes persist in the current DSH profile's MCP settings.`,
+      zh: `允许添加${kindZh}服务器「${name}」（${transportZh}${cwdZh}${envZh}${headerZh}${credZh}，${stateZh}）${riskZh}。更改会写入当前 DSH profile 的 MCP 配置。`,
+      en: `Allow adding ${kindEn} server "${name}" (${transportEn}${cwdEn}${envEn}${headerEn}${credEn}, ${stateEn})${riskEn}. Changes persist in the current DSH profile's MCP settings.`,
     },
   }
 }
@@ -546,6 +588,7 @@ export function createMarketAiMcpToolDefinition(deps: MarketAiMcpToolDeps): Reco
         env: {
           type: 'object',
           additionalProperties: true,
+          maxProperties: MAX_AI_MCP_RECORD_ENTRIES,
           description: 'For install_custom (stdio): string key/value map; secret values must use ${credential:REF}.',
         },
         cwd: {
@@ -559,16 +602,19 @@ export function createMarketAiMcpToolDefinition(deps: MarketAiMcpToolDeps): Reco
         headers: {
           type: 'object',
           additionalProperties: true,
+          maxProperties: MAX_AI_MCP_RECORD_ENTRIES,
           description: 'For install_custom (streamable-http): string key/value headers; secret values must use ${credential:REF}.',
         },
         inputs: {
           type: 'object',
           additionalProperties: true,
+          maxProperties: MAX_AI_MCP_RECORD_ENTRIES,
           description: 'For install_featured: non-secret input values keyed by input.key (e.g. {"dir": "/path"}). Never pass plaintext secrets.',
         },
         credentialRefs: {
           type: 'object',
           additionalProperties: true,
+          maxProperties: MAX_AI_MCP_RECORD_ENTRIES,
           description: 'For install_featured: optional credential reference names keyed by secret input.key (e.g. {"Authorization": "MY_GH_PAT"}).',
         },
         enabled: {
@@ -825,18 +871,22 @@ export function createMarketAiMcpToolDefinition(deps: MarketAiMcpToolDeps): Reco
           // the namespace and (when present) revision are still pinned to approval.
           const approved = { namespace: inspection.managerEntry, revision: inspection.settingsRevision }
           const targetName = args.name!.trim()
+          if (!SERVER_NAME_PATTERN.test(targetName)) {
+            throw new Error('MCP server name must use 1-32 letters, digits, _ or -; nothing was written.')
+          }
           const existing = inspection.managed.find(item => item.name === targetName && item.registeredOnly !== true && item.retained !== true)
           if (existing === undefined) {
             throw new Error(`Managed MCP server "${sanitizeUntrustedText(targetName, 64)}" was not found in Settings.`)
           }
           const nextEnabled = args.enabled!
+          const shownName = approvalText(targetName)
           await requestMcpApproval(
             deps,
             exec,
-            `${nextEnabled ? 'Enable' : 'Disable'} managed MCP server "${targetName}"`,
+            `${nextEnabled ? 'Enable' : 'Disable'} managed MCP server "${shownName}"`,
             {
-              zh: `允许${nextEnabled ? '启用' : '停用'}托管 MCP 服务器「${targetName}」。更改会写入当前 DSH profile 的 MCP 配置。`,
-              en: `Allow ${nextEnabled ? 'enabling' : 'disabling'} managed MCP server "${targetName}". Changes persist in the current DSH profile's MCP settings.`,
+              zh: `允许${nextEnabled ? '启用' : '停用'}托管 MCP 服务器「${shownName}」。更改会写入当前 DSH profile 的 MCP 配置。`,
+              en: `Allow ${nextEnabled ? 'enabling' : 'disabling'} managed MCP server "${shownName}". Changes persist in the current DSH profile's MCP settings.`,
             },
           )
           exec?.signal?.throwIfAborted()

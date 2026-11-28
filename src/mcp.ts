@@ -32,6 +32,7 @@ import {
   maskArg, maskUrl, secretArgIndexes, suggestRef,
 } from './mcpShapes.ts'
 import { classifyInstallError, extractInstallErrorDetail, type InstallErrorHints } from './telemetryError.ts'
+import { hasUnsafeTextChars } from './aiSanitize.ts'
 
 const FIBER_PHASE = ['pending', 'loading', 'active', 'failed', 'disposed', 'unloading'] as const
 
@@ -545,6 +546,9 @@ export interface ManagedMcpInstallResult {
 
 const NEEDS_SHELL_QUOTES = /[\s"']/
 
+/** RFC 9110 `token`: the only characters an HTTP field name may carry. */
+const HTTP_HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/
+
 function formatMaskedCommand(command: string, args: readonly string[]): string {
   const secret = new Set(secretArgIndexes(args))
   return [command, ...args.map((arg, index) => secret.has(index) ? maskArg(arg) : arg)]
@@ -886,7 +890,11 @@ export function buildManagedMcpInstallPlan(
     const args = [...(input.args ?? [])]
     const envEntries = Object.entries(input.env ?? {}).map(([k, v]): [string, string] => [k.trim(), v])
     if (envEntries.some(([k]) => k === '')) throw new Error('env variable names cannot be empty')
+    if (envEntries.some(([k]) => /[\s=]/.test(k) || hasUnsafeTextChars(k))) {
+      throw new Error('env variable names must not contain whitespace, "=", control, or invisible characters')
+    }
     const cwd = (input.cwd ?? '').trim()
+    if (hasUnsafeTextChars(cwd)) throw new Error('cwd must not contain control or invisible characters')
     for (const [value, where] of [
       [command, 'command'],
       ...args.map((arg, index): [string, string] => [arg, `args[${index}]`]),
@@ -938,6 +946,9 @@ export function buildManagedMcpInstallPlan(
   }
   const headerEntries = Object.entries(input.headers ?? {}).map(([k, v]): [string, string] => [k.trim(), v])
   if (headerEntries.some(([k]) => k === '')) throw new Error('header names cannot be empty')
+  if (headerEntries.some(([k]) => !HTTP_HEADER_NAME.test(k))) {
+    throw new Error('header names must be HTTP tokens (letters, digits, and !#$%&\'*+.^_`|~-)')
+  }
   for (const [k, v] of headerEntries) {
     const bad = malformedTemplate(v)
     if (bad !== undefined) throw new Error(`headers.${k} contains a malformed credential template (${bad})`)

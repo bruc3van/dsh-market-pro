@@ -4,6 +4,8 @@
  */
 /** Zero-width, BiDi override, and Unicode tag-block characters used in invisible prompt injection. */
 export declare const INVISIBLE_INJECTION_PATTERN: RegExp;
+/** Whether text carries control or invisible characters that sanitizing would silently drop. */
+export declare function hasUnsafeTextChars(value: string): boolean;
 /**
  * Strip control, zero-width, BiDi override, and Unicode tag-block characters
  * (used for invisible prompt injection), neutralize `<` / `>` so third-party

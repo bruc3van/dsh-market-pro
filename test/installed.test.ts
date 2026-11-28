@@ -1409,6 +1409,27 @@ test('ownedBy matches subdirectory, npm-targeted, and multi-target repository ca
   assert.equal(ownedBy(index, monoOtherCard), undefined)
 })
 
+test('ownedBy prefers the card own package over a repository-less companion regardless of target order', () => {
+  const own = owned({ packageName: 'dsh-endfield-ui', version: '2.0.0', repository: 'rison114514/dsh-endfield-ui' })
+  const companion = owned({ packageName: 'dsh-better-sidebar', version: '1.0.0' })
+  const card = (installs: string[]): MarketPlugin => ({
+    ...row('rison114514/dsh-endfield-ui'),
+    installStatus: 'command',
+    installInfo: {
+      mode: 'command',
+      targets: installs.map(install => ({ install, profile: 'web', note: '' })),
+      tasks: [], requirements: [], note: '', manual: '',
+    },
+  })
+
+  // Companion listed first: the card still reports its own package (and version) when both are installed.
+  assert.equal(ownedBy(ownedIndexOf([companion, own]), card(['dsh-better-sidebar', 'dsh-endfield-ui'])), own)
+  assert.equal(ownedBy(ownedIndexOf([companion, own]), card(['dsh-endfield-ui', 'dsh-better-sidebar'])), own)
+  // A repository-less package still stands in when none of the card's own packages is installed,
+  // because it cannot be told apart from an own package whose manifest omits `repository`.
+  assert.equal(ownedBy(ownedIndexOf([companion]), card(['dsh-better-sidebar', 'dsh-endfield-ui'])), companion)
+})
+
 test('normalizeRepoDirectory caps length, parseGitHubInstallSpec rejects invalid #path:, and repositorySlugOf matches case-insensitively', () => {
   const exactMax = 'a'.repeat(MAX_REPO_DIRECTORY_LENGTH)
   const overMax = 'a'.repeat(MAX_REPO_DIRECTORY_LENGTH + 1)
